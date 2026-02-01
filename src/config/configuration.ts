@@ -1,4 +1,5 @@
 import { registerAs } from '@nestjs/config';
+import { DataSourceOptions } from 'typeorm';
 
 export default registerAs('app', () => ({
   nodeEnv: process.env.NODE_ENV || 'development',
@@ -8,15 +9,40 @@ export default registerAs('app', () => ({
 }));
 
 export const databaseConfig = registerAs('database', () => ({
-  host: process.env.DATABASE_HOST,
+  type: 'postgres' as const,
+  host: process.env.DATABASE_HOST || 'localhost',
   port: parseInt(process.env.DATABASE_PORT || '5432', 10),
-  username: process.env.DATABASE_USERNAME,
-  password: process.env.DATABASE_PASSWORD,
-  database: process.env.DATABASE_NAME,
+  username: process.env.DATABASE_USERNAME || 'postgres',
+  password: process.env.DATABASE_PASSWORD || 'postgres',
+  database: process.env.DATABASE_NAME || 'recommend_db',
+  entities: ['dist/**/*.entity.js'],
+  migrations: ['dist/database/migrations/*.js'],
+  migrationsRun: true,
   ssl: process.env.DATABASE_SSL === 'true',
-  synchronize: process.env.DATABASE_SYNCHRONIZE === 'true',
-  logging: process.env.DATABASE_LOGGING === 'true',
+  synchronize: process.env.NODE_ENV !== 'production' && process.env.DATABASE_SYNCHRONIZE === 'true',
+  logging: process.env.NODE_ENV !== 'production' && process.env.DATABASE_LOGGING === 'true',
+  dropSchema: false,
 }));
+
+// Helper function for TypeORM DataSource (used in data-source.ts)
+export const getTypeOrmConfig = (): DataSourceOptions => {
+  const config = databaseConfig();
+  return {
+    type: config.type,
+    host: config.host,
+    port: config.port,
+    username: config.username,
+    password: config.password,
+    database: config.database,
+    entities: config.entities,
+    migrations: config.migrations,
+    migrationsRun: config.migrationsRun,
+    ssl: config.ssl,
+    synchronize: config.synchronize,
+    logging: config.logging,
+    dropSchema: config.dropSchema,
+  };
+};
 
 export const redisConfig = registerAs('redis', () => ({
   host: process.env.REDIS_HOST || 'localhost',
