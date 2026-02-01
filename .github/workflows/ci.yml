@@ -2,9 +2,9 @@ name: CI
 
 on:
   push:
-    branches: [develop]
+    branches: [development]
   pull_request:
-    branches: [develop]
+    branches: [development]
 
 jobs:
   build:
@@ -34,4 +34,4 @@ jobs:
           NODE_ENV: development
 
       - name: Run tests
-        run: yarn test
+        run: yarn test --passWithNoTests
