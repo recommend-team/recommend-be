@@ -7,19 +7,16 @@ on:
     branches: [development]
 
 jobs:
-  build:
+  lint:
     runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        node-version: ['18']
-
+    name: lintExpected
     steps:
       - uses: actions/checkout@v4
 
-      - name: Setup Node.js ${{ matrix.node-version }}
+      - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: ${{ matrix.node-version }}
+          node-version: 'lts/*'
           cache: 'yarn'
 
       - name: Install dependencies
@@ -28,10 +25,40 @@ jobs:
       - name: Run linting
         run: yarn lint
 
+  build:
+    runs-on: ubuntu-latest
+    name: buildExpected
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 'lts/*'
+          cache: 'yarn'
+
+      - name: Install dependencies
+        run: yarn install --frozen-lockfile
+
       - name: Build project
         run: yarn build
         env:
           NODE_ENV: development
+
+  test:
+    runs-on: ubuntu-latest
+    name: testExpected
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 'lts/*'
+          cache: 'yarn'
+
+      - name: Install dependencies
+        run: yarn install --frozen-lockfile
 
       - name: Run tests
         run: yarn test --passWithNoTests
