@@ -138,8 +138,15 @@ export class AuthController {
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Logout user' })
   @ApiResponse({ status: 200, description: 'Logout successful' })
-  async logout(@Req() req: any, @Body('refreshToken') refreshToken?: string) {
-    return this.authService.logout(req.user.id, refreshToken);
+  async logout(
+    @Req() req: Request & { user?: { id: string } },
+    @Body('refreshToken') refreshToken?: string,
+  ) {
+    const userId = req.user?.id;
+    if (!userId) {
+      throw new Error('User ID not found');
+    }
+    return this.authService.logout(userId, refreshToken);
   }
 
   @Get('profile')

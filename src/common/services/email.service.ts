@@ -80,13 +80,17 @@ export class EmailService {
       const result = await this.apiInstance.sendTransacEmail(sendSmtpEmail);
       console.log(`✅ Email sent successfully to ${options.to}`);
       console.log('Brevo response:', JSON.stringify(result, null, 2));
-    } catch (error: any) {
+    } catch (error) {
+      const brevoError = error as {
+        message?: string;
+        response?: { data?: unknown; status?: number; statusText?: string };
+      };
       console.error('❌ Error sending email:', error);
       console.error('Error details:', {
-        message: error.message,
-        response: error.response?.data,
-        status: error.response?.status,
-        statusText: error.response?.statusText,
+        message: brevoError.message,
+        response: brevoError.response?.data,
+        status: brevoError.response?.status,
+        statusText: brevoError.response?.statusText,
       });
       throw error;
     }

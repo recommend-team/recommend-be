@@ -1,5 +1,4 @@
 import { Process, Processor } from '@nestjs/bull';
-import type { Job } from 'bull';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, LessThan } from 'typeorm';
 import { Logger } from '@nestjs/common';
@@ -15,7 +14,7 @@ export class PendingUserCleanupProcessor {
   ) {}
 
   @Process('cleanup-expired')
-  async cleanupExpiredPendingUsers(job: Job): Promise<void> {
+  async cleanupExpiredPendingUsers(): Promise<void> {
     this.logger.log('Starting cleanup of expired pending users...');
 
     try {

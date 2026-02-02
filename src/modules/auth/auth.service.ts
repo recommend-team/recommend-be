@@ -183,7 +183,7 @@ export class AuthService {
 
       // Generate new tokens
       return this.generateTokens(storedToken.user);
-    } catch (error) {
+    } catch {
       throw new UnauthorizedException('Invalid refresh token');
     }
   }

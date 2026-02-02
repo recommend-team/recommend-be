@@ -11,14 +11,19 @@ async function bootstrap() {
   const configService = app.get(ConfigService);
 
   // Security middleware
+  // eslint-disable-next-line @typescript-eslint/no-unsafe-call
   app.use(helmet());
+  // eslint-disable-next-line @typescript-eslint/no-unsafe-call
   app.use(compression());
 
   // CORS
-  app.enableCors({
-    origin: configService.get<string>('app.frontendUrl')!,
-    credentials: true,
-  });
+  const frontendUrl = configService.get<string>('app.frontendUrl');
+  if (frontendUrl) {
+    app.enableCors({
+      origin: frontendUrl,
+      credentials: true,
+    });
+  }
 
   // Global pipes
   app.useGlobalPipes(

@@ -5,10 +5,10 @@ import { ZodSchema } from 'zod';
 export class ZodValidationPipe implements PipeTransform {
   constructor(private schema: ZodSchema) {}
 
-  transform(value: unknown) {
+  transform(value: unknown): unknown {
     try {
       return this.schema.parse(value);
-    } catch (error) {
+    } catch {
       throw new BadRequestException('Validation failed');
     }
   }

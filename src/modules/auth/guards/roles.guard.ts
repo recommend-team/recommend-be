@@ -5,6 +5,7 @@ import {
   ForbiddenException,
 } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
+import type { Request } from 'express';
 import { Role } from '../../../common/enums/roles.enum';
 import { RoleHierarchy } from '../../../common/enums/roles.enum';
 
@@ -22,13 +23,16 @@ export class RolesGuard implements CanActivate {
       return true;
     }
 
-    const { user } = context.switchToHttp().getRequest();
+    const request = context
+      .switchToHttp()
+      .getRequest<Request & { user?: { role?: Role } }>();
+    const user = request.user;
 
     if (!user) {
       throw new ForbiddenException('User not authenticated');
     }
 
-    const userRoles = RoleHierarchy[user.role] || [user.role];
+    const userRoles = user.role ? RoleHierarchy[user.role] || [user.role] : [];
     const hasRole = requiredRoles.some((role) => userRoles.includes(role));
 
     if (!hasRole) {
