@@ -3,9 +3,9 @@ import { DataSourceOptions } from 'typeorm';
 
 export default registerAs('app', () => ({
   nodeEnv: process.env.NODE_ENV || 'development',
-  port: parseInt(process.env.PORT || '3000', 10),
-  apiPrefix: process.env.API_PREFIX || 'api',
-  frontendUrl: process.env.FRONTEND_URL || 'http://localhost:3000',
+  port: parseInt(process.env.PORT || '4000', 10),
+  apiPrefix: process.env.API_PREFIX || 'api/v1',
+  frontendUrl: process.env.FRONTEND_URL || 'http://localhost:4000',
 }));
 
 export const databaseConfig = registerAs('database', () => ({
@@ -95,4 +95,12 @@ export const paymentConfig = registerAs('payment', () => ({
   paystackSecretKey: process.env.PAYSTACK_SECRET_KEY,
   paystackPublicKey: process.env.PAYSTACK_PUBLIC_KEY,
   webhookSecret: process.env.PAYMENT_WEBHOOK_SECRET,
+}));
+export const googleConfig = registerAs('google', () => ({
+  clientId: process.env.GOOGLE_CLIENT_ID,
+  clientSecret: process.env.GOOGLE_CLIENT_SECRET,
+  callbackUrl:
+    process.env.GOOGLE_CALLBACK_URL ||
+    'http://localhost:4000/api/v1/auth/google/callback',
+  backendUrl: process.env.BACKEND_URL || 'http://localhost:4000',
 }));
