@@ -15,14 +15,12 @@ export const databaseConfig = registerAs('database', () => ({
   username: process.env.DATABASE_USERNAME || 'postgres',
   password: process.env.DATABASE_PASSWORD || 'postgres',
   database: process.env.DATABASE_NAME || 'recommend_db',
-  entities: ['dist/src/**/*.entity.js'],
-  migrations: ['dist/src/database/migrations/*.js'],
+  entities: ['dist/**/*.entity.js'],
+  migrations: ['dist/database/migrations/*.js'],
   migrationsRun: true,
   ssl: process.env.DATABASE_SSL === 'true',
-  synchronize: false, // Always use migrations instead
-  logging:
-    process.env.NODE_ENV !== 'production' &&
-    process.env.DATABASE_LOGGING === 'true',
+  synchronize: process.env.NODE_ENV !== 'production' && process.env.DATABASE_SYNCHRONIZE === 'true',
+  logging: process.env.NODE_ENV !== 'production' && process.env.DATABASE_LOGGING === 'true',
   dropSchema: false,
 }));
 
