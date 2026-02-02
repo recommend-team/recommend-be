@@ -9,9 +9,9 @@ import configuration, {
   openaiConfig,
   emailConfig,
   paymentConfig,
+  googleConfig,
 } from './configuration';
 import { validate } from './config.validation';
-
 
 @Module({
   imports: [
@@ -27,6 +27,7 @@ import { validate } from './config.validation';
         openaiConfig,
         emailConfig,
         paymentConfig,
+        googleConfig,
       ],
       validate,
     }),

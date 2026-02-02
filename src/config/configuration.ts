@@ -3,9 +3,9 @@ import { DataSourceOptions } from 'typeorm';
 
 export default registerAs('app', () => ({
   nodeEnv: process.env.NODE_ENV || 'development',
-  port: parseInt(process.env.PORT || '3000', 10),
-  apiPrefix: process.env.API_PREFIX || 'api',
-  frontendUrl: process.env.FRONTEND_URL || 'http://localhost:3000',
+  port: parseInt(process.env.PORT || '4000', 10),
+  apiPrefix: process.env.API_PREFIX || 'api/v1',
+  frontendUrl: process.env.FRONTEND_URL || 'http://localhost:4000',
 }));
 
 export const databaseConfig = registerAs('database', () => ({
@@ -15,12 +15,14 @@ export const databaseConfig = registerAs('database', () => ({
   username: process.env.DATABASE_USERNAME || 'postgres',
   password: process.env.DATABASE_PASSWORD || 'postgres',
   database: process.env.DATABASE_NAME || 'recommend_db',
-  entities: ['dist/**/*.entity.js'],
-  migrations: ['dist/database/migrations/*.js'],
+  entities: ['dist/src/**/*.entity.js'],
+  migrations: ['dist/src/database/migrations/*.js'],
   migrationsRun: true,
   ssl: process.env.DATABASE_SSL === 'true',
-  synchronize: process.env.NODE_ENV !== 'production' && process.env.DATABASE_SYNCHRONIZE === 'true',
-  logging: process.env.NODE_ENV !== 'production' && process.env.DATABASE_LOGGING === 'true',
+  synchronize: false, // Always use migrations instead
+  logging:
+    process.env.NODE_ENV !== 'production' &&
+    process.env.DATABASE_LOGGING === 'true',
   dropSchema: false,
 }));
 
@@ -95,4 +97,12 @@ export const paymentConfig = registerAs('payment', () => ({
   paystackSecretKey: process.env.PAYSTACK_SECRET_KEY,
   paystackPublicKey: process.env.PAYSTACK_PUBLIC_KEY,
   webhookSecret: process.env.PAYMENT_WEBHOOK_SECRET,
+}));
+export const googleConfig = registerAs('google', () => ({
+  clientId: process.env.GOOGLE_CLIENT_ID,
+  clientSecret: process.env.GOOGLE_CLIENT_SECRET,
+  callbackUrl:
+    process.env.GOOGLE_CALLBACK_URL ||
+    'http://localhost:4000/api/v1/auth/google/callback',
+  backendUrl: process.env.BACKEND_URL || 'http://localhost:4000',
 }));
