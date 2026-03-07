@@ -1,0 +1,4 @@
+export enum VendorType {
+  REGISTERED = 'REGISTERED',
+  NON_REGISTERED = 'NON_REGISTERED',
+}

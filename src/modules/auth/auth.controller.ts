@@ -5,7 +5,6 @@ import {
   HttpCode,
   HttpStatus,
   Get,
-  Req,
 } from '@nestjs/common';
 import {
   ApiTags,
@@ -14,9 +13,9 @@ import {
   ApiBearerAuth,
   ApiBody,
 } from '@nestjs/swagger';
-import type { Request } from 'express';
 import { AuthService } from './auth.service';
 import { Public } from './decorators/public.decorator';
+import { CurrentUser } from './decorators/current-user.decorator';
 import { ZodValidationPipe } from 'src/common/pipes/zod-validation.pipes';
 import { LoginRequestDto, loginSchema } from './dto/login.dto';
 import {
@@ -29,23 +28,91 @@ import {
   resetPasswordSchema,
 } from './dto/reset-password.dto';
 import {
-  verifyEmailSchema,
   VerifyEmailRequestDto,
+  verifyEmailSchema,
 } from './dto/verify-email.dto';
+import {
+  RegisterVendorRequestDto,
+  registerVendorSchema,
+} from './dto/register-vendor.dto';
+import {
+  RegisterRiderRequestDto,
+  registerRiderSchema,
+} from './dto/register-rider.dto';
+import { User } from './entities/auth.entity';
 
 @ApiTags('Authentication')
 @Controller('auth')
 export class AuthController {
   constructor(private readonly authService: AuthService) {}
 
+  // ─── Vendor registration ───────────────────────────────────────────────────
+
+  @Public()
+  @Post('register/vendor')
+  @HttpCode(HttpStatus.CREATED)
+  @ApiOperation({
+    summary: 'Register a vendor',
+    description:
+      'Register as a vendor (seller). vendorType REGISTERED = has CAC/TIN (unlimited orders). NON_REGISTERED = informal vendor (20 orders/month cap). Both require admin KYC approval before login is allowed.',
+  })
+  @ApiBody({ type: RegisterVendorRequestDto })
+  @ApiResponse({
+    status: 201,
+    description: 'Registration successful — verification code sent to email',
+  })
+  @ApiResponse({ status: 400, description: 'Validation failed' })
+  @ApiResponse({
+    status: 409,
+    description: 'Email or phone already registered',
+  })
+  async registerVendor(
+    @Body(new ZodValidationPipe(registerVendorSchema))
+    dto: RegisterVendorRequestDto,
+  ) {
+    return this.authService.registerVendor(dto);
+  }
+
+  // ─── Rider registration ────────────────────────────────────────────────────
+
+  @Public()
+  @Post('register/rider')
+  @HttpCode(HttpStatus.CREATED)
+  @ApiOperation({
+    summary: 'Register a rider',
+    description:
+      'Register as a delivery rider. riderType: INDIVIDUAL or COMPANY. Requires admin KYC approval before login is allowed.',
+  })
+  @ApiBody({ type: RegisterRiderRequestDto })
+  @ApiResponse({
+    status: 201,
+    description: 'Registration successful — verification code sent to email',
+  })
+  @ApiResponse({ status: 400, description: 'Validation failed' })
+  @ApiResponse({
+    status: 409,
+    description: 'Email or phone already registered',
+  })
+  async registerRider(
+    @Body(new ZodValidationPipe(registerRiderSchema))
+    dto: RegisterRiderRequestDto,
+  ) {
+    return this.authService.registerRider(dto);
+  }
+
+  // ─── Legacy register (vendor, backwards-compatible) ────────────────────────
+
   @Public()
   @Post('register')
   @HttpCode(HttpStatus.CREATED)
-  @ApiOperation({ summary: 'Register a new seller' })
-  @ApiResponse({ status: 201, description: 'Registration successful' })
-  @ApiResponse({ status: 400, description: 'Invalid input' })
-  @ApiResponse({ status: 409, description: 'User already exists' })
+  @ApiOperation({
+    summary: 'Register a vendor (legacy)',
+    description:
+      'Backwards-compatible endpoint. Prefer POST /auth/register/vendor.',
+    deprecated: true,
+  })
   @ApiBody({ type: RegisterRequestDto })
+  @ApiResponse({ status: 201, description: 'Registration successful' })
   async register(
     @Body(new ZodValidationPipe(registerSchema))
     registerDto: RegisterRequestDto,
@@ -53,26 +120,41 @@ export class AuthController {
     return this.authService.register(registerDto);
   }
 
+  // ─── Login ─────────────────────────────────────────────────────────────────
+
   @Public()
   @Post('login')
   @HttpCode(HttpStatus.OK)
-  @ApiOperation({ summary: 'Login user' })
-  @ApiResponse({ status: 200, description: 'Login successful' })
-  @ApiResponse({ status: 401, description: 'Invalid credentials' })
+  @ApiOperation({ summary: 'Login' })
   @ApiBody({ type: LoginRequestDto })
+  @ApiResponse({
+    status: 200,
+    description:
+      'Login successful — returns access token, refresh token, and user profile',
+  })
+  @ApiResponse({
+    status: 401,
+    description:
+      'Invalid credentials / account not approved / account suspended',
+  })
   async login(
     @Body(new ZodValidationPipe(loginSchema)) loginDto: LoginRequestDto,
   ) {
     return this.authService.login(loginDto);
   }
 
+  // ─── Token refresh ─────────────────────────────────────────────────────────
+
   @Public()
   @Post('refresh')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Refresh access token' })
-  @ApiResponse({ status: 200, description: 'Tokens refreshed' })
-  @ApiResponse({ status: 401, description: 'Invalid refresh token' })
   @ApiBody({ type: RefreshTokenRequestDto })
+  @ApiResponse({
+    status: 200,
+    description: 'New access token and refresh token issued',
+  })
+  @ApiResponse({ status: 401, description: 'Invalid or expired refresh token' })
   async refreshTokens(
     @Body(new ZodValidationPipe(refreshTokenSchema))
     refreshTokenDto: RefreshTokenRequestDto,
@@ -80,16 +162,22 @@ export class AuthController {
     return this.authService.refreshTokens(refreshTokenDto);
   }
 
+  // ─── Email verification ────────────────────────────────────────────────────
+
   @Public()
   @Post('verify-email')
   @HttpCode(HttpStatus.OK)
-  @ApiOperation({ summary: 'Verify email address' })
-  @ApiResponse({ status: 200, description: 'Email verified successfully' })
+  @ApiOperation({ summary: 'Verify email with 6-digit code' })
+  @ApiBody({ type: VerifyEmailRequestDto })
+  @ApiResponse({
+    status: 200,
+    description:
+      'Email verified. Vendors/riders will await admin KYC approval.',
+  })
   @ApiResponse({
     status: 400,
     description: 'Invalid or expired verification code',
   })
-  @ApiBody({ type: VerifyEmailRequestDto })
   async verifyEmail(
     @Body(new ZodValidationPipe(verifyEmailSchema))
     verifyEmailDto: VerifyEmailRequestDto,
@@ -100,20 +188,23 @@ export class AuthController {
   @Public()
   @Post('resend-verification')
   @HttpCode(HttpStatus.OK)
-  @ApiOperation({ summary: 'Resend verification email' })
-  @ApiResponse({ status: 200, description: 'Verification email sent' })
-  @ApiResponse({ status: 400, description: 'Email already verified' })
+  @ApiOperation({ summary: 'Resend email verification code' })
+  @ApiResponse({ status: 200, description: 'Verification code resent' })
+  @ApiResponse({ status: 404, description: 'No pending registration found' })
   async resendVerificationEmail(@Body('email') email: string) {
     return this.authService.resendVerificationEmail(email);
   }
 
+  // ─── Password management ───────────────────────────────────────────────────
+
   @Public()
   @Post('forgot-password')
   @HttpCode(HttpStatus.OK)
-  @ApiOperation({ summary: 'Request password reset' })
+  @ApiOperation({ summary: 'Request password reset link' })
   @ApiResponse({
     status: 200,
-    description: 'Reset email sent if account exists',
+    description:
+      'Reset email sent if account exists (always returns 200 to prevent enumeration)',
   })
   async forgotPassword(@Body('email') email: string) {
     return this.authService.forgotPassword(email);
@@ -122,10 +213,10 @@ export class AuthController {
   @Public()
   @Post('reset-password')
   @HttpCode(HttpStatus.OK)
-  @ApiOperation({ summary: 'Reset password' })
-  @ApiResponse({ status: 200, description: 'Password reset successful' })
-  @ApiResponse({ status: 400, description: 'Invalid or expired token' })
+  @ApiOperation({ summary: 'Reset password using token from email' })
   @ApiBody({ type: ResetPasswordRequestDto })
+  @ApiResponse({ status: 200, description: 'Password reset successful' })
+  @ApiResponse({ status: 400, description: 'Invalid or expired reset token' })
   async resetPassword(
     @Body(new ZodValidationPipe(resetPasswordSchema))
     resetPasswordDto: ResetPasswordRequestDto,
@@ -133,28 +224,29 @@ export class AuthController {
     return this.authService.resetPassword(resetPasswordDto);
   }
 
+  // ─── Authenticated endpoints ───────────────────────────────────────────────
+
   @Post('logout')
   @HttpCode(HttpStatus.OK)
   @ApiBearerAuth()
-  @ApiOperation({ summary: 'Logout user' })
-  @ApiResponse({ status: 200, description: 'Logout successful' })
+  @ApiOperation({
+    summary: 'Logout — revokes all refresh tokens for this user',
+  })
+  @ApiResponse({ status: 200, description: 'Logged out successfully' })
+  @ApiResponse({ status: 401, description: 'Unauthorized' })
   async logout(
-    @Req() req: Request & { user?: { id: string } },
+    @CurrentUser() user: User,
     @Body('refreshToken') refreshToken?: string,
   ) {
-    const userId = req.user?.id;
-    if (!userId) {
-      throw new Error('User ID not found');
-    }
-    return this.authService.logout(userId, refreshToken);
+    return this.authService.logout(user.id, refreshToken);
   }
 
   @Get('profile')
   @ApiBearerAuth()
-  @ApiOperation({ summary: 'Get current user profile' })
+  @ApiOperation({ summary: 'Get current authenticated user profile' })
   @ApiResponse({ status: 200, description: 'User profile' })
   @ApiResponse({ status: 401, description: 'Unauthorized' })
-  getProfile(@Req() req: Request & { user?: { id: string } }) {
-    return req.user;
+  async getProfile(@CurrentUser() user: User) {
+    return this.authService.getProfile(user.id);
   }
 }

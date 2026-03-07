@@ -18,13 +18,33 @@ import {
 } from './interfaces/jwt-payload.interface';
 import { Role } from '../../common/enums/roles.enum';
 import { SellerStatus } from '../../common/enums/seller-status.enum';
+import { VendorType } from '../../common/enums/vendor-type.enum';
 import { LoginDto } from './dto/login.dto';
 import { RefreshTokenDto } from './dto/refresh-token.dto';
 import { RegisterDto } from './dto/register.dto';
+import { RegisterVendorDto } from './dto/register-vendor.dto';
+import { RegisterRiderDto } from './dto/register-rider.dto';
 import { ResetPasswordDto } from './dto/reset-password.dto';
 import { VerifyEmailDto } from './dto/verify-email.dto';
 import { User } from './entities/auth.entity';
 import { EmailService } from 'src/common/services/email.service';
+
+/** Safe user shape returned to frontend — no passwords or secret tokens */
+export type SafeUser = Omit<
+  User,
+  | 'password'
+  | 'emailVerificationToken'
+  | 'emailVerificationTokenExpires'
+  | 'passwordResetToken'
+  | 'passwordResetTokenExpires'
+  | 'hashPassword'
+  | 'validatePassword'
+  | 'isActive'
+  | 'isPendingApproval'
+  | 'canLogin'
+  | 'recordFailedLogin'
+  | 'recordSuccessfulLogin'
+>;
 
 @Injectable()
 export class AuthService {
@@ -40,125 +60,158 @@ export class AuthService {
     private readonly emailService: EmailService,
   ) {}
 
+  // ─── Registration ──────────────────────────────────────────────────────────
+
+  /**
+   * Backwards-compatible entry point — registers as a REGISTERED vendor.
+   */
   async register(
     registerDto: RegisterDto,
-  ): Promise<{ pendingUser: PendingUser; message: string }> {
-    // Check if email already exists in users table
-    const existingUserByEmail = await this.usersRepository.findOne({
-      where: { email: registerDto.email },
+  ): Promise<{ message: string; data: { email: string } }> {
+    return this.registerVendor({
+      ...registerDto,
+      vendorType: VendorType.REGISTERED,
+      businessName: '',
+      businessAddress: '',
+      businessCategory: '',
     });
+  }
 
-    if (existingUserByEmail) {
-      throw new ConflictException('Email already registered');
-    }
+  async registerVendor(
+    dto: RegisterVendorDto,
+  ): Promise<{ message: string; data: { email: string } }> {
+    await this.assertEmailAndPhoneAvailable(dto.email, dto.phoneNumber);
 
-    // Check if phone already exists in users table
-    const existingUserByPhone = await this.usersRepository.findOne({
-      where: { phoneNumber: registerDto.phoneNumber },
-    });
-
-    if (existingUserByPhone) {
-      throw new ConflictException('Phone number already registered');
-    }
-
-    // Check if email exists in pending_users table
-    const existingPendingUserByEmail =
-      await this.pendingUsersRepository.findOne({
-        where: { email: registerDto.email },
-      });
-
-    if (existingPendingUserByEmail) {
-      throw new ConflictException('Email is already pending verification');
-    }
-
-    // Check if phone exists in pending_users table
-    const existingPendingUserByPhone =
-      await this.pendingUsersRepository.findOne({
-        where: { phoneNumber: registerDto.phoneNumber },
-      });
-
-    if (existingPendingUserByPhone) {
-      throw new ConflictException(
-        'Phone number is already pending verification',
-      );
-    }
-
-    // Generate 6-digit verification code
     const verificationCode = this.generateSixDigitCode();
 
-    // Create new pending user (temporary) - minimal data only
     const pendingUser = this.pendingUsersRepository.create({
-      email: registerDto.email,
-      phoneNumber: registerDto.phoneNumber,
-      password: registerDto.password,
-      firstName: registerDto.firstName,
-      lastName: registerDto.lastName,
+      email: dto.email,
+      phoneNumber: dto.phoneNumber,
+      password: dto.password,
+      firstName: dto.firstName,
+      lastName: dto.lastName,
+      role: Role.SELLER,
+      vendorType: dto.vendorType,
+      riderType: null,
       verificationCode,
-      verificationCodeExpiresAt: new Date(Date.now() + 5 * 60 * 1000), // 5 minutes
-      expiresAt: new Date(Date.now() + 5 * 60 * 1000), // 5 minutes
+      verificationCodeExpiresAt: new Date(Date.now() + 5 * 60 * 1000),
+      expiresAt: new Date(Date.now() + 5 * 60 * 1000),
     });
 
     await this.pendingUsersRepository.save(pendingUser);
-
-    // Send verification email with 6-digit code
     await this.sendVerificationEmailWithCode(pendingUser, verificationCode);
 
     return {
-      pendingUser,
       message:
         'Registration successful. Please check your email for the 6-digit verification code. You have 5 minutes to verify.',
+      data: { email: dto.email },
     };
   }
 
+  async registerRider(
+    dto: RegisterRiderDto,
+  ): Promise<{ message: string; data: { email: string } }> {
+    await this.assertEmailAndPhoneAvailable(dto.email, dto.phoneNumber);
+
+    const verificationCode = this.generateSixDigitCode();
+
+    const pendingUser = this.pendingUsersRepository.create({
+      email: dto.email,
+      phoneNumber: dto.phoneNumber,
+      password: dto.password,
+      firstName: dto.firstName,
+      lastName: dto.lastName,
+      role: Role.RIDER,
+      vendorType: null,
+      riderType: dto.riderType,
+      verificationCode,
+      verificationCodeExpiresAt: new Date(Date.now() + 5 * 60 * 1000),
+      expiresAt: new Date(Date.now() + 5 * 60 * 1000),
+    });
+
+    await this.pendingUsersRepository.save(pendingUser);
+    await this.sendVerificationEmailWithCode(pendingUser, verificationCode);
+
+    return {
+      message:
+        'Rider registration successful. Please check your email for the 6-digit verification code. You have 5 minutes to verify.',
+      data: { email: dto.email },
+    };
+  }
+
+  // ─── Login ─────────────────────────────────────────────────────────────────
+
   async login(loginDto: LoginDto): Promise<{
-    accessToken: string;
-    refreshToken: string;
-    user: User;
+    message: string;
+    data: { accessToken: string; refreshToken: string; user: SafeUser };
   }> {
-    // Find user
     const user = await this.usersRepository.findOne({
       where: { email: loginDto.email },
     });
 
     if (!user) {
-      throw new UnauthorizedException('Invalid credentials');
+      throw new UnauthorizedException('Invalid email or password');
     }
 
-    // Check if user can login
-    if (!user.canLogin()) {
+    if (!user.isEmailVerified) {
       throw new UnauthorizedException(
-        'Account is suspended, deactivated, or has too many failed login attempts',
+        'Please verify your email address before logging in.',
       );
     }
 
-    // Validate password
+    if (user.isPendingApproval()) {
+      throw new UnauthorizedException(
+        'Your account is pending KYC approval. You will be notified by email once approved.',
+      );
+    }
+
+    if (user.status === SellerStatus.SUSPENDED) {
+      throw new UnauthorizedException(
+        'Your account has been suspended. Please contact support.',
+      );
+    }
+
+    if (user.status === SellerStatus.DEACTIVATED) {
+      throw new UnauthorizedException(
+        'Your account has been deactivated. Please contact support.',
+      );
+    }
+
+    if (user.failedLoginAttempts >= 5) {
+      throw new UnauthorizedException(
+        'Account locked due to too many failed login attempts. Please reset your password.',
+      );
+    }
+
     const isPasswordValid = await user.validatePassword(loginDto.password);
     if (!isPasswordValid) {
       user.recordFailedLogin();
       await this.usersRepository.save(user);
-      throw new UnauthorizedException('Invalid credentials');
+      throw new UnauthorizedException('Invalid email or password');
     }
 
-    // Record successful login
     user.recordSuccessfulLogin();
     await this.usersRepository.save(user);
 
-    // Generate tokens
     const tokens = await this.generateTokens(user);
 
     return {
-      accessToken: tokens.accessToken,
-      refreshToken: tokens.refreshToken,
-      user,
+      message: 'Login successful',
+      data: {
+        accessToken: tokens.accessToken,
+        refreshToken: tokens.refreshToken,
+        user: this.sanitizeUser(user),
+      },
     };
   }
 
+  // ─── Token refresh ─────────────────────────────────────────────────────────
+
   async refreshTokens(refreshTokenDto: RefreshTokenDto): Promise<{
-    accessToken: string;
-    refreshToken: string;
+    message: string;
+    data: { accessToken: string; refreshToken: string };
   }> {
     try {
-      // Verify refresh token
       const payload = this.jwtService.verify<RefreshTokenPayload>(
         refreshTokenDto.refreshToken,
         {
@@ -166,32 +219,33 @@ export class AuthService {
         },
       );
 
-      // Find the refresh token in database
       const storedToken = await this.refreshTokensRepository.findOne({
         where: { token: refreshTokenDto.refreshToken, userId: payload.sub },
         relations: ['user'],
       });
 
       if (!storedToken || !storedToken.isValid()) {
-        throw new UnauthorizedException('Invalid refresh token');
+        throw new UnauthorizedException('Invalid or expired refresh token');
       }
 
-      // Revoke the old token
       storedToken.isRevoked = true;
       storedToken.revokedAt = new Date();
       await this.refreshTokensRepository.save(storedToken);
 
-      // Generate new tokens
-      return this.generateTokens(storedToken.user);
-    } catch {
-      throw new UnauthorizedException('Invalid refresh token');
+      const tokens = await this.generateTokens(storedToken.user);
+
+      return { message: 'Tokens refreshed successfully', data: tokens };
+    } catch (error) {
+      if (error instanceof UnauthorizedException) throw error;
+      throw new UnauthorizedException('Invalid or expired refresh token');
     }
   }
 
+  // ─── Email verification ────────────────────────────────────────────────────
+
   async verifyEmail(
     verifyEmailDto: VerifyEmailDto,
-  ): Promise<{ message: string; user: User }> {
-    // Find pending user by email and verification code
+  ): Promise<{ message: string; data: { user: SafeUser } }> {
     const pendingUser = await this.pendingUsersRepository.findOne({
       where: {
         email: verifyEmailDto.email,
@@ -200,101 +254,115 @@ export class AuthService {
     });
 
     if (!pendingUser) {
-      throw new NotFoundException('Invalid email or verification code');
+      throw new BadRequestException('Invalid email or verification code');
     }
 
-    // Check if verification code is expired
     if (new Date() > pendingUser.verificationCodeExpiresAt) {
-      // Delete expired pending user
       await this.pendingUsersRepository.remove(pendingUser);
       throw new BadRequestException(
         'Verification code has expired. Please register again.',
       );
     }
 
-    // Move user from pending_users to users table
+    // BUYER → auto-approved (bot-created); SELLER / RIDER → await admin KYC review
+    const status =
+      pendingUser.role === Role.BUYER
+        ? SellerStatus.APPROVED
+        : SellerStatus.PENDING;
+
+    const orderQuota =
+      pendingUser.role === Role.SELLER &&
+      pendingUser.vendorType === VendorType.NON_REGISTERED
+        ? 20
+        : null;
+
     const newUser = this.usersRepository.create({
       email: pendingUser.email,
       password: pendingUser.password,
       firstName: pendingUser.firstName,
       lastName: pendingUser.lastName,
       phoneNumber: pendingUser.phoneNumber,
-      role: Role.SELLER,
-      status: SellerStatus.APPROVED,
+      role: pendingUser.role,
+      vendorType: pendingUser.vendorType,
+      riderType: pendingUser.riderType,
+      orderQuota,
+      status,
       isEmailVerified: true,
       emailVerifiedAt: new Date(),
     });
 
     const savedUser = await this.usersRepository.save(newUser);
-
-    // Delete pending user
     await this.pendingUsersRepository.remove(pendingUser);
 
+    const awaitingApproval = status === SellerStatus.PENDING;
+
     return {
-      message:
-        'Email verified successfully. You can now log in to your account.',
-      user: savedUser,
+      message: awaitingApproval
+        ? 'Email verified. Your account is now pending KYC approval. You will be notified once reviewed.'
+        : 'Email verified successfully. You can now log in.',
+      data: { user: this.sanitizeUser(savedUser) },
     };
   }
 
-  async resendVerificationEmail(email: string): Promise<{ message: string }> {
-    const user = await this.usersRepository.findOne({ where: { email } });
+  async resendVerificationEmail(
+    email: string,
+  ): Promise<{ message: string; data: null }> {
+    const pendingUser = await this.pendingUsersRepository.findOne({
+      where: { email },
+    });
 
-    if (!user) {
-      throw new NotFoundException('User not found');
+    if (!pendingUser) {
+      const user = await this.usersRepository.findOne({ where: { email } });
+      if (user?.isEmailVerified) {
+        throw new BadRequestException('Email is already verified');
+      }
+      throw new NotFoundException(
+        'No pending registration found for this email. Please register first.',
+      );
     }
 
-    if (user.isEmailVerified) {
-      throw new BadRequestException('Email is already verified');
-    }
-
-    // Generate new verification token
-    user.emailVerificationToken = this.generateEmailVerificationToken();
-    user.emailVerificationTokenExpires = new Date(
-      Date.now() + 24 * 60 * 60 * 1000,
+    const verificationCode = this.generateSixDigitCode();
+    pendingUser.verificationCode = verificationCode;
+    pendingUser.verificationCodeExpiresAt = new Date(
+      Date.now() + 5 * 60 * 1000,
     );
+    pendingUser.expiresAt = new Date(Date.now() + 5 * 60 * 1000);
 
-    await this.usersRepository.save(user);
-    await this.sendVerificationEmail(user);
+    await this.pendingUsersRepository.save(pendingUser);
+    await this.sendVerificationEmailWithCode(pendingUser, verificationCode);
 
     return {
-      message: 'Verification email sent successfully',
+      message: 'Verification code resent. Please check your email.',
+      data: null,
     };
   }
 
-  async forgotPassword(email: string): Promise<{ message: string }> {
+  // ─── Password management ───────────────────────────────────────────────────
+
+  async forgotPassword(
+    email: string,
+  ): Promise<{ message: string; data: null }> {
+    const genericMessage =
+      'If an account exists with this email, you will receive a password reset link shortly.';
+
     const user = await this.usersRepository.findOne({ where: { email } });
+    if (!user) return { message: genericMessage, data: null };
 
-    if (!user) {
-      // Don't reveal that user doesn't exist
-      return {
-        message:
-          'If an account exists with this email, you will receive a password reset link',
-      };
-    }
-
-    // Generate reset token
     const resetToken = this.generateResetToken();
     user.passwordResetToken = createHash('sha256')
       .update(resetToken)
       .digest('hex');
-    user.passwordResetTokenExpires = new Date(Date.now() + 1 * 60 * 60 * 1000); // 1 hour
+    user.passwordResetTokenExpires = new Date(Date.now() + 60 * 60 * 1000);
 
     await this.usersRepository.save(user);
-
-    // Send reset email
     await this.sendPasswordResetEmail(user, resetToken);
 
-    return {
-      message:
-        'If an account exists with this email, you will receive a password reset link',
-    };
+    return { message: genericMessage, data: null };
   }
 
   async resetPassword(
     resetPasswordDto: ResetPasswordDto,
-  ): Promise<{ message: string }> {
-    // Hash the token to compare with stored hash
+  ): Promise<{ message: string; data: null }> {
     const hashedToken = createHash('sha256')
       .update(resetPasswordDto.token)
       .digest('hex');
@@ -307,38 +375,40 @@ export class AuthService {
       throw new BadRequestException('Invalid or expired reset token');
     }
 
-    // Check if token is expired
     if (
       user.passwordResetTokenExpires &&
       new Date() > user.passwordResetTokenExpires
     ) {
-      throw new BadRequestException('Reset token has expired');
+      throw new BadRequestException(
+        'Reset token has expired. Please request a new password reset.',
+      );
     }
 
-    // Update password
     user.password = resetPasswordDto.password;
     user.passwordResetToken = null;
     user.passwordResetTokenExpires = null;
     user.passwordChangedAt = new Date();
 
     await this.usersRepository.save(user);
-
-    // Send password changed notification
     await this.sendPasswordChangedEmail(user);
 
     return {
       message:
         'Password reset successfully. You can now log in with your new password.',
+      data: null,
     };
   }
 
-  async logout(userId: string, refreshToken?: string): Promise<void> {
-    // Revoke specific refresh token if provided
+  // ─── Logout ────────────────────────────────────────────────────────────────
+
+  async logout(
+    userId: string,
+    refreshToken?: string,
+  ): Promise<{ message: string; data: null }> {
     if (refreshToken) {
       const storedToken = await this.refreshTokensRepository.findOne({
         where: { token: refreshToken, userId },
       });
-
       if (storedToken) {
         storedToken.isRevoked = true;
         storedToken.revokedAt = new Date();
@@ -346,21 +416,60 @@ export class AuthService {
       }
     }
 
-    // Revoke all refresh tokens for this user
     await this.refreshTokensRepository.update(
       { userId, isRevoked: false },
       { isRevoked: true, revokedAt: new Date() },
     );
+
+    return { message: 'Logged out successfully', data: null };
   }
+
+  // ─── Profile ───────────────────────────────────────────────────────────────
+
+  async getProfile(
+    userId: string,
+  ): Promise<{ message: string; data: SafeUser }> {
+    const user = await this.usersRepository.findOne({ where: { id: userId } });
+    if (!user) throw new NotFoundException('User not found');
+    return {
+      message: 'Profile retrieved successfully',
+      data: this.sanitizeUser(user),
+    };
+  }
+
+  // ─── JWT validation ────────────────────────────────────────────────────────
 
   async validateUser(payload: JwtPayload): Promise<User | null> {
     const user = await this.usersRepository.findOne({
       where: { id: payload.sub },
     });
-    if (!user || !user.isActive()) {
-      return null;
-    }
+    if (!user || !user.isActive()) return null;
     return user;
+  }
+
+  // ─── Helpers ───────────────────────────────────────────────────────────────
+
+  private async assertEmailAndPhoneAvailable(
+    email: string,
+    phoneNumber: string,
+  ): Promise<void> {
+    const [userByEmail, userByPhone, pendingByEmail, pendingByPhone] =
+      await Promise.all([
+        this.usersRepository.findOne({ where: { email } }),
+        this.usersRepository.findOne({ where: { phoneNumber } }),
+        this.pendingUsersRepository.findOne({ where: { email } }),
+        this.pendingUsersRepository.findOne({ where: { phoneNumber } }),
+      ]);
+
+    if (userByEmail) throw new ConflictException('Email is already registered');
+    if (userByPhone)
+      throw new ConflictException('Phone number is already registered');
+    if (pendingByEmail)
+      throw new ConflictException('Email is already pending verification');
+    if (pendingByPhone)
+      throw new ConflictException(
+        'Phone number is already pending verification',
+      );
   }
 
   private async generateTokens(user: User): Promise<{
@@ -390,49 +499,64 @@ export class AuthService {
       }),
     ]);
 
-    // Store refresh token in database
     const refreshExpiresIn = this.configService.get<string>(
       'jwt.refreshExpiresIn',
-      '7d',
+      '30d',
     );
+    const days = parseInt(refreshExpiresIn.replace(/\D/g, ''), 10) || 30;
 
-    const days = parseInt(refreshExpiresIn.slice(0, -1), 10);
-
-    const refreshTokenEntity = this.refreshTokensRepository.create({
-      token: refreshToken,
-      userId: user.id,
-      expiresAt: new Date(Date.now() + days * 24 * 60 * 60 * 1000),
-    });
-
-    await this.refreshTokensRepository.save(refreshTokenEntity);
+    await this.refreshTokensRepository.save(
+      this.refreshTokensRepository.create({
+        token: refreshToken,
+        userId: user.id,
+        expiresAt: new Date(Date.now() + days * 24 * 60 * 60 * 1000),
+      }),
+    );
 
     return { accessToken, refreshToken };
   }
 
-  private generateEmailVerificationToken(): string {
-    return randomBytes(32).toString('hex');
+  sanitizeUser(user: User): SafeUser {
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
+    const {
+      password,
+      emailVerificationToken,
+      emailVerificationTokenExpires,
+      passwordResetToken,
+      passwordResetTokenExpires,
+      ...safe
+    } = user;
+
+    void password;
+    void emailVerificationToken;
+    void emailVerificationTokenExpires;
+    void passwordResetToken;
+    void passwordResetTokenExpires;
+
+    return safe as SafeUser;
+  }
+
+  private generateSixDigitCode(): string {
+    return Math.floor(100000 + Math.random() * 900000).toString();
   }
 
   private generateResetToken(): string {
     return randomBytes(32).toString('hex');
   }
 
-  private async sendVerificationEmail(user: User): Promise<void> {
-    const verificationUrl = `${this.configService.get('app.frontendUrl')}/verify-email?token=${user.emailVerificationToken}`;
-
+  private async sendVerificationEmailWithCode(
+    pendingUser: PendingUser,
+    code: string,
+  ): Promise<void> {
     try {
       await this.emailService.sendEmail({
-        to: user.email,
-        subject: 'Verify your email address',
-        template: 'email-verification',
-        context: {
-          name: user.firstName || 'Seller',
-          verificationUrl,
-        },
+        to: pendingUser.email,
+        subject: 'Verify your email – Recommend',
+        template: 'email-verification-code',
+        context: { name: pendingUser.firstName, code, role: pendingUser.role },
       });
     } catch (error) {
       console.error('Failed to send verification email:', error);
-      // Don't throw error to user, just log it
     }
   }
 
@@ -441,16 +565,12 @@ export class AuthService {
     resetToken: string,
   ): Promise<void> {
     const resetUrl = `${this.configService.get('app.frontendUrl')}/reset-password?token=${resetToken}`;
-
     try {
       await this.emailService.sendEmail({
         to: user.email,
-        subject: 'Reset your password',
+        subject: 'Reset your password – Recommend',
         template: 'password-reset',
-        context: {
-          name: user.firstName || 'Seller',
-          resetUrl,
-        },
+        context: { name: user.firstName, resetUrl },
       });
     } catch (error) {
       console.error('Failed to send reset email:', error);
@@ -461,39 +581,17 @@ export class AuthService {
     try {
       await this.emailService.sendEmail({
         to: user.email,
-        subject: 'Password changed successfully',
+        subject: 'Your password was changed – Recommend',
         template: 'password-changed',
         context: {
-          name: user.firstName || 'Seller',
-          timestamp: new Date().toLocaleString(),
+          name: user.firstName,
+          timestamp: new Date().toLocaleString('en-NG', {
+            timeZone: 'Africa/Lagos',
+          }),
         },
       });
     } catch (error) {
       console.error('Failed to send password changed email:', error);
-    }
-  }
-
-  private generateSixDigitCode(): string {
-    return Math.floor(100000 + Math.random() * 900000).toString();
-  }
-
-  private async sendVerificationEmailWithCode(
-    pendingUser: PendingUser,
-    code: string,
-  ): Promise<void> {
-    try {
-      await this.emailService.sendEmail({
-        to: pendingUser.email,
-        subject: 'Verify your email address',
-        template: 'email-verification-code',
-        context: {
-          name: pendingUser.firstName || 'Seller',
-          code,
-        },
-      });
-    } catch (error) {
-      console.error('Failed to send verification email:', error);
-      // Don't throw error to user, just log it
     }
   }
 }

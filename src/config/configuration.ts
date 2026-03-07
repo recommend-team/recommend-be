@@ -19,8 +19,12 @@ export const databaseConfig = registerAs('database', () => ({
   migrations: ['dist/database/migrations/*.js'],
   migrationsRun: true,
   ssl: process.env.DATABASE_SSL === 'true',
-  synchronize: process.env.NODE_ENV !== 'production' && process.env.DATABASE_SYNCHRONIZE === 'true',
-  logging: process.env.NODE_ENV !== 'production' && process.env.DATABASE_LOGGING === 'true',
+  synchronize:
+    process.env.NODE_ENV !== 'production' &&
+    process.env.DATABASE_SYNCHRONIZE === 'true',
+  logging:
+    process.env.NODE_ENV !== 'production' &&
+    process.env.DATABASE_LOGGING === 'true',
   dropSchema: false,
 }));
 

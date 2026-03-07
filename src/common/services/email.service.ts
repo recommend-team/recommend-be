@@ -136,6 +136,24 @@ export class EmailService {
           <p>Your password was changed successfully on ${context.timestamp}.</p>
           <p>If you didn't make this change, please contact support immediately.</p>
         `;
+      case 'account-approved':
+        return `
+          <h1>Your ${context.role} account has been approved! 🎉</h1>
+          <p>Hello ${context.name},</p>
+          <p>Great news! Your Recommend ${context.role} account has been reviewed and approved by our team.</p>
+          <p>You can now log in and start using the platform.</p>
+          <p>If you have any questions, please contact our support team.</p>
+          <p>Welcome to Recommend!</p>
+        `;
+      case 'account-rejected':
+        return `
+          <h1>Your ${context.role} account application</h1>
+          <p>Hello ${context.name},</p>
+          <p>Thank you for applying to join Recommend as a ${context.role}.</p>
+          <p>Unfortunately, after reviewing your application, we are unable to approve your account at this time.</p>
+          ${context.reason ? `<p><strong>Reason:</strong> ${context.reason}</p>` : ''}
+          <p>If you believe this is an error or would like to reapply with updated documents, please contact our support team.</p>
+        `;
       default:
         return '<p>Email from Recommend</p>';
     }

@@ -42,6 +42,6 @@ import { GoogleAuthModule } from './google-auth.module';
     EmailService,
     PendingUserCleanupProcessor,
   ],
-  exports: [AuthService, JwtStrategy, PassportModule],
+  exports: [AuthService, JwtStrategy, PassportModule, TypeOrmModule],
 })
 export class AuthModule {}
