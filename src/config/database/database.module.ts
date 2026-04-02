@@ -11,14 +11,11 @@ import { DataSource, DataSourceOptions } from 'typeorm';
       useFactory: (configService: ConfigService) =>
         ({
           type: 'postgres',
-          host: configService.get<string>('database.host'),
-          port: configService.get<number>('database.port'),
-          username: configService.get<string>('database.username'),
-          password: configService.get<string>('database.password'),
-          database: configService.get<string>('database.database'),
-          ssl: configService.get<boolean>('database.ssl'),
+          url: configService.get<string>('database.url'),
           synchronize: configService.get<boolean>('database.synchronize'),
           logging: configService.get<boolean>('database.logging'),
+          migrationsRun: configService.get<boolean>('database.migrationsRun'),
+          dropSchema: configService.get<boolean>('database.dropSchema'),
           autoLoadEntities: true,
           entities: [__dirname + '/../**/*.entity{.ts,.js}'],
           migrations: [__dirname + '/migrations/*{.ts,.js}'],
