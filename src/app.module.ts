@@ -34,12 +34,18 @@ import { HttpExceptionFilter } from './common/filters/http-exception.filter';
     OrdersModule,
     PaymentsModule,
     StoreModule,
-    BullModule.forRoot({
-      redis: {
-        host: 'localhost',
-        port: 6379,
-      },
-    }),
+    // TODO: Enable BullModule once Redis/Upstash is configured for production
+    // BullModule.forRootAsync({
+    //   imports: [ConfigModule],
+    //   inject: [ConfigService],
+    //   useFactory: (configService: ConfigService) => ({
+    //     redis: {
+    //       host: configService.get<string>('redis.host'),
+    //       port: configService.get<number>('redis.port'),
+    //       password: configService.get<string>('redis.password'),
+    //     },
+    //   }),
+    // }),
     ThrottlerModule.forRoot({
       ttl: 60,
       limit: 100,
