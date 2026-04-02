@@ -77,16 +77,16 @@ export class GoogleAuthService {
           googleUser.picture || existingUserByEmail.profilePicture;
         user = await this.usersRepository.save(existingUserByEmail);
       } else {
-        // Create new user from Google profile
+        // Create new vendor from Google — PENDING until admin approves KYC
         user = this.usersRepository.create({
           email: googleUser.email,
           firstName: googleUser.firstName,
           lastName: googleUser.lastName,
-          phoneNumber: '', // Will be set later via profile update
+          phoneNumber: null, // Must be completed via profile update
           profilePicture: googleUser.picture,
           googleId: googleUser.googleId,
           role: Role.SELLER,
-          status: SellerStatus.APPROVED, // Auto-approve Google users
+          status: SellerStatus.PENDING,
           isEmailVerified: true,
           emailVerifiedAt: new Date(),
         });

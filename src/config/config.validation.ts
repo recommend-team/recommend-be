@@ -21,23 +21,7 @@ class EnvironmentVariables {
   PORT: number;
 
   @IsString()
-  DATABASE_HOST: string;
-
-  @IsNumber()
-  DATABASE_PORT: number;
-
-  @IsString()
-  DATABASE_USERNAME: string;
-
-  @IsString()
-  DATABASE_PASSWORD: string;
-
-  @IsString()
-  DATABASE_NAME: string;
-
-  @IsOptional()
-  @IsString()
-  DATABASE_SSL?: string;
+  DATABASE_URL: string;
 
   @IsOptional()
   @IsString()

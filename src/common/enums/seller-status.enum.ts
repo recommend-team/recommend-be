@@ -4,3 +4,6 @@ export enum SellerStatus {
   SUSPENDED = 'SUSPENDED',
   DEACTIVATED = 'DEACTIVATED',
 }
+
+/** Semantic alias — use UserStatus for non-seller contexts */
+export { SellerStatus as UserStatus };

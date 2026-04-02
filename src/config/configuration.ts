@@ -10,17 +10,16 @@ export default registerAs('app', () => ({
 
 export const databaseConfig = registerAs('database', () => ({
   type: 'postgres' as const,
-  host: process.env.DATABASE_HOST || 'localhost',
-  port: parseInt(process.env.DATABASE_PORT || '5432', 10),
-  username: process.env.DATABASE_USERNAME || 'postgres',
-  password: process.env.DATABASE_PASSWORD || 'postgres',
-  database: process.env.DATABASE_NAME || 'recommend_db',
+  url: process.env.DATABASE_URL || 'postgresql://postgres:postgres@localhost:5432/recommend_db',
   entities: ['dist/**/*.entity.js'],
   migrations: ['dist/database/migrations/*.js'],
   migrationsRun: true,
-  ssl: process.env.DATABASE_SSL === 'true',
-  synchronize: process.env.NODE_ENV !== 'production' && process.env.DATABASE_SYNCHRONIZE === 'true',
-  logging: process.env.NODE_ENV !== 'production' && process.env.DATABASE_LOGGING === 'true',
+  synchronize:
+    process.env.NODE_ENV !== 'production' &&
+    process.env.DATABASE_SYNCHRONIZE === 'true',
+  logging:
+    process.env.NODE_ENV !== 'production' &&
+    process.env.DATABASE_LOGGING === 'true',
   dropSchema: false,
 }));
 
@@ -29,15 +28,10 @@ export const getTypeOrmConfig = (): DataSourceOptions => {
   const config = databaseConfig();
   return {
     type: config.type,
-    host: config.host,
-    port: config.port,
-    username: config.username,
-    password: config.password,
-    database: config.database,
+    url: config.url,
     entities: config.entities,
     migrations: config.migrations,
     migrationsRun: config.migrationsRun,
-    ssl: config.ssl,
     synchronize: config.synchronize,
     logging: config.logging,
     dropSchema: config.dropSchema,
