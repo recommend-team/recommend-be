@@ -41,7 +41,7 @@ async function bootstrap() {
     .setDescription('WhatsApp-first local discovery and ordering platform')
     .setVersion('1.0')
     .addBearerAuth()
-    .addSecurityRequirements('bearer')
+    .addSecurityRequirements('default')
     .build();
   const document = SwaggerModule.createDocument(app, config);
   SwaggerModule.setup('api/docs', app, document);
