@@ -82,4 +82,6 @@ export class RegisterVendorRequestDto {
 
   @ApiPropertyOptional({ example: 'Authentic Nigerian cuisine' })
   businessDescription?: string;
+
+  [k: string]: unknown;
 }

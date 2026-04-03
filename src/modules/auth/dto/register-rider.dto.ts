@@ -75,4 +75,6 @@ export class RegisterRiderRequestDto {
 
   @ApiPropertyOptional({ example: '+2348087654321' })
   guarantorPhone?: string;
+
+  [k: string]: unknown;
 }
