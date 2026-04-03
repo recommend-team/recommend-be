@@ -36,8 +36,7 @@ export const registerRiderSchema = z
       .string()
       .regex(/^\+?[1-9]\d{1,14}$/, 'Invalid guarantor phone number format')
       .optional(),
-  })
-  .passthrough();
+  });
 
 export type RegisterRiderDto = z.infer<typeof registerRiderSchema>;
 
@@ -75,6 +74,4 @@ export class RegisterRiderRequestDto {
 
   @ApiPropertyOptional({ example: '+2348087654321' })
   guarantorPhone?: string;
-
-  [k: string]: unknown;
 }

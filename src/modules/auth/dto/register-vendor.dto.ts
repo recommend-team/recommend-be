@@ -42,8 +42,7 @@ export const registerVendorSchema = z
       .min(2, 'Business category is required')
       .max(100),
     businessDescription: z.string().max(500).optional(),
-  })
-  .passthrough();
+  });
 
 export type RegisterVendorDto = z.infer<typeof registerVendorSchema>;
 
@@ -82,6 +81,4 @@ export class RegisterVendorRequestDto {
 
   @ApiPropertyOptional({ example: 'Authentic Nigerian cuisine' })
   businessDescription?: string;
-
-  [k: string]: unknown;
 }

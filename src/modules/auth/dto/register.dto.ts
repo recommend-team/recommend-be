@@ -23,8 +23,7 @@ export const registerSchema = z
     phoneNumber: z
       .string()
       .regex(/^\+?[1-9]\d{1,14}$/, 'Invalid phone number format'),
-  })
-  .passthrough();
+  });
 
 export type RegisterDto = z.infer<typeof registerSchema>;
 
@@ -55,6 +54,4 @@ export class RegisterRequestDto {
   @IsString()
   @Matches(/^\+?[1-9]\d{1,14}$/, { message: 'Invalid phone number format' })
   phoneNumber: string;
-
-  [k: string]: unknown;
 }
