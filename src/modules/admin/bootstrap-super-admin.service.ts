@@ -15,32 +15,44 @@ export class BootstrapSuperAdminService implements OnApplicationBootstrap {
   ) {}
 
   async onApplicationBootstrap(): Promise<void> {
-    const exists = await this.usersRepo.existsBy({ role: Role.SUPER_ADMIN });
-    if (exists) return;
+    try {
+      const exists = await this.usersRepo.existsBy({ role: Role.SUPER_ADMIN });
+      if (exists) return;
 
-    const email = process.env.SUPER_ADMIN_EMAIL;
-    const password = process.env.SUPER_ADMIN_PASSWORD;
-    const firstName = process.env.SUPER_ADMIN_FIRST_NAME ?? 'Super';
-    const lastName = process.env.SUPER_ADMIN_LAST_NAME ?? 'Admin';
+      const email = process.env.SUPER_ADMIN_EMAIL;
+      const password = process.env.SUPER_ADMIN_PASSWORD;
+      const firstName = process.env.SUPER_ADMIN_FIRST_NAME ?? 'Super';
+      const lastName = process.env.SUPER_ADMIN_LAST_NAME ?? 'Admin';
 
-    if (!email || !password) {
-      this.logger.warn(
-        'No SUPER_ADMIN found. Set SUPER_ADMIN_EMAIL and SUPER_ADMIN_PASSWORD in .env to auto-create one.',
+      if (!email || !password) {
+        this.logger.warn(
+          'No SUPER_ADMIN found. Set SUPER_ADMIN_EMAIL and SUPER_ADMIN_PASSWORD in .env to auto-create one.',
+        );
+        return;
+      }
+
+      const superAdmin = this.usersRepo.create({
+        firstName,
+        lastName,
+        email,
+        password, // BeforeInsert hook hashes it
+        role: Role.SUPER_ADMIN,
+        status: SellerStatus.APPROVED,
+        isEmailVerified: true,
+      });
+
+      await this.usersRepo.save(superAdmin);
+      this.logger.log(`Super Admin created: ${email}`);
+    } catch (error) {
+      if (error instanceof Error && error.message.includes('does not exist')) {
+        this.logger.warn(
+          'Database tables not yet initialized. Skipping Super Admin bootstrap. Tables will be created by migrations.',
+        );
+        return;
+      }
+      this.logger.error(
+        `Failed to bootstrap Super Admin: ${error instanceof Error ? error.message : 'Unknown error'}`,
       );
-      return;
     }
-
-    const superAdmin = this.usersRepo.create({
-      firstName,
-      lastName,
-      email,
-      password, // BeforeInsert hook hashes it
-      role: Role.SUPER_ADMIN,
-      status: SellerStatus.APPROVED,
-      isEmailVerified: true,
-    });
-
-    await this.usersRepo.save(superAdmin);
-    this.logger.log(`Super Admin created: ${email}`);
   }
 }
