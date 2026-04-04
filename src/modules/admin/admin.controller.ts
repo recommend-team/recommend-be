@@ -80,7 +80,10 @@ export class AdminController {
   @ApiQuery({ name: 'status', enum: SellerStatus, required: false })
   @ApiQuery({ name: 'page', required: false, type: Number })
   @ApiQuery({ name: 'limit', required: false, type: Number })
-  @ApiResponse({ status: 200, description: 'Paginated store list with details' })
+  @ApiResponse({
+    status: 200,
+    description: 'Paginated store list with details',
+  })
   getAllStores(
     @Query('status') status?: SellerStatus,
     @Query('page') page?: number,

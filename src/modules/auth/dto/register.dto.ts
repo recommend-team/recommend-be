@@ -8,22 +8,21 @@ import {
 import { ApiProperty } from '@nestjs/swagger';
 import { z } from 'zod';
 
-export const registerSchema = z
-  .object({
-    email: z.string().email('Invalid email address'),
-    password: z.string().min(8, 'Password must be at least 8 characters'),
-    firstName: z
-      .string()
-      .min(2, 'First name must be at least 2 characters')
-      .max(50),
-    lastName: z
-      .string()
-      .min(2, 'Last name must be at least 2 characters')
-      .max(50),
-    phoneNumber: z
-      .string()
-      .regex(/^\+?[1-9]\d{1,14}$/, 'Invalid phone number format'),
-  });
+export const registerSchema = z.object({
+  email: z.string().email('Invalid email address'),
+  password: z.string().min(8, 'Password must be at least 8 characters'),
+  firstName: z
+    .string()
+    .min(2, 'First name must be at least 2 characters')
+    .max(50),
+  lastName: z
+    .string()
+    .min(2, 'Last name must be at least 2 characters')
+    .max(50),
+  phoneNumber: z
+    .string()
+    .regex(/^\+?[1-9]\d{1,14}$/, 'Invalid phone number format'),
+});
 
 export type RegisterDto = z.infer<typeof registerSchema>;
 

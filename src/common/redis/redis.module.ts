@@ -9,40 +9,40 @@ import Redis from 'ioredis';
 class MockRedisClient {
   private logger = new Logger('MockRedisClient');
 
-  async get(): Promise<null> {
-    return null;
+  get(): Promise<null> {
+    return Promise.resolve(null);
   }
 
-  async set(): Promise<'OK'> {
-    return 'OK';
+  set(): Promise<'OK'> {
+    return Promise.resolve('OK');
   }
 
-  async setex(): Promise<'OK'> {
-    return 'OK';
+  setex(): Promise<'OK'> {
+    return Promise.resolve('OK');
   }
 
-  async del(): Promise<number> {
-    return 0;
+  del(): Promise<number> {
+    return Promise.resolve(0);
   }
 
-  async hget(): Promise<null> {
-    return null;
+  hget(): Promise<null> {
+    return Promise.resolve(null);
   }
 
-  async hset(): Promise<number> {
-    return 0;
+  hset(): Promise<number> {
+    return Promise.resolve(0);
   }
 
-  async hgetall(): Promise<Record<string, string>> {
-    return {};
+  hgetall(): Promise<Record<string, string>> {
+    return Promise.resolve({});
   }
 
-  async expire(): Promise<number> {
-    return 0;
+  expire(): Promise<number> {
+    return Promise.resolve(0);
   }
 
-  async keys(): Promise<string[]> {
-    return [];
+  keys(): Promise<string[]> {
+    return Promise.resolve([]);
   }
 
   on(): this {

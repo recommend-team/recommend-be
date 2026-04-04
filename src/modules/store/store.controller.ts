@@ -1,5 +1,11 @@
 import { Controller, Get, Param, Query } from '@nestjs/common';
-import { ApiTags, ApiOperation, ApiParam, ApiResponse, ApiQuery } from '@nestjs/swagger';
+import {
+  ApiTags,
+  ApiOperation,
+  ApiParam,
+  ApiResponse,
+  ApiQuery,
+} from '@nestjs/swagger';
 import { StoreService } from './store.service';
 import { Public } from '../auth/decorators/public.decorator';
 
@@ -15,10 +21,26 @@ export class StoreController {
     description:
       'Public endpoint — no authentication required. Returns paginated list of approved stores with basic details.',
   })
-  @ApiQuery({ name: 'page', required: false, type: Number, description: 'Page number (default: 1)' })
-  @ApiQuery({ name: 'limit', required: false, type: Number, description: 'Items per page (default: 20, max: 100)' })
-  @ApiResponse({ status: 200, description: 'List of stores retrieved successfully' })
-  async getAllStores(@Query('page') page?: number, @Query('limit') limit?: number) {
+  @ApiQuery({
+    name: 'page',
+    required: false,
+    type: Number,
+    description: 'Page number (default: 1)',
+  })
+  @ApiQuery({
+    name: 'limit',
+    required: false,
+    type: Number,
+    description: 'Items per page (default: 20, max: 100)',
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'List of stores retrieved successfully',
+  })
+  async getAllStores(
+    @Query('page') page?: number,
+    @Query('limit') limit?: number,
+  ) {
     return this.storeService.getAllStores(page, limit);
   }
 

@@ -10,7 +10,9 @@ export default registerAs('app', () => ({
 
 export const databaseConfig = registerAs('database', () => ({
   type: 'postgres' as const,
-  url: process.env.DATABASE_URL || 'postgresql://postgres:postgres@localhost:5432/recommend_db',
+  url:
+    process.env.DATABASE_URL ||
+    'postgresql://postgres:postgres@localhost:5432/recommend_db',
   entities: ['dist/**/*.entity.js'],
   migrations: ['dist/database/migrations/*.js'],
   migrationsRun: true,

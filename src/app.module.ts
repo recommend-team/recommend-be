@@ -2,7 +2,6 @@ import { Module } from '@nestjs/common';
 import { APP_FILTER, APP_GUARD, APP_INTERCEPTOR } from '@nestjs/core';
 import { ThrottlerModule } from '@nestjs/throttler';
 import { ScheduleModule } from '@nestjs/schedule';
-import { BullModule } from '@nestjs/bull';
 import { AppConfigModule } from './config/config.module';
 import { RedisModule } from './common/redis/redis.module';
 import { CommonModule } from './common/common.module';
