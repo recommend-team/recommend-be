@@ -135,6 +135,93 @@ export class AdminService {
 
   // ─── Vendors ───────────────────────────────────────────────────────────────
 
+  /**
+   * Returns all vendor stores with their product counts and owner details.
+   * Available to admins only for store management oversight.
+   */
+  async getAllStores(query: {
+    status?: SellerStatus;
+    page?: number;
+    limit?: number;
+  }): Promise<
+    PaginatedResult<{
+      id: string;
+      firstName: string;
+      lastName: string;
+      email: string;
+      phoneNumber: string | null;
+      businessName: string | null;
+      businessCategory: string | null;
+      businessLogoUrl: string | null;
+      slug: string | null;
+      vendorType: string | null;
+      status: SellerStatus;
+      isOpen: boolean;
+      isEmailVerified: boolean;
+      productCount: number;
+      createdAt: Date;
+    }>
+  > {
+    const page = Math.max(1, query.page ?? 1);
+    const limit = Math.min(100, Math.max(1, query.limit ?? 20));
+    const skip = (page - 1) * limit;
+
+    const where: Record<string, unknown> = { role: Role.SELLER };
+    if (query.status) where['status'] = query.status;
+
+    const [vendors, total] = await this.usersRepo.findAndCount({
+      where,
+      select: [
+        'id',
+        'firstName',
+        'lastName',
+        'email',
+        'phoneNumber',
+        'businessName',
+        'businessCategory',
+        'businessLogoUrl',
+        'slug',
+        'vendorType',
+        'status',
+        'isOpen',
+        'isEmailVerified',
+        'createdAt',
+      ],
+      skip,
+      take: limit,
+      order: { createdAt: 'DESC' },
+    });
+
+    // Get product counts for each vendor
+    const items = await Promise.all(
+      vendors.map(async (vendor) => {
+        const productCount = await this.productsRepo.count({
+          where: { vendorId: vendor.id },
+        });
+
+        return {
+          id: vendor.id,
+          firstName: vendor.firstName,
+          lastName: vendor.lastName,
+          email: vendor.email,
+          phoneNumber: vendor.phoneNumber,
+          businessName: vendor.businessName,
+          businessCategory: vendor.businessCategory,
+          businessLogoUrl: vendor.businessLogoUrl,
+          slug: vendor.slug,
+          vendorType: vendor.vendorType,
+          status: vendor.status,
+          isOpen: vendor.isOpen,
+          isEmailVerified: vendor.isEmailVerified,
+          productCount,
+          createdAt: vendor.createdAt,
+        };
+      }),
+    );
+
+    return { items, total, page, limit, totalPages: Math.ceil(total / limit) };
+  }
+
   async getVendors(query: {
     status?: SellerStatus;
     page?: number;

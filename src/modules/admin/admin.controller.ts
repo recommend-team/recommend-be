@@ -73,6 +73,22 @@ export class AdminController {
 
   // ─── Vendors ───────────────────────────────────────────────────────────────
 
+  @Get('stores')
+  @ApiOperation({
+    summary: 'List all vendor stores with details and product counts',
+  })
+  @ApiQuery({ name: 'status', enum: SellerStatus, required: false })
+  @ApiQuery({ name: 'page', required: false, type: Number })
+  @ApiQuery({ name: 'limit', required: false, type: Number })
+  @ApiResponse({ status: 200, description: 'Paginated store list with details' })
+  getAllStores(
+    @Query('status') status?: SellerStatus,
+    @Query('page') page?: number,
+    @Query('limit') limit?: number,
+  ) {
+    return this.adminService.getAllStores({ status, page, limit });
+  }
+
   @Get('vendors')
   @ApiOperation({
     summary: 'List all vendor accounts with optional status filter',
