@@ -18,13 +18,14 @@ async function bootstrap() {
   app.use(compression());
 
   // CORS
-  const frontendUrl = configService.get<string>('app.frontendUrl');
-  if (frontendUrl) {
-    app.enableCors({
-      origin: frontendUrl,
-      credentials: true,
-    });
-  }
+  const allowedOrigins = [
+    'http://localhost:3000',
+    'https://recommend-fe.netlify.app',
+  ];
+  app.enableCors({
+    origin: allowedOrigins,
+    credentials: true,
+  });
 
   // API versioning
   app.enableVersioning({
