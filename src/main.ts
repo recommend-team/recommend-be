@@ -18,10 +18,11 @@ async function bootstrap() {
   app.use(compression());
 
   // CORS
-  const allowedOrigins = [
-    'http://localhost:3000',
-    'https://recommend-fe.netlify.app',
-  ];
+  const isProduction = configService.get<string>('app.nodeEnv') === 'production';
+  const frontendUrl = configService.get<string>('app.frontendUrl');
+  const allowedOrigins = isProduction
+    ? [frontendUrl!]
+    : ['http://localhost:3000', 'https://recommend-fe.netlify.app'];
   app.enableCors({
     origin: allowedOrigins,
     credentials: true,
