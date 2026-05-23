@@ -215,14 +215,27 @@ export class User extends BaseEntity {
   }
 
   /**
-   * Buyers (WhatsApp bot-created) are active once their record exists.
-   * Vendors and Riders require admin KYC approval (APPROVED status).
+   * Buyers are active once their record exists (status APPROVED).
+   * Vendors and Riders are active once their email is verified — they may
+   * log in and access their dashboard while KYC is PENDING. Approval is
+   * enforced at sensitive endpoints (e.g. creating products, picking orders),
+   * not at session level.
    */
   isActive(): boolean {
     if (this.role === Role.BUYER) {
       return this.status === SellerStatus.APPROVED;
     }
-    return this.status === SellerStatus.APPROVED && this.isEmailVerified;
+    if (
+      this.status === SellerStatus.SUSPENDED ||
+      this.status === SellerStatus.DEACTIVATED
+    ) {
+      return false;
+    }
+    return this.isEmailVerified;
+  }
+
+  isApproved(): boolean {
+    return this.status === SellerStatus.APPROVED;
   }
 
   isPendingApproval(): boolean {
