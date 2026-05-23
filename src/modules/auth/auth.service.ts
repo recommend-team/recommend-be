@@ -40,6 +40,7 @@ export type SafeUser = Omit<
   | 'hashPassword'
   | 'validatePassword'
   | 'isActive'
+  | 'isApproved'
   | 'isPendingApproval'
   | 'canLogin'
   | 'recordFailedLogin'
@@ -156,12 +157,6 @@ export class AuthService {
     if (!user.isEmailVerified) {
       throw new UnauthorizedException(
         'Please verify your email address before logging in.',
-      );
-    }
-
-    if (user.isPendingApproval()) {
-      throw new UnauthorizedException(
-        'Your account is pending KYC approval. You will be notified by email once approved.',
       );
     }
 
@@ -298,7 +293,7 @@ export class AuthService {
 
     return {
       message: awaitingApproval
-        ? 'Email verified. Your account is now pending KYC approval. You will be notified once reviewed.'
+        ? 'Email verified. You can now log in and access your dashboard. KYC approval is required before you can list products or accept deliveries.'
         : 'Email verified successfully. You can now log in.',
       data: { user: this.sanitizeUser(savedUser) },
     };

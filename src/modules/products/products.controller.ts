@@ -21,6 +21,7 @@ import {
 } from '@nestjs/swagger';
 import { ProductsService } from './products.service';
 import { Roles } from '../auth/decorators/roles.decorator';
+import { ApprovedOnly } from '../auth/decorators/approved-only.decorator';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { Role } from '../../common/enums/roles.enum';
 import { User } from '../auth/entities/auth.entity';
@@ -42,10 +43,11 @@ export class ProductsController {
   constructor(private readonly productsService: ProductsService) {}
 
   @Post()
+  @ApprovedOnly()
   @ApiOperation({
     summary: 'Create a product',
     description:
-      'Create a new product listing. Vendors are limited to 20 products total.',
+      'Create a new product listing. Requires an APPROVED vendor account (KYC). Vendors are limited to 20 products total.',
   })
   @ApiBody({ type: CreateProductRequestDto })
   @ApiResponse({ status: 201, description: 'Product created' })
