@@ -15,6 +15,7 @@ import { OrdersModule } from './modules/orders/orders.module';
 import { PaymentsModule } from './modules/payments/payments.module';
 import { StoreModule } from './modules/store/store.module';
 import { LocationsModule } from './modules/locations/locations.module';
+import { ChatModule } from './chat/chat.module';
 import { JwtAuthGuard } from './modules/auth/guards/jwt-auth.guard';
 import { RolesGuard } from './modules/auth/guards/roles.guard';
 import { ApprovedOnlyGuard } from './modules/auth/guards/approved-only.guard';
@@ -36,6 +37,7 @@ import { HttpExceptionFilter } from './common/filters/http-exception.filter';
     PaymentsModule,
     StoreModule,
     LocationsModule,
+    ChatModule,
     // TODO: Enable BullModule once Redis/Upstash is configured for production
     // BullModule.forRootAsync({
     //   imports: [ConfigModule],
