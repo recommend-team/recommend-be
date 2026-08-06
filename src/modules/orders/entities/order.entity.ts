@@ -3,58 +3,79 @@ import {
   Column,
   PrimaryGeneratedColumn,
   ManyToOne,
+  OneToMany,
   JoinColumn,
+  Index,
   CreateDateColumn,
   UpdateDateColumn,
 } from 'typeorm';
 import { User } from '../../auth/entities/auth.entity';
-import { Product } from '../../products/entities/product.entity';
+import { Checkout } from './checkout.entity';
+import { OrderItem } from './order-item.entity';
 import { OrderStatus } from '../../../common/enums/order-status.enum';
 import { FulfillmentType } from '../../../common/enums/fulfillment-type.enum';
 
+/**
+ * One vendor's share of a checkout — their items, their money, their status.
+ *
+ * This stays the vendor's unit of work: everything a seller sees, and every earnings
+ * figure, is computed from these rows. A basket spanning two restaurants produces two
+ * of them under one `Checkout`, each owing its own vendor exactly 80% of its own
+ * items, untouched by what the other vendor sold.
+ */
 @Entity('orders')
 export class Order {
   @PrimaryGeneratedColumn('uuid')
   id!: string;
 
   @Column({ type: 'uuid' })
-  productId!: string;
+  @Index()
+  checkoutId!: string;
 
-  @ManyToOne(() => Product)
-  @JoinColumn({ name: 'productId' })
-  product!: Product;
+  @ManyToOne(() => Checkout, (checkout) => checkout.orders, {
+    onDelete: 'CASCADE',
+  })
+  @JoinColumn({ name: 'checkoutId' })
+  checkout!: Checkout;
 
   @Column({ type: 'uuid' })
+  @Index()
   vendorId!: string;
 
   @ManyToOne(() => User)
   @JoinColumn({ name: 'vendorId' })
   vendor!: User;
 
-  @Column({ type: 'varchar' })
-  buyerPhone!: string;
+  @OneToMany(() => OrderItem, (item) => item.order, { cascade: ['insert'] })
+  items!: OrderItem[];
 
+  /**
+   * Buyer contact, denormalised from the checkout. Not redundancy for its own sake —
+   * each vendor genuinely needs to reach the buyer to fulfil their part.
+   */
   @Column({ type: 'varchar' })
   buyerName!: string;
+
+  @Column({ type: 'varchar' })
+  @Index()
+  buyerPhone!: string;
 
   @Column({ type: 'varchar', nullable: true })
   buyerEmail!: string | null;
 
-  @Column({ type: 'integer' })
-  quantity!: number;
-
-  /** Price at time of order (snapshot) */
-  @Column({ type: 'decimal', precision: 10, scale: 2 })
-  unitPrice!: number;
-
+  /**
+   * This vendor's goods subtotal. Deliberately still named totalAmount: the earnings
+   * query reads it, and renaming would break vendor reporting for no gain.
+   * Delivery is never included here — it belongs to the platform, not the vendor.
+   */
   @Column({ type: 'decimal', precision: 10, scale: 2 })
   totalAmount!: number;
 
-  /** 20% platform fee */
+  /** 20% of this vendor's subtotal. */
   @Column({ type: 'decimal', precision: 10, scale: 2 })
   platformFee!: number;
 
-  /** 80% vendor payout */
+  /** 80% of this vendor's subtotal — what they are owed. */
   @Column({ type: 'decimal', precision: 10, scale: 2 })
   vendorAmount!: number;
 
@@ -67,10 +88,6 @@ export class Order {
     default: OrderStatus.PENDING_PAYMENT,
   })
   status!: OrderStatus;
-
-  /** Paystack transaction reference */
-  @Column({ type: 'varchar', unique: true, nullable: true })
-  paymentReference!: string | null;
 
   @Column({ type: 'text', nullable: true })
   deliveryAddress!: string | null;

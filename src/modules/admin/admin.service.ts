@@ -338,7 +338,7 @@ export class AdminService {
     if (buyer.phoneNumber) {
       [orders, orderCount] = await this.ordersRepo.findAndCount({
         where: { buyerPhone: buyer.phoneNumber },
-        relations: ['product'],
+        relations: ['items', 'items.product'],
         order: { createdAt: 'DESC' },
         take: 50,
       });
@@ -416,25 +416,37 @@ export class AdminService {
 
     const [items, total] = await this.ordersRepo.findAndCount({
       where,
-      relations: ['product', 'vendor'],
+      relations: ['items', 'vendor', 'checkout'],
       select: {
         id: true,
         buyerName: true,
         buyerPhone: true,
         buyerEmail: true,
-        quantity: true,
-        unitPrice: true,
         totalAmount: true,
         platformFee: true,
         vendorAmount: true,
         fulfillmentType: true,
         status: true,
-        paymentReference: true,
         deliveryAddress: true,
         notes: true,
         paidAt: true,
         createdAt: true,
-        product: { id: true, name: true },
+        // Line items replace the old single product/quantity/unitPrice columns.
+        items: {
+          id: true,
+          productId: true,
+          productName: true,
+          unitPrice: true,
+          quantity: true,
+          lineTotal: true,
+        },
+        // The payment reference now lives on the parent checkout.
+        checkout: {
+          id: true,
+          reference: true,
+          totalAmount: true,
+          deliveryFee: true,
+        },
         vendor: {
           id: true,
           firstName: true,

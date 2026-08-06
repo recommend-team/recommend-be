@@ -1,17 +1,9 @@
-import {
-  Injectable,
-  NotFoundException,
-  BadRequestException,
-  Logger,
-} from '@nestjs/common';
+import { Injectable, Logger } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { DataSource, Repository } from 'typeorm';
 import { Order } from './entities/order.entity';
-import { Product } from '../products/entities/product.entity';
-import { PaymentsService } from '../payments/payments.service';
-import { CreateOrderDto } from './dto/create-order.dto';
+import { Checkout } from './entities/checkout.entity';
 import { OrderStatus } from '../../common/enums/order-status.enum';
-import { randomBytes } from 'crypto';
 
 export interface PaginatedOrders {
   items: Order[];
@@ -35,103 +27,56 @@ export class OrdersService {
   constructor(
     @InjectRepository(Order)
     private readonly ordersRepository: Repository<Order>,
-    @InjectRepository(Product)
-    private readonly productsRepository: Repository<Product>,
-    private readonly paymentsService: PaymentsService,
+    @InjectRepository(Checkout)
+    private readonly checkoutsRepository: Repository<Checkout>,
+    private readonly dataSource: DataSource,
   ) {}
-
-  // ─── Order creation ─────────────────────────────────────────────────────────
-
-  async createOrder(dto: CreateOrderDto): Promise<{
-    message: string;
-    data: { orderId: string; authorizationUrl: string; reference: string };
-  }> {
-    // 1. Validate product
-    const product = await this.productsRepository.findOne({
-      where: { id: dto.productId },
-    });
-    if (!product) throw new NotFoundException('Product not found');
-    if (!product.isAvailable) {
-      throw new BadRequestException('This product is currently unavailable');
-    }
-
-    // 2. Compute amounts
-    const unitPrice = Number(product.price);
-    const totalAmount = parseFloat((unitPrice * dto.quantity).toFixed(2));
-    const platformFee = parseFloat((totalAmount * 0.2).toFixed(2));
-    const vendorAmount = parseFloat((totalAmount - platformFee).toFixed(2));
-
-    // 3. Generate a unique Paystack reference
-    const reference = `REC-${randomBytes(8).toString('hex').toUpperCase()}`;
-
-    // 4. Create order in PENDING_PAYMENT status
-    const order = this.ordersRepository.create({
-      productId: dto.productId,
-      vendorId: product.vendorId,
-      buyerPhone: dto.buyerPhone,
-      buyerName: dto.buyerName,
-      buyerEmail: dto.buyerEmail ?? null,
-      quantity: dto.quantity,
-      unitPrice,
-      totalAmount,
-      platformFee,
-      vendorAmount,
-      fulfillmentType: dto.fulfillmentType,
-      status: OrderStatus.PENDING_PAYMENT,
-      paymentReference: reference,
-      deliveryAddress: dto.deliveryAddress ?? null,
-      notes: dto.notes ?? null,
-    });
-    const saved = await this.ordersRepository.save(order);
-
-    // 5. Initialize Paystack payment
-    // Use buyer email or a placeholder (Paystack requires an email)
-    const payerEmail =
-      dto.buyerEmail ??
-      `${dto.buyerPhone.replace('+', '')}@whatsapp.recommend.app`;
-
-    const { authorizationUrl } = await this.paymentsService.initializePayment({
-      email: payerEmail,
-      amountNgn: totalAmount,
-      reference,
-      metadata: {
-        orderId: saved.id,
-        productId: dto.productId,
-        buyerName: dto.buyerName,
-        buyerPhone: dto.buyerPhone,
-      },
-    });
-
-    return {
-      message: 'Order created. Complete payment to confirm your order.',
-      data: { orderId: saved.id, authorizationUrl, reference },
-    };
-  }
 
   // ─── Webhook handler ────────────────────────────────────────────────────────
 
+  /**
+   * One Paystack charge settles the whole basket, so a single reference marks the
+   * checkout and every vendor's order paid together. Idempotent — Paystack retries
+   * webhooks, and a second delivery must not re-stamp paidAt.
+   */
   async handlePaymentSuccess(reference: string): Promise<void> {
-    const order = await this.ordersRepository.findOne({
-      where: { paymentReference: reference },
+    const checkout = await this.checkoutsRepository.findOne({
+      where: { reference },
+      relations: ['orders'],
     });
 
-    if (!order) {
-      this.logger.warn(`Webhook: order not found for reference ${reference}`);
-      return;
-    }
-
-    if (order.status !== OrderStatus.PENDING_PAYMENT) {
+    if (!checkout) {
       this.logger.warn(
-        `Webhook: order ${order.id} already processed (status=${order.status})`,
+        `Webhook: checkout not found for reference ${reference}`,
       );
       return;
     }
 
-    order.status = OrderStatus.PAID;
-    order.paidAt = new Date();
-    await this.ordersRepository.save(order);
+    if (checkout.status !== OrderStatus.PENDING_PAYMENT) {
+      this.logger.warn(
+        `Webhook: checkout ${checkout.id} already processed (status=${checkout.status})`,
+      );
+      return;
+    }
 
-    this.logger.log(`Order ${order.id} marked as PAID (ref=${reference})`);
+    const paidAt = new Date();
+
+    await this.dataSource.transaction(async (manager) => {
+      await manager.update(
+        Checkout,
+        { id: checkout.id },
+        { status: OrderStatus.PAID, paidAt },
+      );
+      await manager.update(
+        Order,
+        { checkoutId: checkout.id, status: OrderStatus.PENDING_PAYMENT },
+        { status: OrderStatus.PAID, paidAt },
+      );
+    });
+
+    this.logger.log(
+      `Checkout ${checkout.id} paid — ${checkout.orders?.length ?? 0} vendor order(s) marked PAID (ref=${reference})`,
+    );
   }
 
   // ─── Vendor views ───────────────────────────────────────────────────────────
@@ -149,7 +94,7 @@ export class OrdersService {
 
     const [items, total] = await this.ordersRepository.findAndCount({
       where,
-      relations: ['product'],
+      relations: ['items'],
       order: { createdAt: 'DESC' },
       skip,
       take: limit,
