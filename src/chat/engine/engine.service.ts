@@ -4,6 +4,7 @@ import { ChannelRegistry } from '../transport/channel.registry';
 import { OutboundMessage } from '../transport/channel.interface';
 import { Conversation } from '../conversation/entities/conversation.entity';
 import { ConversationState } from '../enums/chat.enums';
+import { DiscoveryService } from './discovery/discovery.service';
 
 export interface InboundMessage {
   conversation: Conversation;
@@ -19,9 +20,10 @@ export interface InboundMessage {
 /**
  * Routes an inbound message to a reply.
  *
- * B2 is deliberately scripted — no model is involved. The LLM discovery layer lands in
- * B3 and slots in behind `composeReply`; everything around it (persistence, ordering,
- * delivery, de-duplication) is already in place and will not need to change.
+ * Discovery goes to the model; greetings and empty input do not, because a model call
+ * that can only produce one sensible answer is wasted money. The checkout flows in B4
+ * will be scripted for a stronger reason: nothing that leads to a charge should depend
+ * on what a model decides to say.
  */
 @Injectable()
 export class EngineService {
@@ -30,6 +32,7 @@ export class EngineService {
   constructor(
     private readonly conversationService: ConversationService,
     private readonly channelRegistry: ChannelRegistry,
+    private readonly discoveryService: DiscoveryService,
   ) {}
 
   /**
@@ -56,7 +59,7 @@ export class EngineService {
       });
     }
 
-    const replies = this.composeReply(conversation, input.text);
+    const replies = await this.composeReply(conversation, input.text);
     const delivered: OutboundMessage[] = [];
 
     for (const reply of replies) {
@@ -113,29 +116,19 @@ export class EngineService {
   }
 
   /**
-   * Scripted placeholder. B3 replaces the body of this method with LLM-driven
-   * discovery over read-only catalogue tools; the signature stays the same.
+   * Discovery: the LLM answers, but only ever about what the catalogue tools returned.
+   *
+   * Greetings and empty input are still handled without a model — instant, free, and
+   * impossible to get wrong. The money path (B4) will be scripted for the same reason.
    */
-  private composeReply(
+  private async composeReply(
     conversation: Conversation,
     text: string,
-  ): OutboundMessage[] {
+  ): Promise<OutboundMessage[]> {
     const trimmed = text.trim();
 
     if (!trimmed) {
       return [{ text: "I didn't catch that — what are you looking for?" }];
-    }
-
-    if (conversation.state !== ConversationState.DISCOVERY) {
-      // No flow can move a conversation out of DISCOVERY yet, so reaching here means
-      // state was set by something that no longer exists. Say something useful
-      // rather than nothing.
-      this.logger.warn(
-        `Conversation ${conversation.id} is in ${conversation.state} with no flow to handle it`,
-      );
-      return [
-        { text: "Let's start again — what would you like to order today?" },
-      ];
     }
 
     if (isGreeting(trimmed)) {
@@ -146,14 +139,53 @@ export class EngineService {
       ];
     }
 
+    if (conversation.state === ConversationState.DISCOVERY) {
+      return this.discover(conversation, trimmed);
+    }
+
+    // Checkout flows land in B4. Until then nothing moves a conversation out of
+    // DISCOVERY, so reaching here means stale state — recover rather than stall.
+    this.logger.warn(
+      `Conversation ${conversation.id} is in ${conversation.state} with no flow to handle it`,
+    );
     return [
-      {
-        text:
-          `Got it — you're after "${trimmed}". I'm still learning to search our ` +
-          'restaurants; that lands shortly. In the meantime you can browse stores ' +
-          "directly and I'll keep track of this chat.",
-      },
+      { text: "Let's start again — what would you like to order today?" },
     ];
+  }
+
+  /** Hands the turn to the discovery layer and records anything it learned. */
+  private async discover(
+    conversation: Conversation,
+    text: string,
+  ): Promise<OutboundMessage[]> {
+    const history = await this.conversationService.getHistory(conversation.id, {
+      limit: 20,
+    });
+
+    const result = await this.discoveryService.discover({
+      text,
+      areaId: conversation.areaId,
+      history,
+    });
+
+    // Remember where the buyer is so we never ask twice.
+    if (
+      result.resolvedAreaId &&
+      result.resolvedAreaId !== conversation.areaId
+    ) {
+      await this.conversationService.setArea(
+        conversation.id,
+        result.resolvedAreaId,
+      );
+    }
+
+    if (result.usedFallback) {
+      this.logger.debug(
+        `Conversation ${conversation.id} answered by keyword fallback`,
+      );
+    }
+
+    return result.messages;
   }
 }
 

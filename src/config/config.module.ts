@@ -12,6 +12,7 @@ import configuration, {
   googleConfig,
   deliveryConfig,
   pushConfig,
+  chatConfig,
 } from './configuration';
 import { validate } from './config.validation';
 
@@ -32,6 +33,7 @@ import { validate } from './config.validation';
         googleConfig,
         deliveryConfig,
         pushConfig,
+        chatConfig,
       ],
       validate,
     }),

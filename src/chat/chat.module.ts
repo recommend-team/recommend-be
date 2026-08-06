@@ -12,7 +12,11 @@ import { ChannelRegistry } from './transport/channel.registry';
 import { PwaChannel } from './transport/pwa/pwa.channel';
 import { PwaGateway } from './transport/pwa/pwa.gateway';
 import { LocalCatalogAdapter } from './adapters/local-catalog.adapter';
+import { LocalLocationAdapter } from './adapters/local-location.adapter';
 import { CATALOG_PORT } from './ports/catalog.port';
+import { LOCATION_PORT } from './ports/location.port';
+import { DiscoveryService } from './engine/discovery/discovery.service';
+import { Area } from '../modules/locations/entities/area.entity';
 
 /**
  * The chat bounded context. `AppModule` importing this is the only permitted crossing
@@ -22,7 +26,7 @@ import { CATALOG_PORT } from './ports/catalog.port';
  */
 @Module({
   imports: [
-    TypeOrmModule.forFeature([Conversation, ChatMessage, User, Product]),
+    TypeOrmModule.forFeature([Conversation, ChatMessage, User, Product, Area]),
     JwtModule.register({}),
   ],
   providers: [
@@ -32,7 +36,9 @@ import { CATALOG_PORT } from './ports/catalog.port';
     ChannelRegistry,
     PwaChannel,
     PwaGateway,
+    DiscoveryService,
     { provide: CATALOG_PORT, useClass: LocalCatalogAdapter },
+    { provide: LOCATION_PORT, useClass: LocalLocationAdapter },
   ],
   exports: [ConversationService, SessionService],
 })

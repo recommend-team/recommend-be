@@ -160,6 +160,14 @@ export class ConversationService {
     );
   }
 
+  /** Remember where the buyer is, so discovery never has to ask twice. */
+  async setArea(conversationId: string, areaId: string): Promise<void> {
+    await this.conversationsRepository.update(
+      { id: conversationId },
+      { areaId },
+    );
+  }
+
   /** Shallow-merges into the existing context rather than replacing it. */
   async mergeContext(
     conversationId: string,

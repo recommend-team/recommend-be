@@ -79,7 +79,10 @@ export const cloudinaryConfig = registerAs('cloudinary', () => ({
 
 export const openaiConfig = registerAs('openai', () => ({
   apiKey: process.env.OPENAI_API_KEY,
-  model: process.env.OPENAI_MODEL || 'gpt-4-turbo-preview',
+  // gpt-4-turbo-preview was retired and now 404s. Discovery is short prompts over
+  // small tool results, so the cheapest capable tool-calling model is the right
+  // default; move up to gpt-4.1-mini or gpt-4o if reply quality needs it.
+  model: process.env.OPENAI_MODEL || 'gpt-4o-mini',
   temperature: parseFloat(process.env.OPENAI_TEMPERATURE || '0.2'),
 }));
 
@@ -107,6 +110,19 @@ export const googleConfig = registerAs('google', () => ({
     process.env.GOOGLE_CALLBACK_URL ||
     'http://localhost:4000/api/v1/auth/google/callback',
   backendUrl: process.env.BACKEND_URL || 'http://localhost:4000',
+}));
+
+export const chatConfig = registerAs('chat', () => ({
+  /**
+   * How many past messages go to the model. The main lever on per-turn token cost —
+   * every extra message is paid for on every turn of every conversation.
+   */
+  maxHistoryMessages: parseInt(
+    process.env.CHAT_MAX_HISTORY_MESSAGES || '12',
+    10,
+  ),
+  /** Tool round-trips allowed per turn, so a confused model cannot loop indefinitely. */
+  maxToolRounds: parseInt(process.env.CHAT_MAX_TOOL_ROUNDS || '3', 10),
 }));
 
 export const deliveryConfig = registerAs('delivery', () => ({

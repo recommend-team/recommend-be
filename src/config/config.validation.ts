@@ -101,6 +101,14 @@ class EnvironmentVariables {
   @IsString()
   SENDGRID_API_KEY?: string;
 
+  @IsOptional()
+  @IsNumber()
+  CHAT_MAX_HISTORY_MESSAGES?: number;
+
+  @IsOptional()
+  @IsNumber()
+  CHAT_MAX_TOOL_ROUNDS?: number;
+
   /** Flat delivery fee in naira, charged once per checkout on DELIVERY orders. */
   @IsOptional()
   @IsNumber()

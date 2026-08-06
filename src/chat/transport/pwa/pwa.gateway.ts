@@ -58,10 +58,30 @@ export class PwaGateway implements OnGatewayInit, OnGatewayConnection {
   }
 
   /**
+   * Socket.IO starts delivering events as soon as the socket connects — it does not
+   * wait for handleConnection to finish. A client that emits immediately would find
+   * socket.data empty and get silence. Handlers await this instead.
+   */
+  private readonly setup = new WeakMap<Socket, Promise<void>>();
+
+  /**
    * A device presents its token, or gets a new one. The token — not any phone number —
    * is what grants access to a conversation's history.
    */
-  async handleConnection(socket: Socket): Promise<void> {
+  handleConnection(socket: Socket): Promise<void> {
+    const ready = this.initialise(socket);
+    this.setup.set(socket, ready);
+    return ready;
+  }
+
+  /** Resolves once connection setup has finished, or null if it failed. */
+  private async awaitReady(socket: Socket): Promise<SocketData | null> {
+    await this.setup.get(socket);
+    const data = socket.data as SocketData;
+    return data?.conversationId ? data : null;
+  }
+
+  private async initialise(socket: Socket): Promise<void> {
     try {
       const presented = extractToken(socket);
       let sessionId = await this.sessionService.verify(presented);
@@ -116,7 +136,7 @@ export class PwaGateway implements OnGatewayInit, OnGatewayConnection {
    */
   @SubscribeMessage('session:get')
   async onSessionGet(@ConnectedSocket() socket: Socket): Promise<void> {
-    const data = socket.data as SocketData;
+    const data = await this.awaitReady(socket);
 
     if (!data?.sessionId) {
       socket.emit('chat:error', {
@@ -140,7 +160,7 @@ export class PwaGateway implements OnGatewayInit, OnGatewayConnection {
       cart?: { itemCount: number; vendorCount: number };
     },
   ): Promise<void> {
-    const data = socket.data as SocketData;
+    const data = await this.awaitReady(socket);
     const text = (body?.text ?? '').toString().slice(0, 2000);
 
     if (!data?.conversationId) {
@@ -170,6 +190,18 @@ export class PwaGateway implements OnGatewayInit, OnGatewayConnection {
         clientMessageId: body?.clientMessageId,
         cart: body?.cart,
       });
+    } catch (error) {
+      // Anything unhandled downstream would otherwise leave the buyer staring at a
+      // dead chat with no indication that their message went nowhere. Say something.
+      this.logger.error(
+        `Failed to handle message on conversation ${data.conversationId}: ${
+          error instanceof Error ? error.message : 'unknown error'
+        }`,
+      );
+      socket.emit('chat:error', {
+        code: 'REPLY_FAILED',
+        message: 'Something went wrong on our side. Please try that again.',
+      });
     } finally {
       this.pwaChannel.emitTyping(data.sessionId, false);
     }
@@ -180,8 +212,15 @@ export class PwaGateway implements OnGatewayInit, OnGatewayConnection {
     @ConnectedSocket() socket: Socket,
     @MessageBody() body: { before?: string; limit?: number },
   ): Promise<void> {
-    const data = socket.data as SocketData;
-    if (!data?.conversationId) return;
+    const data = await this.awaitReady(socket);
+    if (!data?.conversationId) {
+      // Never fail silently — a client waiting on chat:history would hang forever.
+      socket.emit('chat:error', {
+        code: 'NO_SESSION',
+        message: 'Session not ready. Reconnect and try again.',
+      });
+      return;
+    }
 
     const messages = await this.conversationService.getHistory(
       data.conversationId,
