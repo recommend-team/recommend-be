@@ -42,22 +42,22 @@ export type CreateOrderDto = z.infer<typeof createOrderSchema>;
 
 export class CreateOrderRequestDto {
   @ApiProperty({ example: '123e4567-e89b-12d3-a456-426614174000' })
-  productId: string;
+  productId!: string;
 
   @ApiProperty({ example: 2, minimum: 1 })
-  quantity: number;
+  quantity!: number;
 
   @ApiProperty({ example: '+2348012345678', description: 'E.164 phone format' })
-  buyerPhone: string;
+  buyerPhone!: string;
 
   @ApiProperty({ example: 'John Doe' })
-  buyerName: string;
+  buyerName!: string;
 
   @ApiPropertyOptional({ example: 'john@example.com' })
   buyerEmail?: string;
 
   @ApiProperty({ enum: FulfillmentType, example: FulfillmentType.DELIVERY })
-  fulfillmentType: FulfillmentType;
+  fulfillmentType!: FulfillmentType;
 
   @ApiPropertyOptional({ example: '5 Broad Street, Lagos Island, Lagos' })
   deliveryAddress?: string;

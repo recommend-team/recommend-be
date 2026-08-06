@@ -15,6 +15,7 @@ import {
   UpdateNonRegisteredKycDto,
 } from './dto/update-kyc.dto';
 import { UpdatePayoutDto } from './dto/update-payout.dto';
+import { LocationsService } from '../locations/locations.service';
 
 type PayoutFields =
   | 'bankName'
@@ -38,7 +39,7 @@ export interface VendorProfileResponse {
   businessAddress: string | null;
   businessDescription: string | null;
   businessCategory: string | null;
-  businessAreas: string[] | null;
+  serviceAreas: { id: string; name: string; stateId: string }[];
   businessLogoUrl: string | null;
   businessBannerUrl: string | null;
   whatsappNumber: string | null;
@@ -76,6 +77,7 @@ export class SellersService {
     private readonly usersRepository: Repository<User>,
     @InjectRepository(Order)
     private readonly ordersRepository: Repository<Order>,
+    private readonly locationsService: LocationsService,
   ) {}
 
   // ─── Profile ───────────────────────────────────────────────────────────────
@@ -110,8 +112,13 @@ export class SellersService {
       vendor.businessDescription = dto.businessDescription;
     if (dto.businessCategory !== undefined)
       vendor.businessCategory = dto.businessCategory;
-    if (dto.businessAreas !== undefined)
-      vendor.businessAreas = dto.businessAreas;
+    // Sending areaIds replaces coverage wholesale. Unknown or deactivated ids are
+    // rejected by the service rather than silently dropped.
+    if (dto.areaIds !== undefined) {
+      vendor.serviceAreas = await this.locationsService.findActiveAreasByIds(
+        dto.areaIds,
+      );
+    }
     if (dto.businessLogoUrl !== undefined)
       vendor.businessLogoUrl = dto.businessLogoUrl;
     if (dto.businessBannerUrl !== undefined)
@@ -340,6 +347,7 @@ export class SellersService {
   private async findVendor(userId: string): Promise<User> {
     const vendor = await this.usersRepository.findOne({
       where: { id: userId },
+      relations: ['serviceAreas'],
     });
     if (!vendor) throw new NotFoundException('Vendor not found');
     return vendor;
@@ -365,7 +373,11 @@ export class SellersService {
       businessAddress: vendor.businessAddress,
       businessDescription: vendor.businessDescription,
       businessCategory: vendor.businessCategory,
-      businessAreas: vendor.businessAreas,
+      serviceAreas: (vendor.serviceAreas ?? []).map((area) => ({
+        id: area.id,
+        name: area.name,
+        stateId: area.stateId,
+      })),
       businessLogoUrl: vendor.businessLogoUrl,
       businessBannerUrl: vendor.businessBannerUrl,
       whatsappNumber: vendor.whatsappNumber,
@@ -421,6 +433,7 @@ export class SellersService {
       !!vendor.businessName,
       !!vendor.businessAddress,
       !!vendor.businessCategory,
+      (vendor.serviceAreas?.length ?? 0) > 0,
       !!vendor.businessLogoUrl,
       !!vendor.whatsappNumber,
       !!vendor.bankAccountNumber,

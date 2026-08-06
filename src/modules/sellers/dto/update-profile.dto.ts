@@ -25,7 +25,11 @@ export const updateProfileSchema = z
     businessAddress: z.string().min(5).max(255).optional(),
     businessDescription: z.string().max(500).optional(),
     businessCategory: z.string().min(2).max(100).optional(),
-    businessAreas: z.array(z.string().min(1).max(100)).max(20).optional(),
+    // Areas are admin-created rows now, not free text — send their ids.
+    areaIds: z
+      .array(z.string().uuid('Each area id must be a valid UUID'))
+      .max(20, 'A vendor can serve at most 20 areas')
+      .optional(),
     businessLogoUrl: z
       .string()
       .url('businessLogoUrl must be a valid URL')
@@ -71,10 +75,16 @@ export class UpdateProfileRequestDto {
   businessCategory?: string;
 
   @ApiPropertyOptional({
-    example: ['Ikeja', 'Lekki', 'Victoria Island'],
+    description:
+      'Ids of the areas this vendor serves. Get them from GET /locations/states/:id/areas. ' +
+      "Sending the list replaces the vendor's current coverage.",
+    example: [
+      '123e4567-e89b-12d3-a456-426614174000',
+      '223e4567-e89b-12d3-a456-426614174001',
+    ],
     type: [String],
   })
-  businessAreas?: string[];
+  areaIds?: string[];
 
   @ApiPropertyOptional({
     example: 'https://res.cloudinary.com/example/logo.jpg',

@@ -29,28 +29,28 @@ export type RegisterDto = z.infer<typeof registerSchema>;
 export class RegisterRequestDto {
   @ApiProperty({ example: 'seller@example.com' })
   @IsEmail()
-  email: string;
+  email!: string;
 
   @ApiProperty({ example: 'password123' })
   @IsString()
   @MinLength(8)
   @MaxLength(50)
-  password: string;
+  password!: string;
 
   @ApiProperty({ example: 'John' })
   @IsString()
   @MinLength(2)
   @MaxLength(50)
-  firstName: string;
+  firstName!: string;
 
   @ApiProperty({ example: 'Doe' })
   @IsString()
   @MinLength(2)
   @MaxLength(50)
-  lastName: string;
+  lastName!: string;
 
   @ApiProperty({ example: '+2348012345678' })
   @IsString()
   @Matches(/^\+?[1-9]\d{1,14}$/, { message: 'Invalid phone number format' })
-  phoneNumber: string;
+  phoneNumber!: string;
 }

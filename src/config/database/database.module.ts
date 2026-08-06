@@ -17,10 +17,13 @@ import { DataSource, DataSourceOptions } from 'typeorm';
           migrationsRun: configService.get<boolean>('database.migrationsRun'),
           dropSchema: configService.get<boolean>('database.dropSchema'),
           autoLoadEntities: true,
-          entities: [__dirname + '/../**/*.entity{.ts,.js}'],
-          migrations: [__dirname + '/migrations/*{.ts,.js}'],
+          entities: configService.get<string[]>('database.entities'),
+          migrations: configService.get<string[]>('database.migrations'),
         }) as DataSourceOptions,
-      dataSourceFactory: async (options: DataSourceOptions) => {
+      dataSourceFactory: async (options?: DataSourceOptions) => {
+        if (!options) {
+          throw new Error('DataSourceOptions are not provided');
+        }
         return await new DataSource(options).initialize();
       },
     }),

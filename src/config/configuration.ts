@@ -8,22 +8,29 @@ export default registerAs('app', () => ({
   frontendUrl: process.env.FRONTEND_URL || 'http://localhost:4000',
 }));
 
-export const databaseConfig = registerAs('database', () => ({
-  type: 'postgres' as const,
-  url:
-    process.env.DATABASE_URL ||
-    'postgresql://postgres:postgres@localhost:5432/recommend_db',
-  entities: ['dist/**/*.entity.js'],
-  migrations: ['dist/database/migrations/*.js'],
-  migrationsRun: true,
-  synchronize:
+export const databaseConfig = registerAs('database', () => {
+  const entities = [__dirname + '/../**/*.entity{.ts,.js}'];
+  const migrations = [__dirname + '/../database/migrations/*{.ts,.js}'];
+
+  const synchronize =
     process.env.NODE_ENV !== 'production' &&
-    process.env.DATABASE_SYNCHRONIZE === 'true',
-  logging:
-    process.env.NODE_ENV !== 'production' &&
-    process.env.DATABASE_LOGGING === 'true',
-  dropSchema: false,
-}));
+    process.env.DATABASE_SYNCHRONIZE === 'true';
+
+  return {
+    type: 'postgres' as const,
+    url:
+      process.env.DATABASE_URL ||
+      'postgresql://postgres:postgres@localhost:5432/recommend_db',
+    entities,
+    migrations,
+    migrationsRun: !synchronize,
+    synchronize,
+    logging:
+      process.env.NODE_ENV !== 'production' &&
+      process.env.DATABASE_LOGGING === 'true',
+    dropSchema: false,
+  };
+});
 
 // Helper function for TypeORM DataSource (used in data-source.ts)
 export const getTypeOrmConfig = (): DataSourceOptions => {
@@ -33,6 +40,7 @@ export const getTypeOrmConfig = (): DataSourceOptions => {
     url: config.url,
     entities: config.entities,
     migrations: config.migrations,
+    migrationsTableName: 'migrations',
     migrationsRun: config.migrationsRun,
     synchronize: config.synchronize,
     logging: config.logging,
@@ -99,4 +107,14 @@ export const googleConfig = registerAs('google', () => ({
     process.env.GOOGLE_CALLBACK_URL ||
     'http://localhost:4000/api/v1/auth/google/callback',
   backendUrl: process.env.BACKEND_URL || 'http://localhost:4000',
+}));
+
+export const deliveryConfig = registerAs('delivery', () => ({
+  feeNgn: parseInt(process.env.DELIVERY_FEE_NGN || '1500', 10),
+}));
+
+export const pushConfig = registerAs('push', () => ({
+  publicKey: process.env.VAPID_PUBLIC_KEY,
+  privateKey: process.env.VAPID_PRIVATE_KEY,
+  subject: process.env.VAPID_SUBJECT || 'mailto:support@recommend.ng',
 }));

@@ -10,6 +10,8 @@ import configuration, {
   emailConfig,
   paymentConfig,
   googleConfig,
+  deliveryConfig,
+  pushConfig,
 } from './configuration';
 import { validate } from './config.validation';
 
@@ -28,6 +30,8 @@ import { validate } from './config.validation';
         emailConfig,
         paymentConfig,
         googleConfig,
+        deliveryConfig,
+        pushConfig,
       ],
       validate,
     }),

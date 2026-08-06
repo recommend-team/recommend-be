@@ -1,4 +1,13 @@
-import { Entity, Column, Index, BeforeInsert, BeforeUpdate } from 'typeorm';
+import {
+  Entity,
+  Column,
+  Index,
+  BeforeInsert,
+  BeforeUpdate,
+  ManyToMany,
+  JoinTable,
+} from 'typeorm';
+import { Area } from '../../locations/entities/area.entity';
 import { Exclude } from 'class-transformer';
 import { BaseEntity } from '../../../common/entities/base.entity';
 import { Role } from '../../../common/enums/roles.enum';
@@ -11,130 +20,135 @@ import * as argon2 from 'argon2';
 export class User extends BaseEntity {
   @Column({ type: 'varchar', unique: true })
   @Index()
-  email: string;
+  email!: string;
 
   @Column({ type: 'varchar', nullable: true })
   @Exclude()
-  password: string | null;
+  password!: string | null;
 
   @Column({ type: 'varchar' })
-  firstName: string;
+  firstName!: string;
 
   @Column({ type: 'varchar' })
-  lastName: string;
+  lastName!: string;
 
   /** Phone is required for vendors/riders; buyers may omit (WhatsApp handles identity) */
   @Column({ type: 'varchar', unique: true, nullable: true })
   @Index()
-  phoneNumber: string | null;
+  phoneNumber!: string | null;
 
   @Column({ type: 'enum', enum: Role, default: Role.SELLER })
-  role: Role;
+  role!: Role;
 
   @Column({ type: 'enum', enum: SellerStatus, default: SellerStatus.PENDING })
-  status: SellerStatus;
+  status!: SellerStatus;
 
   // ─── Vendor-specific ───────────────────────────────────────────────────────
 
   @Column({ type: 'enum', enum: VendorType, nullable: true })
-  vendorType: VendorType | null;
+  vendorType!: VendorType | null;
 
   /** Unique URL slug for the public storefront. Auto-generated from businessName on first set. */
   @Column({ type: 'varchar', unique: true, nullable: true })
   @Index()
-  slug: string | null;
+  slug!: string | null;
 
   @Column({ type: 'varchar', nullable: true })
-  businessName: string | null;
+  businessName!: string | null;
 
   @Column({ type: 'varchar', nullable: true })
-  businessAddress: string | null;
+  businessAddress!: string | null;
 
   @Column({ type: 'text', nullable: true })
-  businessDescription: string | null;
+  businessDescription!: string | null;
 
   @Column({ type: 'varchar', nullable: true })
-  businessCategory: string | null;
+  businessCategory!: string | null;
 
-  @Column({ nullable: true, array: true, type: 'text' })
-  businessAreas: string[] | null;
+  @ManyToMany(() => Area)
+  @JoinTable({
+    name: 'vendor_service_areas',
+    joinColumn: { name: 'vendorId', referencedColumnName: 'id' },
+    inverseJoinColumn: { name: 'areaId', referencedColumnName: 'id' },
+  })
+  serviceAreas!: Area[];
 
   /** null = unlimited (registered vendors). 20 for non-registered vendors. */
   @Column({ type: 'integer', nullable: true })
-  orderQuota: number | null;
+  orderQuota!: number | null;
 
   @Column({ type: 'integer', default: 0 })
-  monthlyOrderCount: number;
+  monthlyOrderCount!: number;
 
   @Column({ type: 'timestamptz', nullable: true })
-  lastOrderCountReset: Date | null;
+  lastOrderCountReset!: Date | null;
 
   // ─── Rider-specific ────────────────────────────────────────────────────────
 
   @Column({ type: 'enum', enum: RiderType, nullable: true })
-  riderType: RiderType | null;
+  riderType!: RiderType | null;
 
   // ─── KYC: Registered vendor ────────────────────────────────────────────────
 
   @Column({ type: 'varchar', nullable: true })
-  cacDocumentUrl: string | null;
+  cacDocumentUrl!: string | null;
 
   @Column({ type: 'varchar', nullable: true })
-  tinDocumentUrl: string | null;
+  tinDocumentUrl!: string | null;
 
   // ─── KYC: Non-registered vendor ────────────────────────────────────────────
 
   @Column({ type: 'varchar', nullable: true })
-  ninDocumentUrl: string | null;
+  ninDocumentUrl!: string | null;
 
   @Column({ type: 'varchar', nullable: true })
-  passportPhotoUrl: string | null;
+  passportPhotoUrl!: string | null;
 
   @Column({ type: 'varchar', nullable: true })
-  bankStatementUrl: string | null;
+  bankStatementUrl!: string | null;
 
   @Column({ type: 'varchar', nullable: true })
-  utilityBillUrl: string | null;
+  utilityBillUrl!: string | null;
 
   // ─── KYC: Rider ────────────────────────────────────────────────────────────
 
   @Column({ type: 'varchar', nullable: true })
-  governmentIdUrl: string | null;
+  governmentIdUrl!: string | null;
 
   @Column({ type: 'varchar', nullable: true })
-  selfieUrl: string | null;
+  selfieUrl!: string | null;
 
   /** Bank Verification Number */
   @Column({ type: 'varchar', nullable: true })
-  bvn: string | null;
+  bvn!: string | null;
 
   @Column({ type: 'varchar', nullable: true })
-  guarantorName: string | null;
+  guarantorName!: string | null;
 
   @Column({ type: 'varchar', nullable: true })
-  guarantorPhone: string | null;
+  guarantorPhone!: string | null;
 
   // ─── Vendor: storefront visuals ────────────────────────────────────────────
 
   @Column({ type: 'varchar', nullable: true })
-  businessLogoUrl: string | null;
+  businessLogoUrl!: string | null;
 
   @Column({ type: 'varchar', nullable: true })
-  businessBannerUrl: string | null;
+  businessBannerUrl!: string | null;
 
   /** WhatsApp number for order notifications (may differ from phoneNumber) */
   @Column({ type: 'varchar', nullable: true })
-  whatsappNumber: string | null;
+  whatsappNumber!: string | null;
 
   /** Whether the vendor is currently accepting orders */
   @Column({ type: 'boolean', default: false })
-  isOpen: boolean;
+  isOpen!: boolean;
 
   /**
    * Per-day schedule: { monday: { isOpen, open: "HH:mm", close: "HH:mm" }, ... }
    */
   @Column({ type: 'jsonb', nullable: true })
-  operatingHours: Record<
+  operatingHours!: Record<
     string,
     { isOpen: boolean; open: string; close: string }
   > | null;
@@ -142,56 +156,56 @@ export class User extends BaseEntity {
   // ─── Vendor: payout / bank details ─────────────────────────────────────────
 
   @Column({ type: 'varchar', nullable: true })
-  bankName: string | null;
+  bankName!: string | null;
 
   /** Paystack bank code */
   @Column({ type: 'varchar', nullable: true })
-  bankCode: string | null;
+  bankCode!: string | null;
 
   /** 10-digit NUBAN account number */
   @Column({ type: 'varchar', nullable: true })
-  bankAccountNumber: string | null;
+  bankAccountNumber!: string | null;
 
   /** Account name as verified with bank */
   @Column({ type: 'varchar', nullable: true })
-  bankAccountName: string | null;
+  bankAccountName!: string | null;
 
   // ─── Auth / session ────────────────────────────────────────────────────────
 
   @Column({ type: 'boolean', default: false })
-  isEmailVerified: boolean;
+  isEmailVerified!: boolean;
 
   @Column({ type: 'timestamptz', nullable: true })
-  emailVerifiedAt: Date | null;
+  emailVerifiedAt!: Date | null;
 
   @Column({ type: 'varchar', nullable: true })
-  googleId: string | null;
+  googleId!: string | null;
 
   @Column({ type: 'varchar', nullable: true })
-  profilePicture: string | null;
+  profilePicture!: string | null;
 
   @Column({ type: 'integer', default: 0 })
-  failedLoginAttempts: number;
+  failedLoginAttempts!: number;
 
   @Column({ type: 'timestamptz', nullable: true })
-  lastLoginAt: Date | null;
+  lastLoginAt!: Date | null;
 
   @Column({ type: 'timestamptz', nullable: true })
-  passwordChangedAt: Date | null;
+  passwordChangedAt!: Date | null;
 
   @Column({ type: 'varchar', nullable: true })
   @Exclude()
-  emailVerificationToken: string | null;
+  emailVerificationToken!: string | null;
 
   @Column({ type: 'timestamptz', nullable: true })
-  emailVerificationTokenExpires: Date | null;
+  emailVerificationTokenExpires!: Date | null;
 
   @Column({ type: 'varchar', nullable: true })
   @Exclude()
-  passwordResetToken: string | null;
+  passwordResetToken!: string | null;
 
   @Column({ type: 'timestamptz', nullable: true })
-  passwordResetTokenExpires: Date | null;
+  passwordResetTokenExpires!: Date | null;
 
   // ─── Hooks ─────────────────────────────────────────────────────────────────
 

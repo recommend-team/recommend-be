@@ -41,26 +41,26 @@ export type RegisterRiderDto = z.infer<typeof registerRiderSchema>;
 
 export class RegisterRiderRequestDto {
   @ApiProperty({ example: 'rider@example.com' })
-  email: string;
+  email!: string;
 
   @ApiProperty({ example: 'StrongPass123!' })
-  password: string;
+  password!: string;
 
   @ApiProperty({ example: 'Chukwu' })
-  firstName: string;
+  firstName!: string;
 
   @ApiProperty({ example: 'Emeka' })
-  lastName: string;
+  lastName!: string;
 
   @ApiProperty({ example: '+2348012345678' })
-  phoneNumber: string;
+  phoneNumber!: string;
 
   @ApiProperty({
     enum: RiderType,
     example: RiderType.INDIVIDUAL,
     description: 'INDIVIDUAL = solo rider. COMPANY = logistics company.',
   })
-  riderType: RiderType;
+  riderType!: RiderType;
 
   @ApiPropertyOptional({
     example: '12345678901',

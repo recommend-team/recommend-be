@@ -18,7 +18,8 @@ async function bootstrap() {
   app.use(compression());
 
   // CORS
-  const isProduction = configService.get<string>('app.nodeEnv') === 'production';
+  const isProduction =
+    configService.get<string>('app.nodeEnv') === 'production';
   const frontendUrl = configService.get<string>('app.frontendUrl');
   const allowedOrigins = isProduction
     ? [frontendUrl!]

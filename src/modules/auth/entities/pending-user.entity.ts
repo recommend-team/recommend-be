@@ -11,44 +11,44 @@ import { RiderType } from '../../../common/enums/rider-type.enum';
 @Entity('pending_users')
 export class PendingUser {
   @PrimaryGeneratedColumn('uuid')
-  id: string;
+  id!: string;
 
   @Column({ type: 'varchar', unique: true })
-  email: string;
+  email!: string;
 
   @Column({ type: 'varchar', unique: true, nullable: true })
-  phoneNumber: string | null;
+  phoneNumber!: string | null;
 
   @Column({ type: 'varchar' })
-  password: string;
+  password!: string;
 
   @Column({ type: 'varchar' })
-  firstName: string;
+  firstName!: string;
 
   @Column({ type: 'varchar' })
-  lastName: string;
+  lastName!: string;
 
   /** The role this pending user will get upon email verification */
   @Column({ type: 'enum', enum: Role, default: Role.SELLER })
-  role: Role;
+  role!: Role;
 
   /** Only set for pending vendors */
   @Column({ type: 'enum', enum: VendorType, nullable: true })
-  vendorType: VendorType | null;
+  vendorType!: VendorType | null;
 
   /** Only set for pending riders */
   @Column({ type: 'enum', enum: RiderType, nullable: true })
-  riderType: RiderType | null;
+  riderType!: RiderType | null;
 
   @Column({ type: 'varchar' })
-  verificationCode: string;
+  verificationCode!: string;
 
   @Column({ type: 'timestamp', nullable: true })
-  verificationCodeExpiresAt: Date;
+  verificationCodeExpiresAt!: Date;
 
   @CreateDateColumn({ type: 'timestamp with time zone' })
-  createdAt: Date;
+  createdAt!: Date;
 
   @Column({ type: 'timestamp with time zone', nullable: true })
-  expiresAt: Date;
+  expiresAt!: Date;
 }

@@ -14,24 +14,24 @@ export type UpdatePayoutDto = z.infer<typeof updatePayoutSchema>;
 
 export class UpdatePayoutRequestDto {
   @ApiProperty({ example: 'Guaranty Trust Bank' })
-  bankName: string;
+  bankName!: string;
 
   @ApiProperty({
     example: '058',
     description:
       'Paystack bank code. See https://api.paystack.co/bank for full list.',
   })
-  bankCode: string;
+  bankCode!: string;
 
   @ApiProperty({
     example: '0123456789',
     description: '10-digit NUBAN account number',
   })
-  bankAccountNumber: string;
+  bankAccountNumber!: string;
 
   @ApiProperty({
     example: 'JOHN ADEBAYO DOE',
     description: 'Account name as it appears at the bank',
   })
-  bankAccountName: string;
+  bankAccountName!: string;
 }
