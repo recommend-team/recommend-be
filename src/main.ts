@@ -6,6 +6,7 @@ import compression from 'compression';
 import { AppModule } from './app.module';
 import { ConfigService } from '@nestjs/config';
 import { RedisIoAdapter } from './chat/transport/redis-io.adapter';
+import { allowedOrigins } from './config/cors';
 
 async function bootstrap() {
   // Enable rawBody so the Paystack webhook controller can verify HMAC signatures
@@ -18,15 +19,9 @@ async function bootstrap() {
   // eslint-disable-next-line @typescript-eslint/no-unsafe-call
   app.use(compression());
 
-  // CORS
-  const isProduction =
-    configService.get<string>('app.nodeEnv') === 'production';
-  const frontendUrl = configService.get<string>('app.frontendUrl');
-  const allowedOrigins = isProduction
-    ? [frontendUrl!]
-    : ['http://localhost:3000', 'https://recommend-fe.netlify.app'];
+  // CORS — shared with the Socket.IO gateway so the two cannot drift apart.
   app.enableCors({
-    origin: allowedOrigins,
+    origin: allowedOrigins(),
     credentials: true,
   });
 

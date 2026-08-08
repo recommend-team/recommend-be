@@ -108,10 +108,12 @@ function buildConfirmation(event: CheckoutPaidEvent): string {
       ? `We'll deliver to ${event.deliveryAddress ?? 'your address'}.`
       : "It'll be ready for pickup.";
 
+  // Vendor-neutral on purpose: vendors sell cooked food, gadgets, appliances — anything.
+  // "on its way to the kitchen" would be wrong for most of them.
   return (
     `Payment confirmed — thank you! Your order of ${itemCount} item${
       itemCount === 1 ? '' : 's'
-    } from ${places} place${places === 1 ? '' : 's'} is on its way to the ` +
-    `kitchen. ${where} Your reference is ${event.reference}.`
+    } from ${places} vendor${places === 1 ? '' : 's'} has been sent through. ` +
+    `${where} Your reference is ${event.reference}.`
   );
 }

@@ -174,7 +174,7 @@ export class DiscoveryService {
   // ─── Keyword fallback ───────────────────────────────────────────────────────
 
   /**
-   * No model: match the message against dish names directly. Less graceful, but it
+   * No model: match the message against product names directly. Less graceful, but it
    * returns the same real data, so the product is usable without an API key.
    */
   private async keywordFallback(
@@ -212,8 +212,8 @@ export class DiscoveryService {
       harvest.products.length > 0
         ? "Here's what I found:"
         : harvest.vendors.length > 0
-          ? 'I could not match that dish, but these stores are near you:'
-          : `I could not find anything matching "${query || request.text}". Try another dish, or tell me which area you're in.`;
+          ? 'I could not match that exactly, but these vendors are near you:'
+          : `I could not find anything matching "${query || request.text}". Try another search, or tell me which area you're in.`;
 
     return this.assemble(reply, harvest, true);
   }
@@ -242,7 +242,7 @@ export class DiscoveryService {
       text =
         harvest.products.length > 0 || harvest.vendors.length > 0
           ? "Here's what I found:"
-          : 'Let me know what you would like to eat and roughly where you are.';
+          : 'Let me know what you are looking for and roughly where you are.';
     }
 
     const messages: OutboundMessage[] = [];

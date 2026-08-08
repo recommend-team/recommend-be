@@ -16,27 +16,19 @@ import { ChannelRegistry } from '../channel.registry';
 import { PwaChannel } from './pwa.channel';
 import { ChatChannel } from '../../enums/chat.enums';
 import { ChatRateLimitService } from '../../session/rate-limit.service';
+import { allowedOrigins } from '../../../config/cors';
 
 interface SocketData {
   sessionId: string;
   conversationId: string;
 }
 
-/**
- * Mirrors the CORS allowlist in `main.ts`. Socket.IO does its own CORS handling, so
- * the Express-level configuration does not cover it.
- */
-function chatCorsOrigins(): string[] | boolean {
-  const isProduction = process.env.NODE_ENV === 'production';
-  const frontendUrl = process.env.FRONTEND_URL;
-
-  if (isProduction) return frontendUrl ? [frontendUrl] : false;
-  return ['http://localhost:3000', 'https://recommend-fe.netlify.app'];
-}
-
 @WebSocketGateway({
   namespace: '/chat',
-  cors: { origin: chatCorsOrigins(), credentials: true },
+  // Same allowlist as the REST API. Socket.IO does its own CORS and ignores
+  // `enableCors`, so allowing an origin there but not here would leave the API working
+  // and the chat silently refusing to connect.
+  cors: { origin: allowedOrigins(), credentials: true },
 })
 export class PwaGateway implements OnGatewayInit, OnGatewayConnection {
   private readonly logger = new Logger(PwaGateway.name);

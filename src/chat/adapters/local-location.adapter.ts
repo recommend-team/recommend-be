@@ -1,6 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { Brackets, Repository } from 'typeorm';
 import { Area } from '../../modules/locations/entities/area.entity';
 import { AreaSummary, LocationPort } from '../ports/location.port';
 
@@ -19,11 +19,50 @@ export class LocalLocationAdapter implements LocationPort {
     if (!needle) return [];
 
     const wanted = clamp(limit);
+
+    /*
+     * Buyers name places loosely — "Egbeda Junction", "around Ikeja", "Lagos". A single
+     * whole-phrase LIKE found none of those: "Egbeda Junction" is not a substring of
+     * "Egbeda", and "Lagos" is a state, not an area.
+     *
+     * So: match if ANY word hits an area name, or if a word names the state (which
+     * returns that state's areas as candidates for the buyer to choose from).
+     */
+    const words = needle
+      .replace(/[%_]/g, ' ')
+      .split(/\s+/)
+      .filter((word) => word.length > 2)
+      .slice(0, 5);
+
+    if (words.length === 0) return [];
+
     const areas = await this.baseQuery()
-      .andWhere('area.name ILIKE :needle', { needle: `%${needle}%` })
+      .andWhere(
+        new Brackets((where) => {
+          words.forEach((word, index) => {
+            where
+              .orWhere(`area.name ILIKE :w${index}`, {
+                [`w${index}`]: `%${word}%`,
+              })
+              .orWhere(`state.name ILIKE :w${index}`, {
+                [`w${index}`]: `%${word}%`,
+              });
+          });
+        }),
+      )
       .orderBy('area.name', 'ASC')
-      .take(wanted * 4)
+      .take(wanted * 6)
       .getMany();
+
+    /*
+     * An exact name match wins outright. "Lekki" matching both "Lekki" and "Ibeju-Lekki"
+     * would otherwise be treated as ambiguous, and the buyer gets asked which they meant
+     * when they already said it precisely.
+     */
+    const exact = areas.filter((area) =>
+      words.some((word) => area.name.toLowerCase() === word.toLowerCase()),
+    );
+    if (exact.length === 1) return exact.map(toAreaSummary);
 
     // Closest match first: "Yaba" ahead of "Yaba Estate".
     return areas

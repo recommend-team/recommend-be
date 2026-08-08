@@ -35,16 +35,17 @@ export const DISCOVERY_TOOLS = [
   {
     type: 'function' as const,
     function: {
-      name: 'search_food',
+      name: 'search_products',
       description:
-        'Find dishes matching what the buyer wants, optionally restricted to an area. ' +
-        'Returns products with the restaurant that sells each one.',
+        'Find items matching what the buyer wants, optionally restricted to an area. ' +
+        'Returns products with the vendor that sells each one.',
       parameters: {
         type: 'object',
         properties: {
           query: {
             type: 'string',
-            description: 'The dish, e.g. "jollof rice"',
+            description:
+              'What the buyer is looking for, in their own words — a dish, a gadget, anything',
           },
           areaId: { type: 'string', description: 'Area id from resolve_area' },
         },
@@ -56,8 +57,7 @@ export const DISCOVERY_TOOLS = [
     type: 'function' as const,
     function: {
       name: 'search_vendors',
-      description:
-        'Find restaurants or stores, optionally by area or category.',
+      description: 'Find vendors or stores, optionally by area or category.',
       parameters: {
         type: 'object',
         properties: {
@@ -72,8 +72,7 @@ export const DISCOVERY_TOOLS = [
     type: 'function' as const,
     function: {
       name: 'get_vendor_menu',
-      description:
-        'List everything a specific restaurant currently has available.',
+      description: 'List everything a specific vendor currently has available.',
       parameters: {
         type: 'object',
         properties: {
@@ -126,10 +125,11 @@ export async function executeTool(
   context: ToolContext,
   harvest: ToolHarvest,
 ): Promise<string> {
-  const areaId =
-    typeof args.areaId === 'string'
-      ? args.areaId
-      : (context.areaId ?? undefined);
+  // The model regularly passes an area *name* here ("ikeja") despite being told to pass
+  // an id. That used to reach Postgres as a uuid parameter, throw, and drag the whole
+  // model call into the keyword fallback — which read as the bot going stupid mid
+  // conversation. Resolve names, and never let an unresolved value reach SQL.
+  const areaId = await coerceAreaId(args.areaId, context, harvest);
 
   switch (name) {
     case 'resolve_area': {
@@ -144,7 +144,7 @@ export async function executeTool(
         : JSON.stringify(areas);
     }
 
-    case 'search_food': {
+    case 'search_products': {
       const query = typeof args.query === 'string' ? args.query : '';
       const products = await context.catalog.searchProducts({
         text: query,
@@ -194,6 +194,39 @@ export async function executeTool(
       logger.warn(`Model asked for unknown tool "${name}"`);
       return `Unknown tool "${name}".`;
   }
+}
+
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * Turn whatever the model supplied for `areaId` into a real id, or nothing.
+ *
+ * A uuid passes through. A plain name is resolved when it maps to exactly one area.
+ * Anything ambiguous falls back to the area already known for the conversation rather
+ * than being guessed — searching the wrong area is worse than searching none.
+ */
+async function coerceAreaId(
+  raw: unknown,
+  context: ToolContext,
+  harvest: ToolHarvest,
+): Promise<string | undefined> {
+  if (typeof raw !== 'string' || raw.trim() === '') {
+    return context.areaId ?? undefined;
+  }
+
+  const value = raw.trim();
+  if (UUID.test(value)) return value;
+
+  const matches = await context.locations.searchAreas(value);
+  if (matches.length === 1) {
+    harvest.areas.push(matches[0]);
+    harvest.resolvedAreaId = matches[0].id;
+    return matches[0].id;
+  }
+  if (matches.length > 1) harvest.areas.push(...matches);
+
+  logger.debug(`Model passed an unresolvable areaId: "${value}"`);
+  return context.areaId ?? undefined;
 }
 
 function collectProducts(

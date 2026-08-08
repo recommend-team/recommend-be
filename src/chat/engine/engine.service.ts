@@ -103,8 +103,8 @@ export class EngineService {
   async greet(conversation: Conversation): Promise<OutboundMessage> {
     const reply: OutboundMessage = {
       text:
-        "Hi! I'm Recommend. Tell me what you're craving — jollof, pounded yam, " +
-        "suya, anything — and I'll find places near you that have it.",
+        "Hi! I'm Recommend. Tell me what you're looking for — anything a local " +
+        "vendor might sell — and I'll find who has it near you.",
     };
 
     const persisted = await this.conversationService.recordOutbound({
@@ -146,7 +146,7 @@ export class EngineService {
     if (isGreeting(trimmed)) {
       return [
         {
-          text: 'Hello! What would you like to eat? Tell me the dish and roughly where you are.',
+          text: 'Hello! What are you looking for today? Tell me the item and roughly where you are.',
         },
       ];
     }

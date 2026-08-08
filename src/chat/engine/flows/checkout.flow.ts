@@ -355,7 +355,7 @@ export class CheckoutFlow {
     return [
       {
         text:
-          `So that's ${readable}, ${goodsTotal ? `${formatNaira(goodsTotal)} for the food` : ''}` +
+          `So that's ${readable}, ${goodsTotal ? `${formatNaira(goodsTotal)} for the items` : ''}` +
           `${profile.fulfillmentType === 'DELIVERY' ? `, delivered to ${profile.address ?? 'your address'}` : ', for pickup'}` +
           `. Delivery fee and total are shown below. Shall I go ahead?`,
         payload: {
@@ -438,7 +438,7 @@ function confirmChoices() {
  * Buyers mostly tap the `choices` buttons, so this is the fallback for those who type.
  * It has to cope with "I'll pick it up" and "come carry am" as readily as "pickup" —
  * anything it cannot read is re-asked rather than guessed, because guessing here means
- * delivering food to someone who meant to collect it.
+ * sending a delivery to someone who meant to collect it.
  */
 function readFulfillment(answer: string): 'DELIVERY' | 'PICKUP' | null {
   const text = answer.toLowerCase();
@@ -480,7 +480,7 @@ function describeCartChanges(error: CartChangedError): string {
       case 'PRICE_CHANGED':
         return `${name} is now ${formatNaira(change.currentUnitPrice ?? 0)}`;
       case 'VENDOR_CLOSED':
-        return `${name} — that kitchen has closed`;
+        return `${name} — that vendor has closed`;
       case 'UNAVAILABLE':
         return `${name} has sold out`;
       default:

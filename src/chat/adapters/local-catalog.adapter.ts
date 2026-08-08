@@ -39,19 +39,18 @@ export class LocalCatalogAdapter implements CatalogPort {
       .andWhere('vendor.status = :status', { status: SellerStatus.APPROVED })
       .andWhere('vendor.slug IS NOT NULL');
 
-    if (query.text) {
+    tokenise(query.text).forEach((token, index) => {
+      const key = `v${index}`;
       qb.andWhere(
         new Brackets((where) => {
           where
-            .where('vendor.businessName ILIKE :text', {
-              text: `%${query.text}%`,
-            })
-            .orWhere('vendor.businessDescription ILIKE :text', {
-              text: `%${query.text}%`,
+            .where(`vendor.businessName ILIKE :${key}`, { [key]: `%${token}%` })
+            .orWhere(`vendor.businessDescription ILIKE :${key}`, {
+              [key]: `%${token}%`,
             });
         }),
       );
-    }
+    });
 
     if (query.category) {
       qb.andWhere('vendor.businessCategory ILIKE :category', {
@@ -102,17 +101,21 @@ export class LocalCatalogAdapter implements CatalogPort {
       qb.andWhere('product.vendorId = :vendorId', { vendorId: query.vendorId });
     }
 
-    if (query.text) {
+    // Every word must appear, in either field, but not necessarily adjacently. A single
+    // contiguous LIKE would miss "phone charger" against "iPhone Fast Charger 20W" and
+    // "chicken rice" against "Jollof Rice with Chicken" — both things buyers type.
+    tokenise(query.text).forEach((token, index) => {
+      const key = `t${index}`;
       qb.andWhere(
         new Brackets((where) => {
           where
-            .where('product.name ILIKE :text', { text: `%${query.text}%` })
-            .orWhere('product.description ILIKE :text', {
-              text: `%${query.text}%`,
+            .where(`product.name ILIKE :${key}`, { [key]: `%${token}%` })
+            .orWhere(`product.description ILIKE :${key}`, {
+              [key]: `%${token}%`,
             });
         }),
       );
-    }
+    });
 
     if (query.areaId) {
       qb.andWhere(
@@ -146,6 +149,24 @@ function clamp(value: number | undefined, fallback: number): number {
   return Math.min(20, Math.max(1, value ?? fallback));
 }
 
+/**
+ * Split a search phrase into words that each have to match.
+ *
+ * Single characters are dropped (they match nearly everything) and the list is capped, so
+ * a very long phrase cannot turn into a query with dozens of ANDed LIKEs. `%` and `_` are
+ * stripped because a raw wildcard from a buyer would silently widen the search.
+ */
+function tokenise(text: string | undefined, maxTokens = 6): string[] {
+  if (!text) return [];
+
+  return text
+    .replace(/[%_]/g, ' ')
+    .split(/\s+/)
+    .map((token) => token.trim())
+    .filter((token) => token.length > 1)
+    .slice(0, maxTokens);
+}
+
 function toVendorSummary(vendor: User): VendorSummary {
   return {
     id: vendor.id,
@@ -170,5 +191,7 @@ function toProductSummary(product: Product): ProductSummary {
     imageUrl: product.imageUrl,
     vendorId: product.vendorId,
     vendorName: product.vendor?.businessName ?? null,
+    // Lets a product card open its vendor's menu via GET /store/:slug.
+    vendorSlug: product.vendor?.slug ?? null,
   };
 }

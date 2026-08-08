@@ -10,13 +10,15 @@ import { AreaSummary } from '../ports/location.port';
  * guard meaningful rather than decorative.
  */
 
-/** Dishes grouped under the restaurant that sells them. */
+/** Items grouped under the vendor that sells them. */
 export function productListPayload(products: ProductSummary[]): MessagePayload {
   const byVendor = new Map<
     string,
     {
       vendorId: string;
       vendorName: string | null;
+      /** So the card can open the vendor's menu without a second lookup. */
+      vendorSlug: string | null;
       items: {
         id: string;
         name: string;
@@ -30,10 +32,11 @@ export function productListPayload(products: ProductSummary[]): MessagePayload {
     const group = byVendor.get(product.vendorId) ?? {
       vendorId: product.vendorId,
       vendorName: product.vendorName,
+      vendorSlug: product.vendorSlug,
       items: [],
     };
 
-    // The same dish can arrive from several tool calls in one turn.
+    // The same item can arrive from several tool calls in one turn.
     if (!group.items.some((item) => item.id === product.id)) {
       group.items.push({
         id: product.id,

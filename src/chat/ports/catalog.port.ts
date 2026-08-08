@@ -26,6 +26,8 @@ export interface ProductSummary {
   imageUrl: string | null;
   vendorId: string;
   vendorName: string | null;
+  /** Needed so a product card can open its vendor menu via GET /store/:slug. */
+  vendorSlug: string | null;
 }
 
 export interface VendorSearchQuery {

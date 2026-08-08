@@ -134,7 +134,7 @@ describe('EngineService', () => {
     await service.handleInbound({ conversation, text: 'Hello' });
 
     expect(discovery.discover).not.toHaveBeenCalled();
-    expect(firstReplyText()).toContain('What would you like to eat');
+    expect(firstReplyText()).toContain('What are you looking for');
   });
 
   it('sends anything that is not a greeting to discovery', async () => {
