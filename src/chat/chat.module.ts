@@ -7,7 +7,9 @@ import { User } from '../modules/auth/entities/auth.entity';
 import { Product } from '../modules/products/entities/product.entity';
 import { ConversationService } from './conversation/conversation.service';
 import { SessionService } from './session/session.service';
+import { ChatRateLimitService } from './session/rate-limit.service';
 import { EngineService } from './engine/engine.service';
+import { PaymentConfirmationListener } from './engine/payment-confirmation.listener';
 import { ChannelRegistry } from './transport/channel.registry';
 import { PwaChannel } from './transport/pwa/pwa.channel';
 import { PwaGateway } from './transport/pwa/pwa.gateway';
@@ -32,7 +34,9 @@ import { Area } from '../modules/locations/entities/area.entity';
   providers: [
     ConversationService,
     SessionService,
+    ChatRateLimitService,
     EngineService,
+    PaymentConfirmationListener,
     ChannelRegistry,
     PwaChannel,
     PwaGateway,

@@ -1,6 +1,21 @@
-import { Controller, Post, Body, HttpCode, HttpStatus } from '@nestjs/common';
-import { ApiTags, ApiOperation, ApiResponse, ApiBody } from '@nestjs/swagger';
+import {
+  Controller,
+  Post,
+  Get,
+  Body,
+  Param,
+  HttpCode,
+  HttpStatus,
+} from '@nestjs/common';
+import {
+  ApiTags,
+  ApiOperation,
+  ApiResponse,
+  ApiBody,
+  ApiParam,
+} from '@nestjs/swagger';
 import { CheckoutService } from './checkout.service';
+import { OrdersService } from './orders.service';
 import { Public } from '../auth/decorators/public.decorator';
 import { ZodValidationPipe } from '../../common/pipes/zod-validation.pipes';
 import {
@@ -11,7 +26,10 @@ import {
 @ApiTags('Checkout')
 @Controller('checkout')
 export class OrdersController {
-  constructor(private readonly checkoutService: CheckoutService) {}
+  constructor(
+    private readonly checkoutService: CheckoutService,
+    private readonly ordersService: OrdersService,
+  ) {}
 
   @Post()
   @Public()
@@ -80,5 +98,21 @@ export class OrdersController {
       message: 'Checkout created. Complete payment to confirm your order.',
       data,
     };
+  }
+
+  @Get(':reference')
+  @Public()
+  @ApiOperation({
+    summary: 'Order status by reference',
+    description:
+      'Public endpoint — the buyer already holds the reference. Returns only what ' +
+      'they ordered and where it is; no contact details or address are echoed back.',
+  })
+  @ApiParam({ name: 'reference', example: 'REC-9A3F2B7C1D4E' })
+  @ApiResponse({ status: 200, description: 'Order status' })
+  @ApiResponse({ status: 404, description: 'Order not found' })
+  async status(@Param('reference') reference: string) {
+    const data = await this.ordersService.getCheckoutStatus(reference);
+    return { message: 'Order status retrieved successfully', data };
   }
 }

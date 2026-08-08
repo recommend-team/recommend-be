@@ -1,9 +1,14 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { DataSource, Repository } from 'typeorm';
 import { Order } from './entities/order.entity';
 import { Checkout } from './entities/checkout.entity';
+import { EventEmitter2 } from '@nestjs/event-emitter';
 import { OrderStatus } from '../../common/enums/order-status.enum';
+import {
+  CHECKOUT_PAID_EVENT,
+  CheckoutPaidEvent,
+} from '../../common/events/checkout-paid.event';
 
 export interface PaginatedOrders {
   items: Order[];
@@ -30,6 +35,7 @@ export class OrdersService {
     @InjectRepository(Checkout)
     private readonly checkoutsRepository: Repository<Checkout>,
     private readonly dataSource: DataSource,
+    private readonly eventEmitter: EventEmitter2,
   ) {}
 
   // ─── Webhook handler ────────────────────────────────────────────────────────
@@ -77,6 +83,108 @@ export class OrdersService {
     this.logger.log(
       `Checkout ${checkout.id} paid — ${checkout.orders?.length ?? 0} vendor order(s) marked PAID (ref=${reference})`,
     );
+
+    // Emitted after the state change is committed, so every listener sees a paid
+    // checkout. Listeners handle their own failures — a notification that cannot be
+    // delivered must never make the webhook look like it failed, or Paystack will
+    // retry a payment we have already recorded.
+    await this.publishPaidEvent(checkout.id, paidAt);
+  }
+
+  private async publishPaidEvent(
+    checkoutId: string,
+    paidAt: Date,
+  ): Promise<void> {
+    try {
+      const checkout = await this.checkoutsRepository.findOne({
+        where: { id: checkoutId },
+        relations: ['orders', 'orders.items'],
+      });
+      if (!checkout) return;
+
+      this.eventEmitter.emit(
+        CHECKOUT_PAID_EVENT,
+        new CheckoutPaidEvent(
+          checkout.id,
+          checkout.reference,
+          checkout.buyerName,
+          checkout.buyerPhone,
+          checkout.buyerEmail,
+          checkout.fulfillmentType,
+          checkout.deliveryAddress,
+          Number(checkout.goodsTotal),
+          Number(checkout.deliveryFee),
+          Number(checkout.totalAmount),
+          (checkout.orders ?? []).map((order) => ({
+            orderId: order.id,
+            vendorId: order.vendorId,
+            subtotal: Number(order.totalAmount),
+            vendorAmount: Number(order.vendorAmount),
+            items: (order.items ?? []).map((item) => ({
+              name: item.productName,
+              quantity: item.quantity,
+            })),
+          })),
+          paidAt,
+        ),
+      );
+    } catch (error) {
+      this.logger.error(
+        `Failed to publish ${CHECKOUT_PAID_EVENT} for ${checkoutId}: ${
+          error instanceof Error ? error.message : 'unknown error'
+        }`,
+      );
+    }
+  }
+
+  // ─── Buyer view ─────────────────────────────────────────────────────────────
+
+  /**
+   * Order status by reference, for the buyer who just paid.
+   *
+   * Public and keyed on the reference alone, so it deliberately exposes nothing a
+   * buyer would not already be holding: no phone number, no email, no address —
+   * just what they ordered and where it is.
+   */
+  async getCheckoutStatus(reference: string): Promise<{
+    reference: string;
+    status: OrderStatus;
+    paidAt: Date | null;
+    goodsTotal: number;
+    deliveryFee: number;
+    totalAmount: number;
+    fulfillmentType: string;
+    createdAt: Date;
+    vendors: {
+      status: OrderStatus;
+      items: { name: string; quantity: number; unitPrice: number }[];
+    }[];
+  }> {
+    const checkout = await this.checkoutsRepository.findOne({
+      where: { reference },
+      relations: ['orders', 'orders.items'],
+    });
+
+    if (!checkout) throw new NotFoundException('Order not found');
+
+    return {
+      reference: checkout.reference,
+      status: checkout.status,
+      paidAt: checkout.paidAt,
+      goodsTotal: Number(checkout.goodsTotal),
+      deliveryFee: Number(checkout.deliveryFee),
+      totalAmount: Number(checkout.totalAmount),
+      fulfillmentType: checkout.fulfillmentType,
+      createdAt: checkout.createdAt,
+      vendors: (checkout.orders ?? []).map((order) => ({
+        status: order.status,
+        items: (order.items ?? []).map((item) => ({
+          name: item.productName,
+          quantity: item.quantity,
+          unitPrice: Number(item.unitPrice),
+        })),
+      })),
+    };
   }
 
   // ─── Vendor views ───────────────────────────────────────────────────────────

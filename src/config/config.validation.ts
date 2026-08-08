@@ -47,6 +47,10 @@ class EnvironmentVariables {
 
   @IsOptional()
   @IsString()
+  REDIS_URL?: string;
+
+  @IsOptional()
+  @IsString()
   REDIS_HOST?: string;
 
   @IsOptional()

@@ -5,6 +5,7 @@ import helmet from 'helmet';
 import compression from 'compression';
 import { AppModule } from './app.module';
 import { ConfigService } from '@nestjs/config';
+import { RedisIoAdapter } from './chat/transport/redis-io.adapter';
 
 async function bootstrap() {
   // Enable rawBody so the Paystack webhook controller can verify HMAC signatures
@@ -28,6 +29,19 @@ async function bootstrap() {
     origin: allowedOrigins,
     credentials: true,
   });
+
+  // Socket.IO across processes. Attempted before listen() so a Redis problem shows up
+  // at boot rather than as messages quietly failing to reach half the buyers.
+  const redisAdapter = new RedisIoAdapter(app);
+  const clustered = await redisAdapter.connect({
+    url: configService.get<string>('redis.url'),
+    host: configService.get<string>('redis.host') ?? 'localhost',
+    port: configService.get<number>('redis.port') ?? 6379,
+    password: configService.get<string>('redis.password'),
+  });
+  if (clustered) {
+    app.useWebSocketAdapter(redisAdapter);
+  }
 
   // API versioning
   app.enableVersioning({

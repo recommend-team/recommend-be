@@ -160,6 +160,30 @@ export class ConversationService {
     );
   }
 
+  /**
+   * Find the conversation a paid checkout belongs to.
+   */
+  async findForCheckout(
+    reference: string,
+    buyerPhone: string,
+  ): Promise<Conversation | null> {
+    const byReference = await this.conversationsRepository
+      .createQueryBuilder('c')
+      .where("c.context->>'pendingPaymentReference' = :reference", {
+        reference,
+      })
+      .orderBy('c.lastMessageAt', 'DESC', 'NULLS LAST')
+      .getOne();
+
+    if (byReference) return byReference;
+
+    return this.conversationsRepository
+      .createQueryBuilder('c')
+      .where("c.context->'profile'->>'phone' = :phone", { phone: buyerPhone })
+      .orderBy('c.lastMessageAt', 'DESC', 'NULLS LAST')
+      .getOne();
+  }
+
   /** Remember where the buyer is, so discovery never has to ask twice. */
   async setArea(conversationId: string, areaId: string): Promise<void> {
     await this.conversationsRepository.update(

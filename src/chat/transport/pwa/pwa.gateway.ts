@@ -15,6 +15,7 @@ import { EngineService } from '../../engine/engine.service';
 import { ChannelRegistry } from '../channel.registry';
 import { PwaChannel } from './pwa.channel';
 import { ChatChannel } from '../../enums/chat.enums';
+import { ChatRateLimitService } from '../../session/rate-limit.service';
 
 interface SocketData {
   sessionId: string;
@@ -49,6 +50,7 @@ export class PwaGateway implements OnGatewayInit, OnGatewayConnection {
     private readonly engineService: EngineService,
     private readonly channelRegistry: ChannelRegistry,
     private readonly pwaChannel: PwaChannel,
+    private readonly rateLimitService: ChatRateLimitService,
   ) {}
 
   afterInit(server: Server): void {
@@ -178,6 +180,18 @@ export class PwaGateway implements OnGatewayInit, OnGatewayConnection {
       socket.emit('chat:error', {
         code: 'NO_CONVERSATION',
         message: 'Conversation not found.',
+      });
+      return;
+    }
+
+    // Checked before any model work, so a throttled message costs nothing.
+    const verdict = await this.rateLimitService.consume(data.sessionId);
+    if (!verdict.allowed) {
+      socket.emit('chat:error', {
+        code: 'RATE_LIMITED',
+        message:
+          "You're sending messages very quickly. Give it a moment and try again.",
+        retryAfter: verdict.retryAfter,
       });
       return;
     }

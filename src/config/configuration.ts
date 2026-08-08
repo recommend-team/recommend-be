@@ -49,6 +49,13 @@ export const getTypeOrmConfig = (): DataSourceOptions => {
 };
 
 export const redisConfig = registerAs('redis', () => ({
+  /**
+   * Full connection string, e.g. Upstash's `rediss://default:<token>@host:6379`.
+   * Takes precedence over the host/port/password trio — a managed provider hands you
+   * one URL, and splitting it by hand is how the TLS scheme gets dropped.
+   * The `rediss://` scheme (two s) is what enables TLS.
+   */
+  url: process.env.REDIS_URL,
   host: process.env.REDIS_HOST || 'localhost',
   port: parseInt(process.env.REDIS_PORT || '6379', 10),
   password: process.env.REDIS_PASSWORD,
@@ -123,6 +130,12 @@ export const chatConfig = registerAs('chat', () => ({
   ),
   /** Tool round-trips allowed per turn, so a confused model cannot loop indefinitely. */
   maxToolRounds: parseInt(process.env.CHAT_MAX_TOOL_ROUNDS || '3', 10),
+  /** Per-session message caps. A WebSocket bypasses ThrottlerModule entirely. */
+  rateLimitPerMinute: parseInt(
+    process.env.CHAT_RATE_LIMIT_PER_MINUTE || '20',
+    10,
+  ),
+  rateLimitPerHour: parseInt(process.env.CHAT_RATE_LIMIT_PER_HOUR || '200', 10),
 }));
 
 export const deliveryConfig = registerAs('delivery', () => ({

@@ -5,6 +5,7 @@ import {
   VendorSummary,
 } from '../../ports/catalog.port';
 import { AreaSummary, LocationPort } from '../../ports/location.port';
+import { sanitizeUntrusted } from './sanitize';
 
 /**
  * The tools the model may call. All of them are READ-ONLY — nothing here can change
@@ -169,8 +170,8 @@ export async function executeTool(
         : JSON.stringify(
             vendors.map((vendor) => ({
               id: vendor.id,
-              name: vendor.name,
-              category: vendor.category,
+              name: sanitizeUntrusted(vendor.name, 80),
+              category: sanitizeUntrusted(vendor.category, 60),
               isOpen: vendor.isOpen,
             })),
           );
@@ -210,9 +211,10 @@ function collectProducts(
 function forModel(product: ProductSummary) {
   return {
     id: product.id,
-    name: product.name,
+    // Vendor-authored text — neutralised before it enters the model context.
+    name: sanitizeUntrusted(product.name, 80),
     price: product.price,
     vendorId: product.vendorId,
-    vendorName: product.vendorName,
+    vendorName: sanitizeUntrusted(product.vendorName, 80),
   };
 }

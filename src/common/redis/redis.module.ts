@@ -69,8 +69,34 @@ class MockRedisClient {
     {
       provide: 'REDIS_CLIENT',
       useFactory: (configService: ConfigService) => {
+        const redisUrl = configService.get<string>('redis.url');
         const redisHost = configService.get<string>('redis.host');
         const logger = new Logger('RedisModule');
+
+        if (redisUrl) {
+          const redis = new Redis(redisUrl, {
+            // Managed Redis is across the internet, not on the box.
+            connectTimeout: 10000,
+            retryStrategy: (times) => Math.min(times * 200, 5000),
+            maxRetriesPerRequest: 3,
+          });
+
+          redis.on('error', (err) => {
+            logger.warn(`Redis error: ${err.message}`);
+          });
+          redis.on('connect', () => {
+            let where = 'configured URL';
+            try {
+              const parsed = new URL(redisUrl);
+              where = `${parsed.hostname} (${parsed.protocol.replace(':', '')})`;
+            } catch {
+              // keep the placeholder — never log the URL itself, it holds the token
+            }
+            logger.log(`Redis connected via URL: ${where}`);
+          });
+
+          return redis;
+        }
 
         // If Redis is not configured, return mock client
         if (!redisHost) {
