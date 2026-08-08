@@ -2,7 +2,11 @@ import { Injectable, Logger } from '@nestjs/common';
 import { ConversationService } from '../conversation/conversation.service';
 import { ChannelRegistry } from '../transport/channel.registry';
 import { OutboundMessage } from '../transport/channel.interface';
-import { Conversation } from '../conversation/entities/conversation.entity';
+import {
+  Conversation,
+  PendingCartLine,
+} from '../conversation/entities/conversation.entity';
+import { CheckoutFlow } from './flows/checkout.flow';
 import { ConversationState } from '../enums/chat.enums';
 import { DiscoveryService } from './discovery/discovery.service';
 
@@ -33,6 +37,7 @@ export class EngineService {
     private readonly conversationService: ConversationService,
     private readonly channelRegistry: ChannelRegistry,
     private readonly discoveryService: DiscoveryService,
+    private readonly checkoutFlow: CheckoutFlow,
   ) {}
 
   /**
@@ -60,6 +65,13 @@ export class EngineService {
     }
 
     const replies = await this.composeReply(conversation, input.text);
+    return this.deliver(conversation, replies);
+  }
+
+  private async deliver(
+    conversation: Conversation,
+    replies: OutboundMessage[],
+  ): Promise<OutboundMessage[]> {
     const delivered: OutboundMessage[] = [];
 
     for (const reply of replies) {
@@ -143,14 +155,27 @@ export class EngineService {
       return this.discover(conversation, trimmed);
     }
 
-    // Checkout flows land in B4. Until then nothing moves a conversation out of
-    // DISCOVERY, so reaching here means stale state — recover rather than stall.
-    this.logger.warn(
-      `Conversation ${conversation.id} is in ${conversation.state} with no flow to handle it`,
-    );
-    return [
-      { text: "Let's start again — what would you like to order today?" },
-    ];
+    // Any other state means a checkout is in progress, and that path is scripted —
+    // no model decides a quantity, an address or a total.
+    return this.checkoutFlow.handle(conversation, trimmed);
+  }
+
+  /**
+   * The buyer tapped Pay. Recorded as a normal buyer turn so the thread reads as one
+   * continuous conversation rather than a form appearing out of nowhere.
+   */
+  async startCheckout(
+    conversation: Conversation,
+    cart: PendingCartLine[],
+    text = "I'd like to pay",
+  ): Promise<OutboundMessage[]> {
+    await this.conversationService.recordInbound({
+      conversationId: conversation.id,
+      text,
+    });
+
+    const replies = await this.checkoutFlow.start(conversation, cart);
+    return this.deliver(conversation, replies);
   }
 
   /** Hands the turn to the discovery layer and records anything it learned. */

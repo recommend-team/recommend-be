@@ -10,6 +10,11 @@ export const ORDERING_PORT = Symbol('ORDERING_PORT');
 export interface CartLine {
   productId: string;
   quantity: number;
+  /**
+   * What the client last displayed. Never used for pricing — only so the platform can
+   * tell the buyer "this changed since you added it" instead of quietly charging more.
+   */
+  expectedUnitPrice?: number;
 }
 
 export interface PlaceCheckoutInput {
@@ -29,9 +34,23 @@ export interface PlacedCheckout {
   checkoutId: string;
   reference: string;
   authorizationUrl: string;
+  accessCode: string;
+  paystackPublicKey: string | null;
   goodsTotal: number;
   deliveryFee: number;
   totalAmount: number;
+}
+
+/** Raised when the cart no longer matches reality, so the flow can explain it in chat. */
+export interface CartRejection {
+  code: 'CART_CHANGED';
+  changes: {
+    productId: string;
+    productName: string | null;
+    reason: string;
+    expectedUnitPrice?: number;
+    currentUnitPrice?: number;
+  }[];
 }
 
 export interface OrderingPort {

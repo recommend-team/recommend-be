@@ -8,20 +8,25 @@ import { ChatMessage } from './message.entity';
  */
 export interface BuyerProfileDraft {
   name?: string;
+  /** Chosen during checkout; decides whether an address is needed. */
+  fulfillmentType?: 'PICKUP' | 'DELIVERY';
   phone?: string;
   email?: string;
   address?: string;
 }
 
+/** A cart line as the client sent it. Quantities are trusted; prices never are. */
+export interface PendingCartLine {
+  productId: string;
+  quantity: number;
+  /** What the client last displayed. Only used to detect drift, never to price. */
+  expectedUnitPrice?: number;
+}
+
 export interface ConversationContext {
   profile?: BuyerProfileDraft;
-  /**
-   * The cart lives in the client's localStorage, not here. When the buyer sends a
-   * message the client may attach a snapshot so the assistant can talk about the
-   * basket — it is display context only and never influences pricing.
-   */
+  pendingCart?: PendingCartLine[];
   lastCartSnapshot?: { itemCount: number; vendorCount: number };
-  /** Set once a checkout exists, so the payment webhook can find its way back here. */
   pendingCheckoutId?: string;
   pendingPaymentReference?: string;
 }

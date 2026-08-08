@@ -5,6 +5,7 @@ import { ChannelRegistry } from '../transport/channel.registry';
 import { Conversation } from '../conversation/entities/conversation.entity';
 import { ChatChannel, ConversationState } from '../enums/chat.enums';
 import { DiscoveryService } from './discovery/discovery.service';
+import { CheckoutFlow } from './flows/checkout.flow';
 
 const conversation = {
   id: 'c1',
@@ -26,6 +27,7 @@ describe('EngineService', () => {
   };
   let registry: { send: jest.Mock };
   let discovery: { discover: jest.Mock };
+  let checkoutFlow: { start: jest.Mock; handle: jest.Mock };
 
   beforeEach(async () => {
     conversations = {
@@ -46,12 +48,18 @@ describe('EngineService', () => {
       }),
     };
 
+    checkoutFlow = {
+      start: jest.fn().mockResolvedValue([{ text: 'What name should I use?' }]),
+      handle: jest.fn().mockResolvedValue([{ text: 'Got it.' }]),
+    };
+
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         EngineService,
         { provide: ConversationService, useValue: conversations },
         { provide: ChannelRegistry, useValue: registry },
         { provide: DiscoveryService, useValue: discovery },
+        { provide: CheckoutFlow, useValue: checkoutFlow },
       ],
     }).compile();
 

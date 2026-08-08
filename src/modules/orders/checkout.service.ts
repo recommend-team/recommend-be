@@ -39,6 +39,8 @@ export interface CheckoutResult {
   checkoutId: string;
   reference: string;
   authorizationUrl: string;
+  accessCode: string;
+  paystackPublicKey: string | null;
   goodsTotal: number;
   deliveryFee: number;
   totalAmount: number;
@@ -102,6 +104,7 @@ export class CheckoutService {
     });
 
     let authorizationUrl: string;
+    let accessCode: string;
     try {
       const payment = await this.paymentsService.initializePayment({
         email: dto.buyerEmail ?? syntheticEmail(dto.buyerPhone),
@@ -115,9 +118,8 @@ export class CheckoutService {
         },
       });
       authorizationUrl = payment.authorizationUrl;
+      accessCode = payment.accessCode;
     } catch (error) {
-      // No payment means no order. Leaving the rows behind would show vendors an
-      // order that can never be paid for.
       await this.checkoutsRepository.delete({ id: checkout.id });
       this.logger.error(
         `Rolled back checkout ${checkout.id} — payment init failed: ${
@@ -135,6 +137,9 @@ export class CheckoutService {
       checkoutId: checkout.id,
       reference,
       authorizationUrl,
+      accessCode,
+      paystackPublicKey:
+        this.configService.get<string>('payment.paystackPublicKey') ?? null,
       goodsTotal,
       deliveryFee,
       totalAmount,

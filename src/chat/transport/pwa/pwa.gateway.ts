@@ -221,6 +221,95 @@ export class PwaGateway implements OnGatewayInit, OnGatewayConnection {
     }
   }
 
+  /**
+   * The buyer tapped Pay. The cart lives in their browser, so it is handed over here —
+   * quantities are taken at face value, prices are recomputed from the database at
+   * checkout and whatever the client claimed is ignored.
+   */
+  @SubscribeMessage('checkout:start')
+  async onCheckoutStart(
+    @ConnectedSocket() socket: Socket,
+    @MessageBody()
+    body: {
+      items?: {
+        productId?: string;
+        quantity?: number;
+        expectedUnitPrice?: number;
+      }[];
+      text?: string;
+    },
+  ): Promise<void> {
+    const data = await this.awaitReady(socket);
+    if (!data?.conversationId) {
+      socket.emit('chat:error', {
+        code: 'NO_SESSION',
+        message: 'Session not ready. Reconnect and try again.',
+      });
+      return;
+    }
+
+    const verdict = await this.rateLimitService.consume(data.sessionId);
+    if (!verdict.allowed) {
+      socket.emit('chat:error', {
+        code: 'RATE_LIMITED',
+        message: "You're going a bit fast. Give it a moment and try again.",
+        retryAfter: verdict.retryAfter,
+      });
+      return;
+    }
+
+    const cart = (body?.items ?? [])
+      .filter(
+        (item) =>
+          typeof item?.productId === 'string' &&
+          Number.isInteger(item?.quantity) &&
+          (item.quantity ?? 0) > 0,
+      )
+      .slice(0, 50)
+      .map((item) => ({
+        productId: item.productId as string,
+        quantity: Math.min(50, item.quantity as number),
+        expectedUnitPrice:
+          typeof item.expectedUnitPrice === 'number'
+            ? item.expectedUnitPrice
+            : undefined,
+      }));
+
+    const conversation = await this.conversationService.findById(
+      data.conversationId,
+    );
+    if (!conversation) {
+      socket.emit('chat:error', {
+        code: 'NO_CONVERSATION',
+        message: 'Conversation not found.',
+      });
+      return;
+    }
+
+    this.pwaChannel.emitTyping(data.sessionId, true);
+    try {
+      await this.engineService.startCheckout(
+        conversation,
+        cart,
+        typeof body?.text === 'string' && body.text.trim()
+          ? body.text.slice(0, 200)
+          : undefined,
+      );
+    } catch (error) {
+      this.logger.error(
+        `Failed to start checkout on ${data.conversationId}: ${
+          error instanceof Error ? error.message : 'unknown error'
+        }`,
+      );
+      socket.emit('chat:error', {
+        code: 'CHECKOUT_FAILED',
+        message: 'Something went wrong starting your order. Please try again.',
+      });
+    } finally {
+      this.pwaChannel.emitTyping(data.sessionId, false);
+    }
+  }
+
   @SubscribeMessage('chat:history')
   async onHistory(
     @ConnectedSocket() socket: Socket,
