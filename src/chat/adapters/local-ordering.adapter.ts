@@ -27,6 +27,14 @@ export class CartChangedError extends Error {
 export class LocalOrderingAdapter implements OrderingPort {
   constructor(private readonly checkoutService: CheckoutService) {}
 
+  deliveryFeeFor(fulfillmentType: 'PICKUP' | 'DELIVERY'): number {
+    return this.checkoutService.deliveryFeeFor(
+      fulfillmentType === 'DELIVERY'
+        ? FulfillmentType.DELIVERY
+        : FulfillmentType.PICKUP,
+    );
+  }
+
   async placeCheckout(input: PlaceCheckoutInput): Promise<PlacedCheckout> {
     try {
       const result = await this.checkoutService.createCheckout({

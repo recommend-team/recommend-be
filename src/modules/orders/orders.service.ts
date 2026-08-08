@@ -98,7 +98,8 @@ export class OrdersService {
     try {
       const checkout = await this.checkoutsRepository.findOne({
         where: { id: checkoutId },
-        relations: ['orders', 'orders.items'],
+        // `orders.vendor` so the confirmation can name who the buyer bought from.
+        relations: ['orders', 'orders.items', 'orders.vendor'],
       });
       if (!checkout) return;
 
@@ -118,11 +119,14 @@ export class OrdersService {
           (checkout.orders ?? []).map((order) => ({
             orderId: order.id,
             vendorId: order.vendorId,
+            vendorName: order.vendor?.businessName ?? null,
             subtotal: Number(order.totalAmount),
             vendorAmount: Number(order.vendorAmount),
             items: (order.items ?? []).map((item) => ({
               name: item.productName,
               quantity: item.quantity,
+              unitPrice: Number(item.unitPrice),
+              lineTotal: Number(item.lineTotal),
             })),
           })),
           paidAt,

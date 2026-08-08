@@ -22,9 +22,17 @@ const event = (over: Partial<CheckoutPaidEvent> = {}) =>
         {
           orderId: 'o1',
           vendorId: 'v1',
+          vendorName: 'Tasty Pot Ikeja',
           subtotal: 6000,
           vendorAmount: 4800,
-          items: [{ name: 'Jollof Rice', quantity: 2 }],
+          items: [
+            {
+              name: 'Jollof Rice',
+              quantity: 2,
+              unitPrice: 3000,
+              lineTotal: 6000,
+            },
+          ],
         },
       ],
       new Date(),

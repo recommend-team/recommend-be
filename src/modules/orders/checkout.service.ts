@@ -62,6 +62,19 @@ export class CheckoutService {
   ) {}
 
   /**
+   * What delivery costs, for a checkout not yet placed.
+   *
+   * Public because the chat reads the order back to the buyer *before* charging, and the
+   * figure it quotes must be the figure it charges. One rule, one place — a second copy
+   * in the conversation layer would drift the day this becomes per-vendor or distance-based.
+   */
+  deliveryFeeFor(fulfillmentType: FulfillmentType): number {
+    return fulfillmentType === FulfillmentType.DELIVERY
+      ? round2(this.configService.get<number>('delivery.feeNgn') ?? 0)
+      : 0;
+  }
+
+  /**
    * Turn a client-held cart into one charge and one order per vendor.
    *
    * The cart lives in the browser's localStorage, so everything in it is untrusted.
@@ -88,10 +101,7 @@ export class CheckoutService {
     );
 
     // Snapshotted onto the row below — never re-read for an existing order.
-    const deliveryFee =
-      dto.fulfillmentType === FulfillmentType.DELIVERY
-        ? round2(this.configService.get<number>('delivery.feeNgn') ?? 0)
-        : 0;
+    const deliveryFee = this.deliveryFeeFor(dto.fulfillmentType);
 
     const totalAmount = round2(goodsTotal + deliveryFee);
     const reference = `REC-${randomBytes(6).toString('hex').toUpperCase()}`;

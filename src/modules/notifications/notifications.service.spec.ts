@@ -16,9 +16,12 @@ const vendorOrder = (
 ): CheckoutPaidVendorOrder => ({
   orderId: 'o1',
   vendorId: 'v1',
+  vendorName: 'Tasty Pot Ikeja',
   subtotal: 6000,
   vendorAmount: 4800,
-  items: [{ name: 'Jollof Rice', quantity: 2 }],
+  items: [
+    { name: 'Jollof Rice', quantity: 2, unitPrice: 3000, lineTotal: 6000 },
+  ],
   ...over,
 });
 
@@ -105,7 +108,14 @@ describe('NotificationsService', () => {
           vendorOrder({
             vendorId: 'v1',
             vendorAmount: 4800,
-            items: [{ name: 'Jollof Rice', quantity: 2 }],
+            items: [
+              {
+                name: 'Jollof Rice',
+                quantity: 2,
+                unitPrice: 3000,
+                lineTotal: 6000,
+              },
+            ],
           }),
         ]),
       );

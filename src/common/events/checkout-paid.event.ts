@@ -11,11 +11,19 @@ export const CHECKOUT_PAID_EVENT = 'checkout.paid';
 export interface CheckoutPaidVendorOrder {
   orderId: string;
   vendorId: string;
+  /** Who the buyer bought from — the confirmation names them rather than counting them. */
+  vendorName: string | null;
   /** This vendor's goods subtotal. */
   subtotal: number;
   /** What this vendor is owed. */
   vendorAmount: number;
-  items: { name: string; quantity: number }[];
+  /** Prices are the snapshots taken at purchase, not today's catalogue. */
+  items: {
+    name: string;
+    quantity: number;
+    unitPrice: number;
+    lineTotal: number;
+  }[];
 }
 
 export class CheckoutPaidEvent {

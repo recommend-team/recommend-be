@@ -348,6 +348,14 @@ export class CheckoutFlow {
       items.reduce((sum, item) => sum + item.lineTotal, 0),
     );
 
+    const fulfillmentType =
+      profile.fulfillmentType === 'DELIVERY' ? 'DELIVERY' : 'PICKUP';
+
+    // Quoted from the platform's own rule, so what the card shows is what the buyer is
+    // about to be charged. `placeCheckout` recomputes it the same way a moment later.
+    const deliveryFee = this.ordering.deliveryFeeFor(fulfillmentType);
+    const totalAmount = round2(goodsTotal + deliveryFee);
+
     const readable = items
       .map((item) => `${item.quantity} × ${item.name}`)
       .join(', ');
@@ -356,15 +364,17 @@ export class CheckoutFlow {
       {
         text:
           `So that's ${readable}, ${goodsTotal ? `${formatNaira(goodsTotal)} for the items` : ''}` +
-          `${profile.fulfillmentType === 'DELIVERY' ? `, delivered to ${profile.address ?? 'your address'}` : ', for pickup'}` +
-          `. Delivery fee and total are shown below. Shall I go ahead?`,
+          `${fulfillmentType === 'DELIVERY' ? `, delivered to ${profile.address ?? 'your address'}` : ', for pickup'}` +
+          `. That comes to ${formatNaira(totalAmount)}. Shall I go ahead?`,
         payload: {
           kind: 'order_summary',
           data: {
             status: 'PENDING_CONFIRMATION',
             items,
             goodsTotal,
-            fulfillmentType: profile.fulfillmentType ?? 'PICKUP',
+            deliveryFee,
+            totalAmount,
+            fulfillmentType,
             deliveryAddress: profile.address ?? null,
             buyerName: profile.name ?? null,
             buyerPhone: profile.phone ? formatForDisplay(profile.phone) : null,

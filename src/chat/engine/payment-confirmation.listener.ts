@@ -56,6 +56,8 @@ export class PaymentConfirmationListener {
             deliveryAddress: event.deliveryAddress,
             vendors: event.orders.map((order) => ({
               orderId: order.orderId,
+              vendorName: order.vendorName,
+              subtotal: order.subtotal,
               items: order.items,
             })),
           },
@@ -101,7 +103,16 @@ function buildConfirmation(event: CheckoutPaidEvent): string {
       sum + order.items.reduce((inner, item) => inner + item.quantity, 0),
     0,
   );
-  const places = event.orders.length;
+
+  // Name the sellers rather than counting them — "from Tasty Pot and Gizmo Hub" tells the
+  // buyer their basket really did split the way they meant it to.
+  const named = event.orders
+    .map((order) => order.vendorName)
+    .filter((name): name is string => !!name);
+  const places =
+    named.length === event.orders.length && named.length > 0
+      ? joinNames(named)
+      : `${event.orders.length} vendor${event.orders.length === 1 ? '' : 's'}`;
 
   const where =
     event.fulfillmentType === 'DELIVERY'
@@ -113,7 +124,12 @@ function buildConfirmation(event: CheckoutPaidEvent): string {
   return (
     `Payment confirmed — thank you! Your order of ${itemCount} item${
       itemCount === 1 ? '' : 's'
-    } from ${places} vendor${places === 1 ? '' : 's'} has been sent through. ` +
+    } from ${places} has been sent through. ` +
     `${where} Your reference is ${event.reference}.`
   );
+}
+
+function joinNames(names: string[]): string {
+  if (names.length === 1) return names[0];
+  return `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]}`;
 }

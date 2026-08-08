@@ -56,4 +56,13 @@ export interface CartRejection {
 export interface OrderingPort {
   /** Prices are recomputed server-side; anything the client sent is untrusted. */
   placeCheckout(input: PlaceCheckoutInput): Promise<PlacedCheckout>;
+
+  /**
+   * What delivery will cost, before the checkout exists.
+   *
+   * The conversation reads the order back before charging for it, so it needs the fee a
+   * moment earlier than `placeCheckout` can supply it. Asking the platform rather than
+   * reading config here keeps a single rule for what delivery costs.
+   */
+  deliveryFeeFor(fulfillmentType: 'PICKUP' | 'DELIVERY'): number;
 }

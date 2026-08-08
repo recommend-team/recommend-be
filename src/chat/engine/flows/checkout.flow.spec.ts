@@ -25,7 +25,7 @@ describe('CheckoutFlow', () => {
     setState: jest.Mock;
     findById: jest.Mock;
   };
-  let ordering: { placeCheckout: jest.Mock };
+  let ordering: { placeCheckout: jest.Mock; deliveryFeeFor: jest.Mock };
   let identity: { upsertBuyer: jest.Mock };
   let catalog: { getProductById: jest.Mock };
   /** Whatever findById should return next — the flow re-reads after every merge. */
@@ -58,6 +58,9 @@ describe('CheckoutFlow', () => {
         deliveryFee: 1500,
         totalAmount: 8500,
       }),
+      deliveryFeeFor: jest.fn((type: string) =>
+        type === 'DELIVERY' ? 1500 : 0,
+      ),
     };
     identity = { upsertBuyer: jest.fn().mockResolvedValue({ buyerId: 'b1' }) };
     catalog = {
@@ -214,6 +217,54 @@ describe('CheckoutFlow', () => {
         'c1',
         ConversationState.CONFIRMING_ORDER,
       );
+    });
+  });
+
+  describe('reading the order back', () => {
+    it('quotes the delivery fee and total the buyer is about to be charged', async () => {
+      stored = {
+        profile: {
+          name: 'Ada Obi',
+          phone: '+2348012345678',
+          fulfillmentType: 'DELIVERY',
+          address: '12 Allen Avenue, Ikeja',
+        },
+        pendingCart: CART,
+      };
+      const replies = await flow.handle(
+        conversationAt(ConversationState.COLLECTING_ADDRESS, stored),
+        '12 Allen Avenue, Ikeja',
+      );
+      const summary = replies[replies.length - 1];
+
+      expect(summary.payload?.kind).toBe('order_summary');
+      expect(summary.payload?.data).toMatchObject({
+        goodsTotal: 7000,
+        deliveryFee: 1500,
+        totalAmount: 8500,
+        fulfillmentType: 'DELIVERY',
+      });
+      // The card is not the only place the buyer reads the figure.
+      expect(summary.text).toContain('8,500');
+    });
+
+    it('charges nothing for delivery on a pickup order', async () => {
+      stored = {
+        profile: { name: 'Ada Obi', phone: '+2348012345678' },
+        pendingCart: CART,
+      };
+      const replies = await flow.handle(
+        conversationAt(ConversationState.COLLECTING_FULFILLMENT, stored),
+        'pickup',
+      );
+      const summary = replies[replies.length - 1];
+
+      expect(summary.payload?.data).toMatchObject({
+        goodsTotal: 7000,
+        deliveryFee: 0,
+        totalAmount: 7000,
+        fulfillmentType: 'PICKUP',
+      });
     });
   });
 
