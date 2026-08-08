@@ -2,7 +2,7 @@ import { Test, TestingModule } from '@nestjs/testing';
 import { PaymentConfirmationListener } from './payment-confirmation.listener';
 import { ConversationService } from '../conversation/conversation.service';
 import { ChannelRegistry } from '../transport/channel.registry';
-import { ChatChannel } from '../enums/chat.enums';
+import { ChatChannel, ConversationState } from '../enums/chat.enums';
 import { CheckoutPaidEvent } from '../../common/events/checkout-paid.event';
 
 const event = (over: Partial<CheckoutPaidEvent> = {}) =>
@@ -46,6 +46,7 @@ describe('PaymentConfirmationListener', () => {
     findForCheckout: jest.Mock;
     recordOutbound: jest.Mock;
     mergeContext: jest.Mock;
+    setState: jest.Mock;
   };
   let registry: { send: jest.Mock };
 
@@ -62,6 +63,7 @@ describe('PaymentConfirmationListener', () => {
         payload: { kind: 'order_summary', data: {} },
       }),
       mergeContext: jest.fn(),
+      setState: jest.fn(),
     };
     registry = { send: jest.fn().mockResolvedValue(null) };
 
@@ -177,7 +179,19 @@ describe('PaymentConfirmationListener', () => {
     expect(conversations.mergeContext).toHaveBeenCalledWith('c1', {
       pendingPaymentReference: undefined,
       pendingCheckoutId: undefined,
+      pendingCart: [],
     });
+  });
+
+  it('hands the buyer back to the assistant instead of leaving them waiting to pay', async () => {
+    await listener.onCheckoutPaid(event());
+
+    // Without this the thread stays in AWAITING_PAYMENT and answers every further
+    // message — including an attempt to buy something else — with "still waiting".
+    expect(conversations.setState).toHaveBeenCalledWith(
+      'c1',
+      ConversationState.DISCOVERY,
+    );
   });
 
   it('swallows its own failures — the webhook must not be retried', async () => {

@@ -7,6 +7,7 @@ import { Product } from '../products/entities/product.entity';
 import { OrdersController } from './orders.controller';
 import { OrdersService } from './orders.service';
 import { CheckoutService } from './checkout.service';
+import { PaymentReconciliationService } from './payment-reconciliation.service';
 import { PaymentsModule } from '../payments/payments.module';
 import { PaymentsController } from '../payments/payments.controller';
 
@@ -19,7 +20,7 @@ import { PaymentsController } from '../payments/payments.controller';
     PaymentsModule,
   ],
   controllers: [OrdersController, PaymentsController],
-  providers: [OrdersService, CheckoutService],
+  providers: [OrdersService, CheckoutService, PaymentReconciliationService],
   exports: [OrdersService, CheckoutService],
 })
 export class OrdersModule {}

@@ -9,6 +9,8 @@ import { Repository, In } from 'typeorm';
 import { User } from '../auth/entities/auth.entity';
 import { Product } from '../products/entities/product.entity';
 import { Order } from '../orders/entities/order.entity';
+import { Checkout } from '../orders/entities/checkout.entity';
+import { OrdersService } from '../orders/orders.service';
 import { SellerStatus } from '../../common/enums/seller-status.enum';
 import { Role } from '../../common/enums/roles.enum';
 import { OrderStatus } from '../../common/enums/order-status.enum';
@@ -23,6 +25,64 @@ export interface PaginatedResult<T> {
   totalPages: number;
 }
 
+/** One payment, with the vendor orders it paid for. */
+export interface TransactionSummary {
+  id: string;
+  reference: string;
+  status: OrderStatus;
+  buyerName: string;
+  buyerPhone: string;
+  buyerEmail: string | null;
+  fulfillmentType: string;
+  deliveryAddress: string | null;
+  goodsTotal: number;
+  deliveryFee: number;
+  totalAmount: number;
+  paidAt: string | null;
+  createdAt: string;
+  vendors: {
+    orderId: string;
+    vendorId: string;
+    vendorName: string | null;
+    status: OrderStatus;
+    subtotal: number;
+    vendorAmount: number;
+    items: { name: string; quantity: number; lineTotal: number }[];
+  }[];
+}
+
+function toTransactionSummary(checkout: Checkout): TransactionSummary {
+  return {
+    id: checkout.id,
+    reference: checkout.reference,
+    status: checkout.status,
+    buyerName: checkout.buyerName,
+    buyerPhone: checkout.buyerPhone,
+    buyerEmail: checkout.buyerEmail,
+    fulfillmentType: checkout.fulfillmentType,
+    deliveryAddress: checkout.deliveryAddress,
+    // Postgres hands decimals back as strings; the client should not have to know that.
+    goodsTotal: Number(checkout.goodsTotal),
+    deliveryFee: Number(checkout.deliveryFee),
+    totalAmount: Number(checkout.totalAmount),
+    paidAt: checkout.paidAt ? checkout.paidAt.toISOString() : null,
+    createdAt: checkout.createdAt.toISOString(),
+    vendors: (checkout.orders ?? []).map((order) => ({
+      orderId: order.id,
+      vendorId: order.vendorId,
+      vendorName: order.vendor?.businessName ?? null,
+      status: order.status,
+      subtotal: Number(order.totalAmount),
+      vendorAmount: Number(order.vendorAmount),
+      items: (order.items ?? []).map((item) => ({
+        name: item.productName,
+        quantity: item.quantity,
+        lineTotal: Number(item.lineTotal),
+      })),
+    })),
+  };
+}
+
 /** Roles that should never appear in buyer/vendor listings for regular admins */
 const ADMIN_ROLES = [Role.ADMIN, Role.SUPER_ADMIN];
 
@@ -35,6 +95,9 @@ export class AdminService {
     private readonly productsRepo: Repository<Product>,
     @InjectRepository(Order)
     private readonly ordersRepo: Repository<Order>,
+    @InjectRepository(Checkout)
+    private readonly checkoutsRepo: Repository<Checkout>,
+    private readonly ordersService: OrdersService,
     private readonly emailService: EmailService,
   ) {}
 
@@ -460,6 +523,79 @@ export class AdminService {
     });
 
     return { items, total, page, limit, totalPages: Math.ceil(total / limit) };
+  }
+
+  // ─── Transactions ──────────────────────────────────────────────────────────
+
+  /**
+   * One row per payment, which is what an admin reconciling against Paystack needs.
+   *
+   * `getAllOrders` lists the *vendor's* slice of each basket — the right unit for
+   * fulfilment, the wrong one for money. A ₦17,950 basket split across two vendors shows
+   * there as two rows totalling ₦16,450, with the delivery fee nowhere and nothing tying
+   * them to the single charge the buyer actually saw. This is that charge.
+   */
+  async getTransactions(query: {
+    status?: OrderStatus;
+    search?: string;
+    page?: number;
+    limit?: number;
+  }): Promise<PaginatedResult<TransactionSummary>> {
+    const page = Math.max(1, query.page ?? 1);
+    const limit = Math.min(100, Math.max(1, query.limit ?? 20));
+
+    const qb = this.checkoutsRepo
+      .createQueryBuilder('checkout')
+      .leftJoinAndSelect('checkout.orders', 'order')
+      .leftJoinAndSelect('order.items', 'item')
+      .leftJoinAndSelect('order.vendor', 'vendor')
+      .orderBy('checkout.createdAt', 'DESC')
+      .skip((page - 1) * limit)
+      .take(limit);
+
+    if (query.status) {
+      qb.andWhere('checkout.status = :status', { status: query.status });
+    }
+
+    if (query.search?.trim()) {
+      // Reference, buyer name or phone — whichever the admin happens to be holding.
+      const term = `%${query.search.trim().replace(/[%_]/g, '')}%`;
+      qb.andWhere(
+        '(checkout.reference ILIKE :term OR checkout.buyerName ILIKE :term OR checkout.buyerPhone ILIKE :term)',
+        { term },
+      );
+    }
+
+    const [rows, total] = await qb.getManyAndCount();
+
+    return {
+      items: rows.map((checkout) => toTransactionSummary(checkout)),
+      total,
+      page,
+      limit,
+      totalPages: Math.ceil(total / limit),
+    };
+  }
+
+  /**
+   * Ask Paystack about one transaction, by hand.
+   *
+   * The sweep already does this on a timer, but an admin looking at a payment a buyer is
+   * asking about should not have to wait up to ten minutes for a scheduler — nor go to
+   * the Paystack dashboard and reconcile by eye. Same code path as everything else that
+   * settles a payment, so a recovery here confirms the buyer and notifies the vendors
+   * exactly as the webhook would have.
+   */
+  async verifyTransaction(reference: string): Promise<TransactionSummary> {
+    await this.ordersService.confirmByReference(reference);
+
+    const checkout = await this.checkoutsRepo.findOne({
+      where: { reference },
+      relations: ['orders', 'orders.items', 'orders.vendor'],
+    });
+    if (!checkout) throw new NotFoundException('Transaction not found');
+
+    return toTransactionSummary(checkout);
   }
 
   // ─── General user management (kept from previous version) ──────────────────

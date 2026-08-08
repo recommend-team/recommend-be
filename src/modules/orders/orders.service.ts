@@ -9,6 +9,7 @@ import {
   CHECKOUT_PAID_EVENT,
   CheckoutPaidEvent,
 } from '../../common/events/checkout-paid.event';
+import { PaymentsService } from '../payments/payments.service';
 
 export interface PaginatedOrders {
   items: Order[];
@@ -36,6 +37,7 @@ export class OrdersService {
     private readonly checkoutsRepository: Repository<Checkout>,
     private readonly dataSource: DataSource,
     private readonly eventEmitter: EventEmitter2,
+    private readonly paymentsService: PaymentsService,
   ) {}
 
   // ─── Webhook handler ────────────────────────────────────────────────────────
@@ -45,6 +47,48 @@ export class OrdersService {
    * checkout and every vendor's order paid together. Idempotent — Paystack retries
    * webhooks, and a second delivery must not re-stamp paidAt.
    */
+  /**
+   * Settle a checkout by asking Paystack, rather than waiting to be told.
+   *
+   * The buyer's browser saying "it worked" proves nothing — it is a claim from an
+   * untrusted client. So the claim is only ever a *trigger*: the answer comes from a
+   * server-to-server call to Paystack, and the money is confirmed against the amount we
+   * are owed. On success this runs the identical path the webhook runs, so the buyer's
+   * confirmation, the vendors' notifications and the order status cannot diverge
+   * depending on which signal happened to arrive first. Whichever is second is a no-op.
+   */
+  async confirmByReference(reference: string): Promise<void> {
+    const checkout = await this.checkoutsRepository.findOne({
+      where: { reference },
+      select: ['id', 'status', 'totalAmount'],
+    });
+
+    if (!checkout) throw new NotFoundException('Order not found');
+    if (checkout.status !== OrderStatus.PENDING_PAYMENT) return;
+
+    const verified = await this.paymentsService.verifyTransaction(reference);
+
+    if (verified.status !== 'success') {
+      this.logger.log(
+        `Verify: ${reference} is "${verified.status}" at Paystack — leaving it unpaid`,
+      );
+      return;
+    }
+
+    // Paystack is the authority on what was collected. Short-paying is not something
+    // the current flow can produce, but marking an order paid for less than it is worth
+    // is the kind of mistake that must be impossible rather than unlikely.
+    const owed = Number(checkout.totalAmount);
+    if (verified.amountNgn !== null && verified.amountNgn + 0.01 < owed) {
+      this.logger.error(
+        `Verify: ${reference} paid ₦${verified.amountNgn} but ₦${owed} was owed — not marking paid`,
+      );
+      return;
+    }
+
+    await this.handlePaymentSuccess(reference);
+  }
+
   async handlePaymentSuccess(reference: string): Promise<void> {
     const checkout = await this.checkoutsRepository.findOne({
       where: { reference },

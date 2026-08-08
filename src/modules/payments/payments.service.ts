@@ -92,6 +92,51 @@ export class PaymentsService {
     };
   }
 
+  async verifyTransaction(reference: string): Promise<{
+    /** Paystack's own vocabulary: success, failed, abandoned, ongoing, pending… */
+    status: string;
+    /** What was actually charged, in naira. Null when Paystack did not say. */
+    amountNgn: number | null;
+    paidAt: Date | null;
+  }> {
+    let response: Response;
+    try {
+      response = await fetch(
+        `${this.baseUrl}/transaction/verify/${encodeURIComponent(reference)}`,
+        { headers: { Authorization: `Bearer ${this.secretKey}` } },
+      );
+    } catch (err) {
+      this.logger.error(`Paystack verify network error for ${reference}`, err);
+      throw new InternalServerErrorException(
+        'Could not reach the payment gateway. Please try again.',
+      );
+    }
+
+    const json = (await response.json()) as {
+      status: boolean;
+      message: string;
+      data?: { status?: string; amount?: number; paid_at?: string | null };
+    };
+
+    if (response.status === 404) {
+      return { status: 'unknown', amountNgn: null, paidAt: null };
+    }
+
+    if (!response.ok || !json.status || !json.data) {
+      this.logger.error(`Paystack verify failed for ${reference}`, json);
+      throw new InternalServerErrorException(
+        json.message ?? 'Could not verify this payment. Please try again.',
+      );
+    }
+
+    return {
+      status: json.data.status ?? 'unknown',
+      amountNgn:
+        typeof json.data.amount === 'number' ? json.data.amount / 100 : null,
+      paidAt: json.data.paid_at ? new Date(json.data.paid_at) : null,
+    };
+  }
+
   /**
    * Verify that a webhook request genuinely came from Paystack.
    * Paystack signs the raw request body with HMAC-SHA512 using the secret key.

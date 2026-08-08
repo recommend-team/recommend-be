@@ -100,6 +100,27 @@ export class OrdersController {
     };
   }
 
+  @Post(':reference/verify')
+  @Public()
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    summary: 'Settle an order by asking Paystack directly',
+    description:
+      'Called by the buyer once the payment sheet reports success. The request is only ' +
+      'a trigger — the answer comes from a server-to-server call to Paystack, so a ' +
+      'client cannot talk an order into being paid. Idempotent, and safe to race with ' +
+      'the webhook: whichever arrives second does nothing. Returns the order status ' +
+      'exactly as GET does.',
+  })
+  @ApiParam({ name: 'reference', example: 'REC-9A3F2B7C1D4E' })
+  @ApiResponse({ status: 200, description: 'Order status after verification' })
+  @ApiResponse({ status: 404, description: 'Order not found' })
+  async verify(@Param('reference') reference: string) {
+    await this.ordersService.confirmByReference(reference);
+    const data = await this.ordersService.getCheckoutStatus(reference);
+    return { message: 'Payment verified', data };
+  }
+
   @Get(':reference')
   @Public()
   @ApiOperation({

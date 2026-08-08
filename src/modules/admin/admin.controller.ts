@@ -2,6 +2,7 @@ import {
   Controller,
   Get,
   Patch,
+  Post,
   Param,
   Body,
   Query,
@@ -197,6 +198,51 @@ export class AdminController {
     @Query('limit') limit?: number,
   ) {
     return this.adminService.getAllOrders({ status, vendorId, page, limit });
+  }
+
+  // ─── Transactions ──────────────────────────────────────────────────────────
+
+  @Get('transactions')
+  @ApiOperation({
+    summary: 'One row per payment, with the vendor orders it covers',
+    description:
+      'The money view. `orders` lists each vendor’s slice of a basket, which is the ' +
+      'right unit for fulfilment and the wrong one for reconciling against Paystack — ' +
+      'a two-vendor basket appears there as two rows, with the delivery fee nowhere.',
+  })
+  @ApiQuery({ name: 'status', enum: OrderStatus, required: false })
+  @ApiQuery({
+    name: 'search',
+    required: false,
+    type: String,
+    description: 'Reference, buyer name or phone',
+  })
+  @ApiQuery({ name: 'page', required: false, type: Number })
+  @ApiQuery({ name: 'limit', required: false, type: Number })
+  @ApiResponse({ status: 200, description: 'Paginated transaction list' })
+  getTransactions(
+    @Query('status') status?: OrderStatus,
+    @Query('search') search?: string,
+    @Query('page') page?: number,
+    @Query('limit') limit?: number,
+  ) {
+    return this.adminService.getTransactions({ status, search, page, limit });
+  }
+
+  @Post('transactions/:reference/verify')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    summary: 'Ask Paystack about one transaction now',
+    description:
+      'For a payment a buyer is asking about, rather than waiting up to ten minutes ' +
+      'for the scheduled sweep. Runs the same path every other confirmation runs, so a ' +
+      'recovery here also messages the buyer and notifies the vendors.',
+  })
+  @ApiParam({ name: 'reference', example: 'REC-9A3F2B7C1D4E' })
+  @ApiResponse({ status: 200, description: 'The transaction after checking' })
+  @ApiResponse({ status: 404, description: 'Transaction not found' })
+  verifyTransaction(@Param('reference') reference: string) {
+    return this.adminService.verifyTransaction(reference);
   }
 
   // ─── General user management ───────────────────────────────────────────────

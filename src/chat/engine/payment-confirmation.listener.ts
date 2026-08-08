@@ -1,6 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { OnEvent } from '@nestjs/event-emitter';
 import { ConversationService } from '../conversation/conversation.service';
+import { ConversationState } from '../enums/chat.enums';
 import { ChannelRegistry } from '../transport/channel.registry';
 import {
   CHECKOUT_PAID_EVENT,
@@ -75,12 +76,22 @@ export class PaymentConfirmationListener {
         },
       );
 
-      // Clear the pending marker so a later checkout in the same thread cannot be
-      // confused with this one.
+      // Clear the pending markers so a later checkout in the same thread cannot be
+      // confused with this one, and empty the cart the buyer has now paid for.
       await this.conversationService.mergeContext(conversation.id, {
         pendingPaymentReference: undefined,
         pendingCheckoutId: undefined,
+        pendingCart: [],
       });
+
+      // Hand the buyer back to the assistant. The thread is parked in AWAITING_PAYMENT,
+      // and without this every message after paying — "thank you", or an attempt to buy
+      // something else — is answered with "I'm still waiting for the payment to go
+      // through". The one thing left to wait for has just happened.
+      await this.conversationService.setState(
+        conversation.id,
+        ConversationState.DISCOVERY,
+      );
 
       this.logger.log(
         `Confirmed checkout ${event.reference} in conversation ${conversation.id}`,
