@@ -29,6 +29,18 @@ export interface ConversationContext {
   lastCartSnapshot?: { itemCount: number; vendorCount: number };
   pendingCheckoutId?: string;
   pendingPaymentReference?: string;
+  /**
+   * Every order this device has placed, newest last.
+   *
+   * The buyer's order history is device-scoped because the session token *is* their
+   * identity — there is no login. Keeping the references here rather than joining
+   * checkouts to a conversation keeps the association on the chat side of the boundary,
+   * where it belongs: the orders module stays ignorant of conversations.
+   *
+   * It is also what makes "this buyer may complete this order" answerable without a
+   * public endpoint keyed on a reference anyone could guess.
+   */
+  orderReferences?: string[];
 }
 
 @Entity('conversations')

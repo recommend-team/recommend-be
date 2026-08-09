@@ -8,6 +8,8 @@ import { OrdersController } from './orders.controller';
 import { OrdersService } from './orders.service';
 import { CheckoutService } from './checkout.service';
 import { PaymentReconciliationService } from './payment-reconciliation.service';
+import { OrderLifecycleService } from './order-lifecycle.service';
+import { OrderStatusEvent } from './entities/order-status-event.entity';
 import { PaymentsModule } from '../payments/payments.module';
 import { PaymentsController } from '../payments/payments.controller';
 
@@ -16,11 +18,22 @@ import { PaymentsController } from '../payments/payments.controller';
 //   PaymentsController → OrdersService + PaymentsService (both available here)
 @Module({
   imports: [
-    TypeOrmModule.forFeature([Order, Checkout, OrderItem, Product]),
+    TypeOrmModule.forFeature([
+      Order,
+      Checkout,
+      OrderItem,
+      Product,
+      OrderStatusEvent,
+    ]),
     PaymentsModule,
   ],
   controllers: [OrdersController, PaymentsController],
-  providers: [OrdersService, CheckoutService, PaymentReconciliationService],
-  exports: [OrdersService, CheckoutService],
+  providers: [
+    OrdersService,
+    CheckoutService,
+    PaymentReconciliationService,
+    OrderLifecycleService,
+  ],
+  exports: [OrdersService, CheckoutService, OrderLifecycleService],
 })
 export class OrdersModule {}

@@ -10,6 +10,8 @@ import { SessionService } from './session/session.service';
 import { ChatRateLimitService } from './session/rate-limit.service';
 import { EngineService } from './engine/engine.service';
 import { PaymentConfirmationListener } from './engine/payment-confirmation.listener';
+import { OrderStatusListener } from './engine/order-status.listener';
+import { AppreciationService } from './engine/appreciation.service';
 import { ChannelRegistry } from './transport/channel.registry';
 import { PwaChannel } from './transport/pwa/pwa.channel';
 import { PwaGateway } from './transport/pwa/pwa.gateway';
@@ -24,6 +26,7 @@ import { LocalIdentityAdapter } from './adapters/local-identity.adapter';
 import { ORDERING_PORT } from './ports/ordering.port';
 import { IDENTITY_PORT } from './ports/identity.port';
 import { OrdersModule } from '../modules/orders/orders.module';
+import { Checkout } from '../modules/orders/entities/checkout.entity';
 import { Area } from '../modules/locations/entities/area.entity';
 
 /**
@@ -34,7 +37,14 @@ import { Area } from '../modules/locations/entities/area.entity';
  */
 @Module({
   imports: [
-    TypeOrmModule.forFeature([Conversation, ChatMessage, User, Product, Area]),
+    TypeOrmModule.forFeature([
+      Conversation,
+      ChatMessage,
+      User,
+      Product,
+      Area,
+      Checkout,
+    ]),
     JwtModule.register({}),
     OrdersModule,
   ],
@@ -45,6 +55,8 @@ import { Area } from '../modules/locations/entities/area.entity';
     EngineService,
     CheckoutFlow,
     PaymentConfirmationListener,
+    OrderStatusListener,
+    AppreciationService,
     ChannelRegistry,
     PwaChannel,
     PwaGateway,

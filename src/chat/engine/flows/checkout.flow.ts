@@ -236,9 +236,15 @@ export class CheckoutFlow {
         deliveryAddress: profile.address,
       });
 
+      // Recorded whether or not the payment succeeds. An abandoned checkout still
+      // belongs to this device, and the Orders tab showing it as unpaid is more use
+      // than it vanishing — that is how a buyer finds the payment they never finished.
+      const history = fresh?.context?.orderReferences ?? [];
+
       await this.conversationService.mergeContext(conversation.id, {
         pendingCheckoutId: placed.checkoutId,
         pendingPaymentReference: placed.reference,
+        orderReferences: [...history, placed.reference],
       });
       await this.conversationService.setState(
         conversation.id,

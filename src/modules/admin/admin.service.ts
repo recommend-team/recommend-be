@@ -11,6 +11,11 @@ import { Product } from '../products/entities/product.entity';
 import { Order } from '../orders/entities/order.entity';
 import { Checkout } from '../orders/entities/checkout.entity';
 import { OrdersService } from '../orders/orders.service';
+import { OrderLifecycleService } from '../orders/order-lifecycle.service';
+import {
+  OrderStatusEvent,
+  StatusActor,
+} from '../orders/entities/order-status-event.entity';
 import { SellerStatus } from '../../common/enums/seller-status.enum';
 import { Role } from '../../common/enums/roles.enum';
 import { OrderStatus } from '../../common/enums/order-status.enum';
@@ -98,6 +103,9 @@ export class AdminService {
     @InjectRepository(Checkout)
     private readonly checkoutsRepo: Repository<Checkout>,
     private readonly ordersService: OrdersService,
+    private readonly lifecycle: OrderLifecycleService,
+    @InjectRepository(OrderStatusEvent)
+    private readonly statusEvents: Repository<OrderStatusEvent>,
     private readonly emailService: EmailService,
   ) {}
 
@@ -595,6 +603,76 @@ export class AdminService {
     });
     if (!checkout) throw new NotFoundException('Transaction not found');
 
+    return toTransactionSummary(checkout);
+  }
+
+  // ─── Order lifecycle ───────────────────────────────────────────────────────
+
+  /** A rider has collected everything and left. */
+  async dispatch(
+    reference: string,
+    adminId: string,
+  ): Promise<TransactionSummary> {
+    await this.lifecycle.markDispatched(reference, {
+      type: StatusActor.ADMIN,
+      id: adminId,
+    });
+    return this.verifyless(reference);
+  }
+
+  /**
+   * The buyer has their order.
+   *
+   * Recorded as `RIDER` rather than `ADMIN`: until the rider app exists an admin is
+   * doing this on a rider's behalf, and the audit trail should say what actually
+   * happened rather than who happened to press the button. `actorId` still carries the
+   * admin, so it is never anonymous.
+   */
+  async complete(
+    reference: string,
+    adminId: string,
+  ): Promise<TransactionSummary> {
+    await this.lifecycle.markCompleted(reference, {
+      type: StatusActor.RIDER,
+      id: adminId,
+    });
+    return this.verifyless(reference);
+  }
+
+  async overrideStatus(
+    reference: string,
+    status: OrderStatus,
+    adminId: string,
+    note?: string,
+  ): Promise<TransactionSummary> {
+    if (!status || !Object.values(OrderStatus).includes(status)) {
+      throw new BadRequestException('A valid status is required');
+    }
+    await this.lifecycle.overrideCheckout(reference, status, adminId, note);
+    return this.verifyless(reference);
+  }
+
+  /** Every status change on one order, oldest first. */
+  async getStatusHistory(reference: string): Promise<OrderStatusEvent[]> {
+    const checkout = await this.checkoutsRepo.findOne({
+      where: { reference },
+      select: ['id'],
+    });
+    if (!checkout) throw new NotFoundException('Transaction not found');
+
+    return this.statusEvents.find({
+      where: [{ checkoutId: checkout.id }],
+      order: { createdAt: 'ASC' },
+    });
+  }
+
+  /** The transaction as it stands now, without asking Paystack anything. */
+  private async verifyless(reference: string): Promise<TransactionSummary> {
+    const checkout = await this.checkoutsRepo.findOne({
+      where: { reference },
+      relations: ['orders', 'orders.items', 'orders.vendor'],
+    });
+    if (!checkout) throw new NotFoundException('Transaction not found');
     return toTransactionSummary(checkout);
   }
 

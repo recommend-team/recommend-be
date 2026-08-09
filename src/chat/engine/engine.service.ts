@@ -1,4 +1,4 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Inject, Injectable, Logger } from '@nestjs/common';
 import { ConversationService } from '../conversation/conversation.service';
 import { ChannelRegistry } from '../transport/channel.registry';
 import { OutboundMessage } from '../transport/channel.interface';
@@ -9,6 +9,8 @@ import {
 import { CheckoutFlow } from './flows/checkout.flow';
 import { ConversationState } from '../enums/chat.enums';
 import { DiscoveryService } from './discovery/discovery.service';
+import { ORDERING_PORT } from '../ports/ordering.port';
+import type { BuyerOrderSummary, OrderingPort } from '../ports/ordering.port';
 
 export interface InboundMessage {
   conversation: Conversation;
@@ -38,6 +40,7 @@ export class EngineService {
     private readonly channelRegistry: ChannelRegistry,
     private readonly discoveryService: DiscoveryService,
     private readonly checkoutFlow: CheckoutFlow,
+    @Inject(ORDERING_PORT) private readonly ordering: OrderingPort,
   ) {}
 
   /**
@@ -177,6 +180,37 @@ export class EngineService {
 
     const replies = await this.checkoutFlow.start(conversation, cart);
     return this.deliver(conversation, replies);
+  }
+
+  /** Every order this device has placed, newest first. */
+  async listOrders(conversationId: string): Promise<BuyerOrderSummary[]> {
+    const conversation =
+      await this.conversationService.findById(conversationId);
+    const references = conversation?.context?.orderReferences ?? [];
+    return this.ordering.listOrders(references);
+  }
+
+  /**
+   * The buyer confirming they have their order.
+   *
+   * The reference must be one this conversation placed. Anything else is refused
+   * outright rather than attempted — a device knowing a reference is not the same as a
+   * device owning the order, and completion is what releases a vendor's money.
+   */
+  async completeOrder(
+    conversationId: string,
+    reference: string,
+  ): Promise<BuyerOrderSummary[]> {
+    const conversation =
+      await this.conversationService.findById(conversationId);
+    const references = conversation?.context?.orderReferences ?? [];
+
+    if (!references.includes(reference)) {
+      throw new Error(`Conversation does not own order ${reference}`);
+    }
+
+    await this.ordering.completeOrder(reference);
+    return this.ordering.listOrders(references);
   }
 
   /** Hands the turn to the discovery layer and records anything it learned. */

@@ -4,6 +4,7 @@ import { User } from '../auth/entities/auth.entity';
 import { Product } from '../products/entities/product.entity';
 import { Order } from '../orders/entities/order.entity';
 import { Checkout } from '../orders/entities/checkout.entity';
+import { OrderStatusEvent } from '../orders/entities/order-status-event.entity';
 import { OrdersModule } from '../orders/orders.module';
 import { AdminController } from './admin.controller';
 import { SuperAdminController } from './super-admin.controller';
@@ -15,7 +16,13 @@ import { EmailService } from '../../common/services/email.service';
   // OrdersModule for `confirmByReference` — the admin's "check with Paystack" must
   // settle a payment the same way the webhook and the sweep do, not its own way.
   imports: [
-    TypeOrmModule.forFeature([User, Product, Order, Checkout]),
+    TypeOrmModule.forFeature([
+      User,
+      Product,
+      Order,
+      Checkout,
+      OrderStatusEvent,
+    ]),
     OrdersModule,
   ],
   controllers: [AdminController, SuperAdminController],

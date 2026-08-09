@@ -1,7 +1,14 @@
 import { ConflictException, Injectable } from '@nestjs/common';
+import { InjectRepository } from '@nestjs/typeorm';
+import { In, Repository } from 'typeorm';
+import { Checkout } from '../../modules/orders/entities/checkout.entity';
+import { OrderLifecycleService } from '../../modules/orders/order-lifecycle.service';
+import { StatusActor } from '../../modules/orders/entities/order-status-event.entity';
+import { OrderStatus } from '../../common/enums/order-status.enum';
 import { CheckoutService } from '../../modules/orders/checkout.service';
 import { FulfillmentType } from '../../common/enums/fulfillment-type.enum';
 import {
+  BuyerOrderSummary,
   CartRejection,
   OrderingPort,
   PlaceCheckoutInput,
@@ -25,7 +32,12 @@ export class CartChangedError extends Error {
  */
 @Injectable()
 export class LocalOrderingAdapter implements OrderingPort {
-  constructor(private readonly checkoutService: CheckoutService) {}
+  constructor(
+    private readonly checkoutService: CheckoutService,
+    private readonly lifecycle: OrderLifecycleService,
+    @InjectRepository(Checkout)
+    private readonly checkouts: Repository<Checkout>,
+  ) {}
 
   deliveryFeeFor(fulfillmentType: 'PICKUP' | 'DELIVERY'): number {
     return this.checkoutService.deliveryFeeFor(
@@ -77,5 +89,51 @@ export class LocalOrderingAdapter implements OrderingPort {
       }
       throw error;
     }
+  }
+
+  async listOrders(references: string[]): Promise<BuyerOrderSummary[]> {
+    if (references.length === 0) return [];
+
+    const checkouts = await this.checkouts.find({
+      where: { reference: In(references) },
+      relations: ['orders', 'orders.items', 'orders.vendor'],
+      order: { createdAt: 'DESC' },
+    });
+
+    return checkouts.map((checkout) => ({
+      reference: checkout.reference,
+      status: checkout.status,
+      createdAt: checkout.createdAt.toISOString(),
+      paidAt: checkout.paidAt ? checkout.paidAt.toISOString() : null,
+      fulfillmentType: checkout.fulfillmentType,
+      deliveryAddress: checkout.deliveryAddress,
+      goodsTotal: Number(checkout.goodsTotal),
+      deliveryFee: Number(checkout.deliveryFee),
+      totalAmount: Number(checkout.totalAmount),
+      // Offered only where confirming receipt is the buyer's next move. A pickup order
+      // is theirs to confirm as soon as it is ready; a delivery, once it has left.
+      canComplete:
+        checkout.status === OrderStatus.DISPATCHED ||
+        (checkout.status === OrderStatus.READY &&
+          checkout.fulfillmentType === FulfillmentType.PICKUP),
+      vendors: (checkout.orders ?? []).map((order) => ({
+        vendorName: order.vendor?.businessName ?? null,
+        status: order.status,
+        items: (order.items ?? []).map((item) => ({
+          name: item.productName,
+          quantity: item.quantity,
+          lineTotal: Number(item.lineTotal),
+        })),
+      })),
+    }));
+  }
+
+  async completeOrder(reference: string): Promise<void> {
+    await this.lifecycle.markCompleted(reference, {
+      type: StatusActor.BUYER,
+      // A buyer has no user row until checkout mints one, and the audit trail should
+      // not imply otherwise.
+      id: null,
+    });
   }
 }

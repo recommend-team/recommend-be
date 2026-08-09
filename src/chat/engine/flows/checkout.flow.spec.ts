@@ -339,6 +339,9 @@ describe('CheckoutFlow', () => {
       expect(conversations.mergeContext).toHaveBeenCalledWith('c1', {
         pendingCheckoutId: 'ck1',
         pendingPaymentReference: 'REC-ABC',
+        // Appended as well as marked pending: the pending marker is cleared once the
+        // payment lands, and the Orders tab still has to find the order afterwards.
+        orderReferences: ['REC-ABC'],
       });
       expect(conversations.setState).toHaveBeenCalledWith(
         'c1',

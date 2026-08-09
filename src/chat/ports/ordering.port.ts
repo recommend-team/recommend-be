@@ -53,9 +53,41 @@ export interface CartRejection {
   }[];
 }
 
+/** One past order, as the buyer's Orders tab shows it. */
+export interface BuyerOrderSummary {
+  reference: string;
+  status: string;
+  createdAt: string;
+  paidAt: string | null;
+  fulfillmentType: string;
+  deliveryAddress: string | null;
+  goodsTotal: number;
+  deliveryFee: number;
+  totalAmount: number;
+  /** True only when confirming receipt is the buyer's next move. */
+  canComplete: boolean;
+  vendors: {
+    vendorName: string | null;
+    status: string;
+    items: { name: string; quantity: number; lineTotal: number }[];
+  }[];
+}
+
 export interface OrderingPort {
   /** Prices are recomputed server-side; anything the client sent is untrusted. */
   placeCheckout(input: PlaceCheckoutInput): Promise<PlacedCheckout>;
+
+  /**
+   * The buyer's own orders, by the references their device holds.
+   *
+   * Takes references rather than a buyer id because there is no login — the session
+   * token is the identity, and the conversation is what remembers which orders belong
+   * to it.
+   */
+  listOrders(references: string[]): Promise<BuyerOrderSummary[]>;
+
+  /** "I have it." The buyer's one transition. */
+  completeOrder(reference: string): Promise<void>;
 
   /**
    * What delivery will cost, before the checkout exists.

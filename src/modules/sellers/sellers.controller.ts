@@ -5,6 +5,8 @@ import {
   Post,
   Body,
   Query,
+  Param,
+  ParseUUIDPipe,
   HttpCode,
   HttpStatus,
 } from '@nestjs/common';
@@ -14,9 +16,11 @@ import {
   ApiResponse,
   ApiBearerAuth,
   ApiBody,
+  ApiParam,
   ApiQuery,
 } from '@nestjs/swagger';
 import { SellersService } from './sellers.service';
+import { OrderLifecycleService } from '../orders/order-lifecycle.service';
 import { Roles } from '../auth/decorators/roles.decorator';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { Role } from '../../common/enums/roles.enum';
@@ -43,7 +47,10 @@ import { VendorType } from '../../common/enums/vendor-type.enum';
 @Controller('sellers')
 @Roles(Role.SELLER)
 export class SellersController {
-  constructor(private readonly sellersService: SellersService) {}
+  constructor(
+    private readonly sellersService: SellersService,
+    private readonly lifecycle: OrderLifecycleService,
+  ) {}
 
   @Get('profile')
   @ApiOperation({
@@ -162,6 +169,30 @@ export class SellersController {
       page: page ? parseInt(page, 10) : undefined,
       limit: limit ? parseInt(limit, 10) : undefined,
     });
+  }
+
+  @Patch('orders/:id/ready')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    summary: 'Mark an order ready for pickup',
+    description:
+      'The vendor\'s only transition: "I have the goods, a rider can collect". Show it ' +
+      'as **Ready for pickup**, never as Accept — a button marked Accept gets tapped ' +
+      'the moment an order appears, and dispatch then sends a rider for food that is ' +
+      'not cooked. Once every vendor on the basket is ready, the whole order becomes ' +
+      'ready; on a pickup order that is what tells the buyer to come.',
+  })
+  @ApiParam({ name: 'id', description: 'Order id (this vendor’s own)' })
+  @ApiResponse({ status: 200, description: 'Marked ready' })
+  @ApiResponse({ status: 400, description: 'The order has not been paid for' })
+  @ApiResponse({ status: 403, description: 'That order belongs to someone else' })
+  @ApiResponse({ status: 404, description: 'Order not found' })
+  async markOrderReady(
+    @CurrentUser() user: User,
+    @Param('id', ParseUUIDPipe) id: string,
+  ) {
+    await this.lifecycle.markReady(id, user.id);
+    return { message: 'Order marked ready for pickup' };
   }
 
   @Get('earnings')

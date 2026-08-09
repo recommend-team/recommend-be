@@ -335,6 +335,71 @@ export class PwaGateway implements OnGatewayInit, OnGatewayConnection {
       })),
     });
   }
+
+  /**
+   * The buyer's own orders.
+   *
+   * Over the socket rather than REST because the device session *is* the identity here,
+   * and the socket already authenticates it. A public HTTP endpoint would have to be
+   * keyed on the reference alone, which is a secret only in the sense that it is long.
+   */
+  @SubscribeMessage('orders:list')
+  async onOrdersList(@ConnectedSocket() socket: Socket): Promise<void> {
+    const data = await this.awaitReady(socket);
+    if (!data?.conversationId) {
+      socket.emit('chat:error', {
+        code: 'NO_SESSION',
+        message: 'Session not ready. Reconnect and try again.',
+      });
+      return;
+    }
+
+    const orders = await this.engineService.listOrders(data.conversationId);
+    socket.emit('orders:list', { orders });
+  }
+
+  /**
+   * "I have it."
+   *
+   * The conversation is checked against the reference before anything moves — a device
+   * may only complete an order it actually placed. Without that, knowing a reference
+   * would be enough to close someone else's delivery.
+   */
+  @SubscribeMessage('orders:complete')
+  async onOrderComplete(
+    @ConnectedSocket() socket: Socket,
+    @MessageBody() body: { reference?: string },
+  ): Promise<void> {
+    const data = await this.awaitReady(socket);
+    if (!data?.conversationId) {
+      socket.emit('chat:error', {
+        code: 'NO_SESSION',
+        message: 'Session not ready. Reconnect and try again.',
+      });
+      return;
+    }
+
+    const reference = body?.reference?.trim();
+    if (!reference) return;
+
+    try {
+      const orders = await this.engineService.completeOrder(
+        data.conversationId,
+        reference,
+      );
+      socket.emit('orders:list', { orders });
+    } catch (error) {
+      this.logger.warn(
+        `Could not complete ${reference} for conversation ${data.conversationId}: ${
+          error instanceof Error ? error.message : 'unknown error'
+        }`,
+      );
+      socket.emit('chat:error', {
+        code: 'CHECKOUT_FAILED',
+        message: "We couldn't confirm that just now. Please try again.",
+      });
+    }
+  }
 }
 
 function extractToken(socket: Socket): string | undefined {

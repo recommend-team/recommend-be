@@ -6,6 +6,7 @@ import { Conversation } from '../conversation/entities/conversation.entity';
 import { ChatChannel, ConversationState } from '../enums/chat.enums';
 import { DiscoveryService } from './discovery/discovery.service';
 import { CheckoutFlow } from './flows/checkout.flow';
+import { ORDERING_PORT } from '../ports/ordering.port';
 
 const conversation = {
   id: 'c1',
@@ -60,6 +61,10 @@ describe('EngineService', () => {
         { provide: ChannelRegistry, useValue: registry },
         { provide: DiscoveryService, useValue: discovery },
         { provide: CheckoutFlow, useValue: checkoutFlow },
+        {
+          provide: ORDERING_PORT,
+          useValue: { listOrders: jest.fn(), completeOrder: jest.fn() },
+        },
       ],
     }).compile();
 
