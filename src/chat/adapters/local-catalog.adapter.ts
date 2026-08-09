@@ -58,6 +58,12 @@ export class LocalCatalogAdapter implements CatalogPort {
       });
     }
 
+    if (query.categories?.length) {
+      qb.andWhere('vendor.businessCategory IN (:...categories)', {
+        categories: query.categories,
+      });
+    }
+
     // Area coverage is a join now, not a string match. The sub-query keeps the
     // vendor's full area list intact in the result rather than filtering it down.
     if (query.areaId) {
@@ -116,6 +122,12 @@ export class LocalCatalogAdapter implements CatalogPort {
         }),
       );
     });
+
+    if (query.categories?.length) {
+      qb.andWhere('vendor.businessCategory IN (:...categories)', {
+        categories: query.categories,
+      });
+    }
 
     if (query.areaId) {
       qb.andWhere(

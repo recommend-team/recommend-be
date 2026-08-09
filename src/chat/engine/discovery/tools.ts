@@ -6,6 +6,7 @@ import {
 } from '../../ports/catalog.port';
 import { AreaSummary, LocationPort } from '../../ports/location.port';
 import { sanitizeUntrusted } from './sanitize';
+import { categoriesFor } from './synonyms';
 
 /**
  * The tools the model may call. All of them are READ-ONLY — nothing here can change
@@ -89,6 +90,7 @@ export interface ToolContext {
   locations: LocationPort;
   /** Area already established for this conversation, used when the model omits one. */
   areaId: string | null;
+  buyerText?: string;
 }
 
 /** Everything the tools surfaced during one turn. */
@@ -146,10 +148,21 @@ export async function executeTool(
 
     case 'search_products': {
       const query = typeof args.query === 'string' ? args.query : '';
-      const products = await context.catalog.searchProducts({
+      let products = await context.catalog.searchProducts({
         text: query,
         areaId,
       });
+
+      if (products.length === 0) {
+        const categories = categoriesFor(query);
+        if (categories.length > 0) {
+          products = await context.catalog.searchProducts({
+            categories,
+            areaId,
+          });
+        }
+      }
+
       collectProducts(products, harvest);
 
       return products.length === 0
@@ -158,11 +171,28 @@ export async function executeTool(
     }
 
     case 'search_vendors': {
-      const vendors = await context.catalog.searchVendors({
-        text: typeof args.query === 'string' ? args.query : undefined,
-        category: typeof args.category === 'string' ? args.category : undefined,
+      const text = typeof args.query === 'string' ? args.query : undefined;
+      const category =
+        typeof args.category === 'string' ? args.category : undefined;
+      const impliedByBuyer =
+        !text && !category ? categoriesFor(context.buyerText) : [];
+
+      let vendors = await context.catalog.searchVendors({
+        text,
+        category,
+        categories: impliedByBuyer.length > 0 ? impliedByBuyer : undefined,
         areaId,
       });
+
+      if (vendors.length === 0) {
+        const categories = categoriesFor(
+          [text, category].filter(Boolean).join(' '),
+        );
+        if (categories.length > 0) {
+          vendors = await context.catalog.searchVendors({ categories, areaId });
+        }
+      }
+
       harvest.vendors.push(...vendors);
 
       return vendors.length === 0

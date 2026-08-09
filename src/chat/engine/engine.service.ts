@@ -103,8 +103,8 @@ export class EngineService {
   async greet(conversation: Conversation): Promise<OutboundMessage> {
     const reply: OutboundMessage = {
       text:
-        "Hi! I'm Recommend."
-        + "Tell me what you're looking for, anything a vendor " +
+        "Hi! I'm Recommend. " +
+        "Tell me what you're looking for, anything a vendor " +
         "might sell — and I'll find who has it near you.",
     };
 

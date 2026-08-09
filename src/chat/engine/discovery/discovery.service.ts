@@ -100,19 +100,26 @@ export class DiscoveryService {
     request: DiscoveryRequest,
   ): Promise<DiscoveryResult> {
     const harvest = emptyHarvest();
+    const named = await this.areaNamedIn(request.text);
+    const areaId = named ?? request.areaId;
+    if (named && named !== request.areaId) harvest.resolvedAreaId = named;
+
     const context = {
       catalog: this.catalog,
       locations: this.locations,
-      areaId: request.areaId,
+      areaId,
+      buyerText: recentBuyerText(request),
     };
 
     const messages: ChatCompletionMessageParam[] = [
       { role: 'system', content: DISCOVERY_SYSTEM_PROMPT },
-      ...(request.areaId
+      ...(areaId
         ? [
             {
               role: 'system' as const,
-              content: `The buyer's area is already known (areaId: ${request.areaId}). Do not ask again.`,
+              content:
+                `The buyer's area is ${areaId}. Do not ask which area they are in. ` +
+                `If they name a different area, call resolve_area with it and search there instead.`,
             },
           ]
         : []),
@@ -170,6 +177,19 @@ export class DiscoveryService {
 
     return this.assemble(reply, harvest, false);
   }
+  private async areaNamedIn(text: string): Promise<string | null> {
+    try {
+      const areas = await this.locations.searchAreas(text);
+      return areas.length === 1 ? areas[0].id : null;
+    } catch (error) {
+      this.logger.warn(
+        `Could not pre-resolve an area from "${text}": ${
+          error instanceof Error ? error.message : 'unknown error'
+        }`,
+      );
+      return null;
+    }
+  }
 
   // ─── Keyword fallback ───────────────────────────────────────────────────────
 
@@ -183,14 +203,17 @@ export class DiscoveryService {
     const harvest = emptyHarvest();
     const query = stripFiller(request.text);
 
+    // Same rule as the model path: an area the buyer just named beats the one we
+    // remembered, so saying "in Egbeda" moves the search to Egbeda.
+    const areas = await this.locations.searchAreas(request.text);
     let areaId = request.areaId;
-    if (!areaId) {
-      const areas = await this.locations.searchAreas(request.text);
+
+    if (areas.length === 1) {
+      if (areas[0].id !== areaId) harvest.resolvedAreaId = areas[0].id;
+      areaId = areas[0].id;
+    } else if (!areaId) {
+      // Several possible areas and nothing established — offer them the choice.
       harvest.areas.push(...areas);
-      if (areas.length === 1) {
-        areaId = areas[0].id;
-        harvest.resolvedAreaId = areas[0].id;
-      }
     }
 
     const products = await this.catalog.searchProducts({
@@ -324,4 +347,15 @@ function stripFiller(text: string): string {
     .filter((word) => word.length > 1 && !FILLER.has(word))
     .join(' ')
     .trim();
+}
+
+const BUYER_TURNS_FOR_INTENT = 3;
+
+function recentBuyerText(request: DiscoveryRequest): string {
+  const previous = request.history
+    .filter((message) => message.author === MessageAuthor.BUYER)
+    .slice(-BUYER_TURNS_FOR_INTENT)
+    .map((message) => message.text);
+
+  return [request.text, ...previous.reverse()].join(' ');
 }

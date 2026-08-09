@@ -125,17 +125,38 @@ describe('DiscoveryService (keyword fallback)', () => {
     expect(result.resolvedAreaId).toBeNull();
   });
 
-  it('does not re-resolve an area the conversation already knows', async () => {
-    await service.discover({
+  it('keeps the known area when the message names no area', async () => {
+    const result = await service.discover({
       text: 'jollof',
       areaId: 'area-known',
       history: [],
     });
 
-    expect(locations.searchAreas).not.toHaveBeenCalled();
     expect(catalog.searchProducts).toHaveBeenCalledWith(
       expect.objectContaining({ areaId: 'area-known' }),
     );
+    // Nothing changed, so nothing to write back to the conversation.
+    expect(result.resolvedAreaId).toBeNull();
+  });
+
+  it('follows the buyer when they name a different area', async () => {
+    // The bug this replaces: "jollof rice in Egbeda" answered with Ikeja vendors,
+    // because a remembered area outranked the one the buyer had just said out loud.
+    locations.searchAreas.mockResolvedValue([
+      { id: 'area-egbeda', name: 'Egbeda', stateName: 'Lagos' },
+    ]);
+
+    const result = await service.discover({
+      text: 'I want jollof rice in Egbeda',
+      areaId: 'area-ikeja',
+      history: [],
+    });
+
+    expect(catalog.searchProducts).toHaveBeenCalledWith(
+      expect.objectContaining({ areaId: 'area-egbeda' }),
+    );
+    // Written back, so the next turn searches Egbeda too.
+    expect(result.resolvedAreaId).toBe('area-egbeda');
   });
 
   it('falls back to nearby stores when no dish matches', async () => {

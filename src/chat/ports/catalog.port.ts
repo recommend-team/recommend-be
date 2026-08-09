@@ -36,6 +36,7 @@ export interface VendorSearchQuery {
   /** Admin-managed area id — resolved from what the buyer said about where they are. */
   areaId?: string;
   category?: string;
+  categories?: string[];
   limit?: number;
 }
 
@@ -43,6 +44,7 @@ export interface ProductSearchQuery {
   text?: string;
   vendorId?: string;
   areaId?: string;
+  categories?: string[];
   limit?: number;
 }
 

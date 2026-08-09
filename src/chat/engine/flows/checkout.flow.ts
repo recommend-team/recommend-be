@@ -404,7 +404,7 @@ function promptFor(state: ConversationState, name?: string): OutboundMessage {
       return { text: 'Lovely. What name should I put on the order?' };
     case ConversationState.COLLECTING_PHONE:
       return {
-        text: `Thanks${name ? `, ${name.split(' ')[0]}` : ''}. What phone number should the vendor call?`,
+        text: `Thanks${name ? `, ${name.split(' ')[0]}` : ''}. What number can we reach you on about the order?`,
       };
     case ConversationState.COLLECTING_FULFILLMENT:
       return {
