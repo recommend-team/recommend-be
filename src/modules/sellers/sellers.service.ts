@@ -247,7 +247,10 @@ export class SellersService {
   ): Promise<{
     message: string;
     data: {
-      items: Order[];
+      /** The order, with the checkout narrowed to what a vendor may see. */
+      items: (Omit<Order, 'checkout'> & {
+        checkout: { id: string; reference: string } | null;
+      })[];
       total: number;
       page: number;
       limit: number;
@@ -261,13 +264,28 @@ export class SellersService {
     const where: Record<string, unknown> = { vendorId };
     if (query.status) where['status'] = query.status;
 
-    const [items, total] = await this.ordersRepository.findAndCount({
+    const [rows, total] = await this.ordersRepository.findAndCount({
       where,
-      relations: ['items', 'items.product'],
+      relations: ['items', 'items.product', 'checkout'],
       order: { createdAt: 'DESC' },
       skip,
       take: limit,
     });
+
+    /**
+     * The payment reference, and nothing else from the checkout.
+     *
+     * The reference is the one identifier the buyer, the vendor and admin all hold, so
+     * a vendor on the phone about an order needs it. The rest of the checkout does not
+     * belong to them: `goodsTotal` and `totalAmount` cover the *whole* basket, which on
+     * a multi-vendor order would let one seller read another's share.
+     */
+    const items = rows.map((order) => ({
+      ...order,
+      checkout: order.checkout
+        ? { id: order.checkout.id, reference: order.checkout.reference }
+        : null,
+    }));
 
     return {
       message: 'Orders retrieved successfully',

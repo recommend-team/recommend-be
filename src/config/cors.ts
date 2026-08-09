@@ -10,11 +10,18 @@
  * decorator is evaluated before any DI container exists.
  */
 
-/** Local dev servers we always allow: Next (3000), Vite (5173), Vite preview (4173). */
+/**
+ * Local dev servers we always allow.
+ *
+ * Ports are assigned per app so they can all run at once — which they have to, because
+ * a vendor marking an order ready and a buyer seeing it are two apps and one database.
+ */
 const LOCAL_ORIGINS = [
-  'http://localhost:3000',
-  'http://localhost:5173',
-  'http://localhost:4173',
+  'http://localhost:3000', // recommend-fe (Next)
+  'http://localhost:5173', // recommend_customer_app (Vite dev)
+  'http://localhost:4173', // recommend_customer_app (Vite preview)
+  'http://localhost:5174', // recommend_vendors (Vite dev)
+  'http://localhost:4174', // recommend_vendors (Vite preview)
 ];
 
 export function allowedOrigins(): string[] {
