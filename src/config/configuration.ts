@@ -6,6 +6,7 @@ export default registerAs('app', () => ({
   port: parseInt(process.env.PORT || '4000', 10),
   apiPrefix: process.env.API_PREFIX || 'api/v1',
   frontendUrl: process.env.FRONTEND_URL || 'http://localhost:4000',
+  vendorAppUrl: process.env.VENDOR_APP_URL || '',
 }));
 
 export const databaseConfig = registerAs('database', () => {
