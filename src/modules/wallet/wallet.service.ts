@@ -1,6 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { DataSource, EntityManager, Repository } from 'typeorm';
+import { randomUUID } from 'crypto';
 import { WalletEntry, WalletEntryType } from './entities/wallet-entry.entity';
 import { VendorOrderCompletedEvent } from '../../common/events/vendor-order-completed.event';
 
@@ -32,13 +33,6 @@ export class WalletService {
   /**
    * What an order earned its vendor, as two entries: the gross they sold, and the
    * commission we took.
-   *
-   * One entry crediting the net would balance to the same number and forget both figures,
-   * leaving a vendor asking why a ₦6,000 order paid ₦4,800 with nothing in the ledger to
-   * answer them. It would also leave Recommend's own revenue unrecorded here.
-   *
-   * Both rows go in one transaction, so a crash between them cannot leave a gross credit
-   * standing without its commission — which would silently overpay.
    */
   async creditEarning(event: VendorOrderCompletedEvent): Promise<number> {
     return this.dataSource.transaction(async (manager) => {
@@ -73,15 +67,37 @@ export class WalletService {
     });
   }
 
+  async adjust(params: {
+    userId: string;
+    amount: number;
+    note: string;
+    adminId: string;
+  }): Promise<WalletEntry> {
+    return this.dataSource.transaction(async (manager) => {
+      await this.append(manager, [
+        {
+          userId: params.userId,
+          type: WalletEntryType.ADJUSTMENT,
+          amount: params.amount,
+          idempotencyKey: `adjustment:${randomUUID()}`,
+          note: `${params.note} (by admin ${params.adminId})`,
+        },
+      ]);
+
+      this.logger.warn(
+        `Admin ${params.adminId} adjusted ${params.userId} by ${params.amount}: ${params.note}`,
+      );
+
+      return manager.findOneOrFail(WalletEntry, {
+        where: { userId: params.userId },
+        order: { createdAt: 'DESC', id: 'DESC' },
+      });
+    });
+  }
+
   /**
    * Append entries, discarding any whose key is already present.
-   *
-   * `ON CONFLICT DO NOTHING` rather than a read-then-write check: the check would leave a
-   * window between the two in which a concurrent delivery of the same event also finds
-   * nothing, and both then credit. The unique index closes it in the database, where the
-   * race actually happens.
-   *
-   * Returns how many rows were new.
+
    */
   async append(manager: EntityManager, rows: NewEntry[]): Promise<number> {
     if (rows.length === 0) return 0;
@@ -107,16 +123,6 @@ export class WalletService {
     return result.identifiers.filter(Boolean).length;
   }
 
-  /**
-   * The balance, summed rather than stored.
-   *
-   * A stored balance is the classic way to lose money: one double-processed event and the
-   * number is wrong with no way to find out where. Summing is slower and always explicable.
-   */
-  /**
-   * Pass `manager` when the caller holds a lock: read it on their connection, or the sum
-   * comes from outside their transaction and the lock has protected nothing.
-   */
   async balanceOf(userId: string, manager?: EntityManager): Promise<number> {
     return (await this.summaryOf(userId, manager)).balance;
   }

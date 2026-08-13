@@ -9,6 +9,7 @@ import { WithdrawalsService } from './withdrawals.service';
 import { WithdrawalRetryService } from './withdrawal-retry.service';
 import { WalletController } from './wallet.controller';
 import { AccountsController } from './accounts.controller';
+import { AdminWalletController } from './admin-wallet.controller';
 import { EarningListener } from './earning.listener';
 import { PaymentsModule } from '../payments/payments.module';
 import { CommonModule } from '../../common/common.module';
@@ -26,7 +27,7 @@ import { CommonModule } from '../../common/common.module';
     PaymentsModule,
     CommonModule,
   ],
-  controllers: [WalletController, AccountsController],
+  controllers: [WalletController, AccountsController, AdminWalletController],
   providers: [
     WalletService,
     AccountsService,

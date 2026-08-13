@@ -14,14 +14,7 @@ import {
   UpdateRegisteredKycDto,
   UpdateNonRegisteredKycDto,
 } from './dto/update-kyc.dto';
-import { UpdatePayoutDto } from './dto/update-payout.dto';
 import { LocationsService } from '../locations/locations.service';
-
-type PayoutFields =
-  | 'bankName'
-  | 'bankCode'
-  | 'bankAccountNumber'
-  | 'bankAccountName';
 
 export interface VendorProfileResponse {
   id: string;
@@ -210,34 +203,8 @@ export class SellersService {
     };
   }
 
-  // ─── Payout details ────────────────────────────────────────────────────────
-
-  async updatePayout(
-    userId: string,
-    dto: UpdatePayoutDto,
-  ): Promise<{
-    message: string;
-    data: Pick<User, PayoutFields>;
-  }> {
-    const vendor = await this.findVendor(userId);
-
-    vendor.bankName = dto.bankName;
-    vendor.bankCode = dto.bankCode;
-    vendor.bankAccountNumber = dto.bankAccountNumber;
-    vendor.bankAccountName = dto.bankAccountName;
-
-    const saved = await this.usersRepository.save(vendor);
-
-    return {
-      message: 'Payout details updated successfully',
-      data: {
-        bankName: saved.bankName,
-        bankCode: saved.bankCode,
-        bankAccountNumber: saved.bankAccountNumber,
-        bankAccountName: saved.bankAccountName,
-      },
-    };
-  }
+  // Payout details moved to `accounts` — see WalletPlan §5 and AccountsService. The four
+  // bank columns still on `users` are the un-dropped remains of the old model.
 
   // ─── Orders dashboard ──────────────────────────────────────────────────────
 
@@ -293,9 +260,13 @@ export class SellersService {
     };
   }
 
-  // ─── Earnings dashboard ────────────────────────────────────────────────────
+  // ─── Sales ─────────────────────────────────────────────────────────────────
 
-  async getEarnings(vendorId: string): Promise<{
+  /**
+   * What a vendor has sold. Counts `PAID` as well as `COMPLETED`, so it deliberately
+   * differs from the wallet balance, which only counts orders confirmed received.
+   */
+  async getSales(vendorId: string): Promise<{
     message: string;
     data: {
       grossTotal: number;
@@ -350,7 +321,7 @@ export class SellersService {
       .map(([month, { gross, net }]) => ({ month, gross, net }));
 
     return {
-      message: 'Earnings retrieved successfully',
+      message: 'Sales retrieved successfully',
       data: {
         grossTotal: parseFloat(grossTotal.toFixed(2)),
         netTotal: parseFloat(netTotal.toFixed(2)),

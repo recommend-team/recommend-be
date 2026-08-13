@@ -335,6 +335,55 @@ export class WithdrawalsService {
     await this.fail(withdrawal, reason, status);
   }
 
+  // ─── Admin ──────────────────────────────────────────────────────────────────
+
+  /**
+   * Everything in flight, stuck ones first. Ordering matters: the whole reason to open
+   * this list is to find what is not moving.
+   */
+  async listForAdmin(status?: WithdrawalStatus): Promise<Withdrawal[]> {
+    const query = this.withdrawals
+      .createQueryBuilder('w')
+      .orderBy(
+        `CASE w.status WHEN 'PROCESSING' THEN 0 WHEN 'REQUESTED' THEN 1 ELSE 2 END`,
+        'ASC',
+      )
+      .addOrderBy('w.lastAttemptAt', 'ASC', 'NULLS FIRST')
+      .addOrderBy('w.createdAt', 'DESC')
+      .take(100);
+
+    if (status) query.where('w.status = :status', { status });
+
+    return query.getMany();
+  }
+
+  /** Try again now, rather than waiting for the sweep. */
+  async retryNow(id: string): Promise<Withdrawal> {
+    const withdrawal = await this.withdrawals.findOne({ where: { id } });
+    if (!withdrawal) throw new NotFoundException('Withdrawal not found');
+
+    if (
+      withdrawal.status !== WithdrawalStatus.PROCESSING &&
+      withdrawal.status !== WithdrawalStatus.REQUESTED
+    ) {
+      throw new BadRequestException(
+        `That withdrawal is ${withdrawal.status.toLowerCase()} — there is nothing to retry.`,
+      );
+    }
+
+    await this.send(withdrawal);
+    return withdrawal;
+  }
+
+  /** Give up on one by hand, returning the money. */
+  async abandon(id: string, reason: string): Promise<Withdrawal> {
+    const withdrawal = await this.withdrawals.findOne({ where: { id } });
+    if (!withdrawal) throw new NotFoundException('Withdrawal not found');
+
+    await this.fail(withdrawal, reason);
+    return withdrawal;
+  }
+
   // ─── Internals ──────────────────────────────────────────────────────────────
 
   private byReference(reference: string): Promise<Withdrawal | null> {
