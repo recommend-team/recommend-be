@@ -17,6 +17,7 @@ import { StoreModule } from './modules/store/store.module';
 import { LocationsModule } from './modules/locations/locations.module';
 import { ChatModule } from './chat/chat.module';
 import { NotificationsModule } from './modules/notifications/notifications.module';
+import { WalletModule } from './modules/wallet/wallet.module';
 import { EventEmitterModule } from '@nestjs/event-emitter';
 import { JwtAuthGuard } from './modules/auth/guards/jwt-auth.guard';
 import { RolesGuard } from './modules/auth/guards/roles.guard';
@@ -41,6 +42,7 @@ import { HttpExceptionFilter } from './common/filters/http-exception.filter';
     LocationsModule,
     ChatModule,
     NotificationsModule,
+    WalletModule,
     EventEmitterModule.forRoot(),
     // TODO: Enable BullModule once Redis/Upstash is configured for production
     // BullModule.forRootAsync({

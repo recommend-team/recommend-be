@@ -20,6 +20,10 @@ import {
   CHECKOUT_STATUS_CHANGED_EVENT,
   CheckoutStatusChangedEvent,
 } from '../../common/events/checkout-status-changed.event';
+import {
+  VENDOR_ORDER_COMPLETED_EVENT,
+  VendorOrderCompletedEvent,
+} from '../../common/events/vendor-order-completed.event';
 
 /**
  * How far along the lifecycle a status is. Only these participate in the derivation;
@@ -38,6 +42,15 @@ export interface Actor {
   /** Null for a buyer, who has no account, and for anything the system did alone. */
   id: string | null;
 }
+
+/**
+ * Events held back until the transaction commits.
+ *
+ * Emitting mid-transaction publishes a fact that may still be rolled back, and a listener
+ * running on its own connection cannot see the rows anyway. Harmless when the consequence
+ * was a chat message; not harmless now that completion credits a wallet.
+ */
+type Outbox = { name: string; payload: object }[];
 
 /**
  * The order lifecycle.
@@ -82,13 +95,19 @@ export class OrderLifecycleService {
       );
     }
 
+    const outbox: Outbox = [];
     await this.dataSource.transaction(async (manager) => {
-      await this.moveOrder(manager, order, OrderStatus.READY, {
-        type: StatusActor.VENDOR,
-        id: vendorId,
-      });
-      await this.recomputeCheckout(manager, order.checkoutId);
+      await this.moveOrder(
+        manager,
+        order,
+        OrderStatus.READY,
+        { type: StatusActor.VENDOR, id: vendorId },
+        outbox,
+        null,
+      );
+      await this.recomputeCheckout(manager, order.checkoutId, outbox);
     });
+    this.flush(outbox);
   }
 
   // ─── Dispatch and completion ────────────────────────────────────────────────
@@ -111,9 +130,17 @@ export class OrderLifecycleService {
       );
     }
 
+    const outbox: Outbox = [];
     await this.dataSource.transaction(async (manager) => {
-      await this.moveCheckout(manager, checkout, OrderStatus.DISPATCHED, actor);
+      await this.moveCheckout(
+        manager,
+        checkout,
+        OrderStatus.DISPATCHED,
+        actor,
+        outbox,
+      );
     });
+    this.flush(outbox);
   }
 
   /**
@@ -134,17 +161,33 @@ export class OrderLifecycleService {
       );
     }
 
+    const outbox: Outbox = [];
     await this.dataSource.transaction(async (manager) => {
-      await this.moveCheckout(manager, checkout, OrderStatus.COMPLETED, actor);
+      await this.moveCheckout(
+        manager,
+        checkout,
+        OrderStatus.COMPLETED,
+        actor,
+        outbox,
+      );
 
       // Vendor orders follow, so earnings and payout reporting — which read the vendor
-      // order, not the checkout — agree with what the buyer was told.
+      // order, not the checkout — agree with what the buyer was told. Each one that moves
+      // is what credits that vendor's wallet.
       for (const order of checkout.orders ?? []) {
         if (order.status !== OrderStatus.COMPLETED) {
-          await this.moveOrder(manager, order, OrderStatus.COMPLETED, actor);
+          await this.moveOrder(
+            manager,
+            order,
+            OrderStatus.COMPLETED,
+            actor,
+            outbox,
+            checkout.reference,
+          );
         }
       }
     });
+    this.flush(outbox);
   }
 
   // ─── Admin override ─────────────────────────────────────────────────────────
@@ -166,8 +209,9 @@ export class OrderLifecycleService {
     const checkout = await this.loadCheckout(reference);
     const actor: Actor = { type: StatusActor.ADMIN, id: adminId };
 
+    const outbox: Outbox = [];
     await this.dataSource.transaction(async (manager) => {
-      await this.moveCheckout(manager, checkout, to, actor, note);
+      await this.moveCheckout(manager, checkout, to, actor, outbox, note);
 
       // Terminal states are about the whole purchase, so the vendor orders go with it.
       // Anything mid-lifecycle is left alone: a vendor's own progress is still true.
@@ -178,11 +222,20 @@ export class OrderLifecycleService {
       ) {
         for (const order of checkout.orders ?? []) {
           if (order.status !== to) {
-            await this.moveOrder(manager, order, to, actor, note);
+            await this.moveOrder(
+              manager,
+              order,
+              to,
+              actor,
+              outbox,
+              checkout.reference,
+              note,
+            );
           }
         }
       }
     });
+    this.flush(outbox);
   }
 
   // ─── Internals ──────────────────────────────────────────────────────────────
@@ -201,6 +254,9 @@ export class OrderLifecycleService {
     order: Order,
     to: OrderStatus,
     actor: Actor,
+    outbox: Outbox,
+    /** The buyer's charge reference. Null where the transition cannot be a completion. */
+    reference: string | null,
     note?: string,
   ): Promise<void> {
     const from = order.status;
@@ -215,14 +271,38 @@ export class OrderLifecycleService {
       note: note ?? null,
     });
     order.status = to;
+
+    // The vendor has delivered, so this is the moment they have earned the money. The
+    // figures are the snapshots on the row, cast because `decimal` reaches us as strings.
+    if (to === OrderStatus.COMPLETED && from !== OrderStatus.COMPLETED) {
+      if (!reference) {
+        this.logger.error(
+          `Order ${order.id} completed without a reference — no wallet credit published`,
+        );
+        return;
+      }
+      outbox.push({
+        name: VENDOR_ORDER_COMPLETED_EVENT,
+        payload: new VendorOrderCompletedEvent(
+          order.id,
+          order.checkoutId,
+          order.vendorId,
+          reference,
+          Number(order.totalAmount),
+          Number(order.platformFee),
+          Number(order.vendorAmount),
+        ),
+      });
+    }
   }
 
-  /** Writes the checkout, records it, and tells everyone else — in that order. */
+  /** Writes the checkout, records it, and queues the announcement — in that order. */
   private async moveCheckout(
     manager: EntityManager,
     checkout: Checkout,
     to: OrderStatus,
     actor: Actor,
+    outbox: Outbox,
     note?: string,
   ): Promise<void> {
     const from = checkout.status;
@@ -240,7 +320,27 @@ export class OrderLifecycleService {
     });
     checkout.status = to;
 
-    this.emitChange(checkout, from, to);
+    outbox.push({
+      name: CHECKOUT_STATUS_CHANGED_EVENT,
+      payload: new CheckoutStatusChangedEvent(
+        checkout.id,
+        checkout.reference,
+        checkout.buyerName,
+        checkout.buyerPhone,
+        checkout.fulfillmentType,
+        from,
+        to,
+        (checkout.orders ?? []).flatMap((order) =>
+          (order.items ?? []).map((item) => ({
+            name: item.productName,
+            quantity: item.quantity,
+          })),
+        ),
+        (checkout.orders ?? [])
+          .map((order) => order.vendor?.businessName)
+          .filter((name): name is string => !!name),
+      ),
+    });
   }
 
   /**
@@ -252,6 +352,7 @@ export class OrderLifecycleService {
   private async recomputeCheckout(
     manager: EntityManager,
     checkoutId: string,
+    outbox: Outbox,
   ): Promise<void> {
     const checkout = await manager.findOne(Checkout, {
       where: { id: checkoutId },
@@ -275,46 +376,32 @@ export class OrderLifecycleService {
     if (!derived || derived === checkout.status) return;
     if (rankOf(derived) <= rankOf(checkout.status)) return;
 
-    await this.moveCheckout(manager, checkout, derived, {
-      type: StatusActor.SYSTEM,
-      id: null,
-    });
+    await this.moveCheckout(
+      manager,
+      checkout,
+      derived,
+      { type: StatusActor.SYSTEM, id: null },
+      outbox,
+    );
   }
 
-  private emitChange(
-    checkout: Checkout,
-    from: OrderStatus,
-    to: OrderStatus,
-  ): void {
-    try {
-      this.eventEmitter.emit(
-        CHECKOUT_STATUS_CHANGED_EVENT,
-        new CheckoutStatusChangedEvent(
-          checkout.id,
-          checkout.reference,
-          checkout.buyerName,
-          checkout.buyerPhone,
-          checkout.fulfillmentType,
-          from,
-          to,
-          (checkout.orders ?? []).flatMap((order) =>
-            (order.items ?? []).map((item) => ({
-              name: item.productName,
-              quantity: item.quantity,
-            })),
-          ),
-          (checkout.orders ?? [])
-            .map((order) => order.vendor?.businessName)
-            .filter((name): name is string => !!name),
-        ),
-      );
-    } catch (error) {
-      // A listener that throws must never roll back the status change that caused it.
-      this.logger.error(
-        `Failed to publish status change for ${checkout.reference}: ${
-          error instanceof Error ? error.message : 'unknown error'
-        }`,
-      );
+  /**
+   * Publish what the committed transaction produced.
+   *
+   * Each event is isolated: one listener throwing must not swallow the events behind it,
+   * and none of them can undo a status change that is already durable.
+   */
+  private flush(outbox: Outbox): void {
+    for (const { name, payload } of outbox) {
+      try {
+        this.eventEmitter.emit(name, payload);
+      } catch (error) {
+        this.logger.error(
+          `Failed to publish ${name}: ${
+            error instanceof Error ? error.message : 'unknown error'
+          }`,
+        );
+      }
     }
   }
 }

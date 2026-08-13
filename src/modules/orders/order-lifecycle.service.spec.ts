@@ -9,6 +9,10 @@ import { StatusActor } from './entities/order-status-event.entity';
 import { OrderStatus } from '../../common/enums/order-status.enum';
 import { FulfillmentType } from '../../common/enums/fulfillment-type.enum';
 import { CHECKOUT_STATUS_CHANGED_EVENT } from '../../common/events/checkout-status-changed.event';
+import {
+  VENDOR_ORDER_COMPLETED_EVENT,
+  VendorOrderCompletedEvent,
+} from '../../common/events/vendor-order-completed.event';
 
 /** A checkout with two vendors, which is where all the interesting cases live. */
 const checkoutWith = (
@@ -31,6 +35,10 @@ const checkoutWith = (
       checkoutId: 'ck1',
       vendorId: `v${index + 1}`,
       status,
+      // Written at checkout and never recomputed — the wallet credits from these.
+      totalAmount: 3500,
+      platformFee: 700,
+      vendorAmount: 2800,
       items: [{ productName: 'Jollof Rice', quantity: 1 }],
       vendor: { businessName: `Vendor ${index + 1}` },
     })),
@@ -257,6 +265,104 @@ describe('OrderLifecycleService', () => {
       await expect(
         service.markCompleted('REC-AAA', { type: StatusActor.BUYER, id: null }),
       ).rejects.toThrow(/paid/i);
+    });
+  });
+
+  describe('what the wallet is told', () => {
+    const earnings = () =>
+      emitter.emit.mock.calls
+        .filter(([name]) => name === VENDOR_ORDER_COMPLETED_EVENT)
+        .map(([, payload]) => payload as VendorOrderCompletedEvent);
+
+    it('announces one earning per vendor, carrying the figures on the row', async () => {
+      checkouts.findOne.mockResolvedValue(
+        checkoutWith({ status: OrderStatus.DISPATCHED }),
+      );
+
+      await service.markCompleted('REC-AAA', {
+        type: StatusActor.BUYER,
+        id: null,
+      });
+
+      expect(earnings()).toHaveLength(2);
+      expect(earnings()[0]).toMatchObject({
+        orderId: 'o1',
+        vendorId: 'v1',
+        reference: 'REC-AAA',
+        subtotal: 3500,
+        platformFee: 700,
+        vendorAmount: 2800,
+      });
+    });
+
+    it('says nothing about a vendor already completed', async () => {
+      // Re-completing must not pay twice. The ledger key would catch it anyway; not
+      // announcing it at all means the question never reaches the ledger.
+      checkouts.findOne.mockResolvedValue(
+        checkoutWith({ status: OrderStatus.DISPATCHED }, [
+          OrderStatus.COMPLETED,
+          OrderStatus.PAID,
+        ]),
+      );
+
+      await service.markCompleted('REC-AAA', {
+        type: StatusActor.BUYER,
+        id: null,
+      });
+
+      expect(earnings().map((e) => e.orderId)).toEqual(['o2']);
+    });
+
+    it('stays silent when a vendor merely marks ready', async () => {
+      orders.findOne.mockResolvedValue({
+        id: 'o1',
+        vendorId: 'v1',
+        status: OrderStatus.PAID,
+        checkoutId: 'ck1',
+      });
+      refreshed = checkoutWith({}, [OrderStatus.READY, OrderStatus.READY]);
+
+      await service.markReady('o1', 'v1');
+
+      expect(earnings()).toHaveLength(0);
+    });
+
+    it('credits nobody when an admin cancels', async () => {
+      checkouts.findOne.mockResolvedValue(
+        checkoutWith({ status: OrderStatus.PAID }),
+      );
+
+      await service.overrideCheckout(
+        'REC-AAA',
+        OrderStatus.CANCELLED,
+        'admin-1',
+      );
+
+      expect(earnings()).toHaveLength(0);
+    });
+
+    it('publishes only after the transaction commits', async () => {
+      // A listener firing mid-transaction would credit against rows that may still roll
+      // back, and on its own connection it cannot see them anyway.
+      const order: string[] = [];
+      manager.insert.mockImplementation(() => {
+        order.push('write');
+        return Promise.resolve(undefined);
+      });
+      emitter.emit.mockImplementation(() => {
+        order.push('emit');
+        return true;
+      });
+      checkouts.findOne.mockResolvedValue(
+        checkoutWith({ status: OrderStatus.DISPATCHED }),
+      );
+
+      await service.markCompleted('REC-AAA', {
+        type: StatusActor.BUYER,
+        id: null,
+      });
+
+      expect(order.lastIndexOf('write')).toBeLessThan(order.indexOf('emit'));
     });
   });
 
