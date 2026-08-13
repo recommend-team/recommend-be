@@ -1,5 +1,6 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { getRepositoryToken } from '@nestjs/typeorm';
+import { EventEmitter2 } from '@nestjs/event-emitter';
 import { ConversationService } from './conversation.service';
 import { Conversation } from './entities/conversation.entity';
 import { ChatMessage } from './entities/message.entity';
@@ -43,6 +44,7 @@ describe('ConversationService', () => {
         ConversationService,
         { provide: getRepositoryToken(Conversation), useValue: conversations },
         { provide: getRepositoryToken(ChatMessage), useValue: messages },
+        { provide: EventEmitter2, useValue: { emit: jest.fn() } },
       ],
     }).compile();
 

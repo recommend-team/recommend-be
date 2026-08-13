@@ -58,22 +58,14 @@ export class HandoverService {
       },
     );
 
+    await this.conversationService.clearAttention(conversationId);
+
     this.logger.log(`Admin ${adminId} took conversation ${conversationId}`);
     return this.load(conversationId);
   }
 
   /**
    * Give it back to the assistant.
-   *
-   * **Sends nothing.** The engine only ever speaks in reply to an inbound message, so
-   * resuming means "answer whatever they say next" — a conversation that has ended stays
-   * ended rather than being restarted by a bot with nothing to add.
-   *
-   * State goes back to `DISCOVERY` even if a checkout was in progress. Handing back into
-   * `COLLECTING_PHONE` means the buyer's next sentence is parsed as a phone number and
-   * rejected, which is the bot failing visibly seconds after a person fixed something.
-   * Nothing is lost: the cart lives in the buyer's browser, and a payment already started
-   * confirms off its Paystack reference regardless of conversation state.
    */
   async release(
     conversationId: string,

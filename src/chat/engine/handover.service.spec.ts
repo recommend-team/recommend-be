@@ -54,7 +54,10 @@ describe('HandoverService', () => {
       providers: [
         HandoverService,
         { provide: getRepositoryToken(Conversation), useValue: conversations },
-        { provide: ConversationService, useValue: { recordOutbound } },
+        {
+          provide: ConversationService,
+          useValue: { recordOutbound, clearAttention: jest.fn() },
+        },
         {
           provide: ChannelRegistry,
           useValue: {
@@ -113,7 +116,10 @@ describe('HandoverService', () => {
         providers: [
           HandoverService,
           { provide: getRepositoryToken(Conversation), useValue: empty },
-          { provide: ConversationService, useValue: {} },
+          {
+            provide: ConversationService,
+            useValue: { clearAttention: jest.fn() },
+          },
           { provide: ChannelRegistry, useValue: {} },
           { provide: ConfigService, useValue: { get: () => STALE_MINUTES } },
         ],

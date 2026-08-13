@@ -1,6 +1,11 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { LessThan, Repository } from 'typeorm';
+import { EventEmitter2 } from '@nestjs/event-emitter';
+import { Brackets, IsNull, LessThan, Not, Repository } from 'typeorm';
+import {
+  CHAT_MESSAGE_RECORDED_EVENT,
+  ChatMessageRecordedEvent,
+} from '../transport/admin/admin-chat.events';
 import {
   Conversation,
   ConversationContext,
@@ -17,6 +22,22 @@ export interface RecordInboundInput {
   conversationId: string;
   text: string;
   clientMessageId?: string;
+}
+
+/** One row of the admin queue. Never the whole transcript — that is its own request. */
+export interface ConversationSummary {
+  id: string;
+  channel: ChatChannel;
+  state: ConversationState;
+  /** What the buyer told the assistant, which may be nothing yet. */
+  buyerName: string | null;
+  buyerPhone: string | null;
+  lastMessageAt: Date | null;
+  lastMessage: string | null;
+  heldByAdminId: string | null;
+  needsAttentionAt: Date | null;
+  attentionReason: string | null;
+  createdAt: Date;
 }
 
 export interface RecordOutboundInput {
@@ -38,7 +59,23 @@ export class ConversationService {
     private readonly conversationsRepository: Repository<Conversation>,
     @InjectRepository(ChatMessage)
     private readonly messagesRepository: Repository<ChatMessage>,
+    private readonly events: EventEmitter2,
   ) {}
+
+  private announce(message: ChatMessage): void {
+    try {
+      this.events.emit(
+        CHAT_MESSAGE_RECORDED_EVENT,
+        new ChatMessageRecordedEvent(message),
+      );
+    } catch (error) {
+      this.logger.warn(
+        `Could not announce message ${message.id}: ${
+          error instanceof Error ? error.message : 'unknown error'
+        }`,
+      );
+    }
+  }
 
   /**
    * One conversation per channel address. A returning device reconnects into the same
@@ -106,6 +143,7 @@ export class ConversationService {
 
     const saved = await this.messagesRepository.save(message);
     await this.touch(input.conversationId);
+    this.announce(saved);
     return saved;
   }
 
@@ -128,7 +166,113 @@ export class ConversationService {
 
     const saved = await this.messagesRepository.save(message);
     await this.touch(input.conversationId);
+    this.announce(saved);
     return saved;
+  }
+
+  async flagForAttention(
+    conversationId: string,
+    reason: string,
+  ): Promise<void> {
+    await this.conversationsRepository.update(
+      { id: conversationId, needsAttentionAt: IsNull() },
+      { needsAttentionAt: new Date(), attentionReason: reason },
+    );
+  }
+
+  /** Someone is looking at it now, so it is no longer waiting for anyone. */
+  async clearAttention(conversationId: string): Promise<void> {
+    await this.conversationsRepository.update(
+      { id: conversationId },
+      { needsAttentionAt: null, attentionReason: null },
+    );
+  }
+
+  async listForAdmin(query: {
+    search?: string;
+    needingAttention?: boolean;
+    page?: number;
+    limit?: number;
+  }): Promise<{
+    items: ConversationSummary[];
+    total: number;
+    needingAttention: number;
+    page: number;
+    limit: number;
+  }> {
+    const page = Math.max(1, query.page ?? 1);
+    const limit = Math.min(50, Math.max(1, query.limit ?? 20));
+
+    const builder = this.conversationsRepository
+      .createQueryBuilder('c')
+      .orderBy('c."needsAttentionAt"', 'ASC', 'NULLS LAST')
+      .addOrderBy('c."lastMessageAt"', 'DESC', 'NULLS LAST')
+      .skip((page - 1) * limit)
+      .take(limit);
+
+    if (query.needingAttention) {
+      builder.andWhere('c."needsAttentionAt" IS NOT NULL');
+    }
+
+    if (query.search?.trim()) {
+      const term = `%${query.search.trim().toLowerCase()}%`;
+      builder.andWhere(
+        new Brackets((where) =>
+          where
+            .where("LOWER(c.context #>> '{profile,name}') LIKE :term", { term })
+            .orWhere("c.context #>> '{profile,phone}' LIKE :term", { term })
+            .orWhere("LOWER(c.context #>> '{profile,email}') LIKE :term", {
+              term,
+            }),
+        ),
+      );
+    }
+
+    const [rows, total] = await builder.getManyAndCount();
+
+    const needingAttention = await this.conversationsRepository.count({
+      where: { needsAttentionAt: Not(IsNull()) },
+    });
+
+    // One query for the last message of every row on the page, rather than one per row.
+    const lastMessages = await this.lastMessageFor(rows.map((row) => row.id));
+
+    return {
+      items: rows.map((row) => ({
+        id: row.id,
+        channel: row.channel,
+        state: row.state,
+        buyerName: row.context?.profile?.name ?? null,
+        buyerPhone: row.context?.profile?.phone ?? null,
+        lastMessageAt: row.lastMessageAt,
+        lastMessage: lastMessages.get(row.id) ?? null,
+        heldByAdminId: row.heldByAdminId,
+        needsAttentionAt: row.needsAttentionAt,
+        attentionReason: row.attentionReason,
+        createdAt: row.createdAt,
+      })),
+      total,
+      needingAttention,
+      page,
+      limit,
+    };
+  }
+
+  private async lastMessageFor(
+    conversationIds: string[],
+  ): Promise<Map<string, string>> {
+    if (conversationIds.length === 0) return new Map();
+
+    const raw: unknown = await this.messagesRepository.query(
+      `SELECT DISTINCT ON ("conversationId") "conversationId" AS id, "text"
+         FROM chat_messages
+        WHERE "conversationId" = ANY($1)
+        ORDER BY "conversationId", "createdAt" DESC`,
+      [conversationIds],
+    );
+
+    const rows = raw as { id: string; text: string }[];
+    return new Map(rows.map((row) => [row.id, row.text]));
   }
 
   /** Newest-first page of history, oldest-first within the page for rendering. */

@@ -6,6 +6,8 @@ import {
   Conversation,
   PendingCartLine,
 } from '../conversation/entities/conversation.entity';
+import { ChatMessage } from '../conversation/entities/message.entity';
+import { MessageAuthor } from '../enums/chat.enums';
 import { CheckoutFlow } from './flows/checkout.flow';
 import { HandoverService } from './handover.service';
 import { ConversationState } from '../enums/chat.enums';
@@ -251,14 +253,61 @@ export class EngineService {
       );
     }
 
-    if (result.usedFallback) {
-      this.logger.debug(
-        `Conversation ${conversation.id} answered by keyword fallback`,
-      );
-    }
+    await this.flagIfStruggling(conversation, text, history, result);
 
     return result.messages;
   }
+
+  /**
+   * Raise a hand when the assistant is not coping.
+   */
+  private async flagIfStruggling(
+    conversation: Conversation,
+    text: string,
+    history: ChatMessage[],
+    result: { usedFallback: boolean; foundNothing: boolean },
+  ): Promise<void> {
+    if (conversation.needsAttentionAt) return;
+
+    const reason = result.usedFallback
+      ? 'The assistant fell back to keyword search'
+      : result.foundNothing
+        ? 'Nothing matched what they asked for'
+        : repeatedThemselves(history, text)
+          ? 'The buyer asked the same thing twice'
+          : null;
+
+    if (!reason) return;
+
+    await this.conversationService.flagForAttention(conversation.id, reason);
+    conversation.needsAttentionAt = new Date();
+    conversation.attentionReason = reason;
+
+    this.logger.log(
+      `Conversation ${conversation.id} needs a person: ${reason.toLowerCase()}`,
+    );
+  }
+}
+
+/**
+ * The buyer saying the same thing again.
+ */
+function repeatedThemselves(history: ChatMessage[], text: string): boolean {
+  const previous = [...history]
+    .reverse()
+    .find((message) => message.author === MessageAuthor.BUYER);
+
+  if (!previous) return false;
+
+  const normalise = (value: string) =>
+    value
+      .toLowerCase()
+      .replace(/[^a-z0-9\s]/g, '')
+      .replace(/\s+/g, ' ')
+      .trim();
+
+  const now = normalise(text);
+  return now.length > 3 && now === normalise(previous.text);
 }
 
 const GREETINGS = [

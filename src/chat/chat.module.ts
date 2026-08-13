@@ -11,6 +11,7 @@ import { ChatRateLimitService } from './session/rate-limit.service';
 import { EngineService } from './engine/engine.service';
 import { HandoverService } from './engine/handover.service';
 import { AdminChatController } from './transport/admin/admin-chat.controller';
+import { AdminChatGateway } from './transport/admin/admin-chat.gateway';
 import { PaymentConfirmationListener } from './engine/payment-confirmation.listener';
 import { OrderStatusListener } from './engine/order-status.listener';
 import { AppreciationService } from './engine/appreciation.service';
@@ -64,6 +65,7 @@ import { Area } from '../modules/locations/entities/area.entity';
     ChannelRegistry,
     PwaChannel,
     PwaGateway,
+    AdminChatGateway,
     DiscoveryService,
     { provide: CATALOG_PORT, useClass: LocalCatalogAdapter },
     { provide: LOCATION_PORT, useClass: LocalLocationAdapter },

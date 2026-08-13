@@ -36,10 +36,9 @@ export interface DiscoveryRequest {
 
 export interface DiscoveryResult {
   messages: OutboundMessage[];
-  /** Set when this turn worked out where the buyer is. */
   resolvedAreaId: string | null;
-  /** True when the reply came from the keyword fallback rather than the model. */
   usedFallback: boolean;
+  foundNothing: boolean;
 }
 
 @Injectable()
@@ -280,7 +279,13 @@ export class DiscoveryService {
       messages.push({ text });
     }
 
-    return { messages, resolvedAreaId: harvest.resolvedAreaId, usedFallback };
+    return {
+      messages,
+      resolvedAreaId: harvest.resolvedAreaId,
+      usedFallback,
+      foundNothing:
+        harvest.products.length === 0 && harvest.vendors.length === 0,
+    };
   }
 
   private toModelHistory(history: ChatMessage[]): ChatCompletionMessageParam[] {

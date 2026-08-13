@@ -99,6 +99,14 @@ export class Conversation extends BaseEntity {
   @Column({ type: 'timestamptz', nullable: true })
   lastAdminMessageAt!: Date | null;
 
+  @Column({ type: 'timestamptz', nullable: true })
+  @Index()
+  needsAttentionAt!: Date | null;
+
+  /** Which signal raised it, so an admin knows what they are walking into. */
+  @Column({ type: 'varchar', nullable: true })
+  attentionReason!: string | null;
+
   @OneToMany(() => ChatMessage, (message) => message.conversation)
   messages!: ChatMessage[];
 
