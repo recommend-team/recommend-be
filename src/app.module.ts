@@ -22,6 +22,7 @@ import { EventEmitterModule } from '@nestjs/event-emitter';
 import { JwtAuthGuard } from './modules/auth/guards/jwt-auth.guard';
 import { RolesGuard } from './modules/auth/guards/roles.guard';
 import { ApprovedOnlyGuard } from './modules/auth/guards/approved-only.guard';
+import { PasswordConfirmationGuard } from './modules/auth/guards/password-confirmation.guard';
 import { ResponseInterceptor } from './common/interceptors/response.interceptor';
 import { HttpExceptionFilter } from './common/filters/http-exception.filter';
 
@@ -69,6 +70,8 @@ import { HttpExceptionFilter } from './common/filters/http-exception.filter';
     { provide: APP_GUARD, useClass: RolesGuard },
     // Global approval guard — enforces @ApprovedOnly() decorator (KYC-gated endpoints)
     { provide: APP_GUARD, useClass: ApprovedOnlyGuard },
+    // Re-authentication for @RequiresPassword() routes — anything that can redirect money
+    { provide: APP_GUARD, useClass: PasswordConfirmationGuard },
     // Global response interceptor — wraps all success responses
     { provide: APP_INTERCEPTOR, useClass: ResponseInterceptor },
     // Global exception filter — standardises all error responses

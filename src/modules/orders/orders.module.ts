@@ -12,10 +12,8 @@ import { OrderLifecycleService } from './order-lifecycle.service';
 import { OrderStatusEvent } from './entities/order-status-event.entity';
 import { PaymentsModule } from '../payments/payments.module';
 import { PaymentsController } from '../payments/payments.controller';
+import { WalletModule } from '../wallet/wallet.module';
 
-// PaymentsController lives here (not PaymentsModule) to avoid circular deps:
-//   OrdersService → PaymentsService (via PaymentsModule)
-//   PaymentsController → OrdersService + PaymentsService (both available here)
 @Module({
   imports: [
     TypeOrmModule.forFeature([
@@ -26,6 +24,7 @@ import { PaymentsController } from '../payments/payments.controller';
       OrderStatusEvent,
     ]),
     PaymentsModule,
+    WalletModule,
   ],
   controllers: [OrdersController, PaymentsController],
   providers: [

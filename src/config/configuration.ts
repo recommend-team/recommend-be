@@ -176,7 +176,56 @@ export const walletConfig = registerAs('wallet', () => ({
     10,
   ),
   bankListCacheHours: parseInt(process.env.BANK_LIST_CACHE_HOURS || '24', 10),
+
+  /** Below this a ₦25 fee stops being a rounding error and starts being a tax. */
+  minWithdrawalNgn: parseInt(process.env.MIN_WITHDRAWAL_NGN || '2000', 10),
+  transferFeeTiers: parseFeeTiers(
+    process.env.PAYSTACK_TRANSFER_FEE_TIERS || '5000:10,50000:25,*:50',
+  ),
+  withdrawalRetryMinutes: parseInt(
+    process.env.WITHDRAWAL_RETRY_MINUTES || '30',
+    10,
+  ),
+  /** Roughly four hours of retries at the default interval, then a human looks. */
+  withdrawalMaxAttempts: parseInt(
+    process.env.WITHDRAWAL_MAX_ATTEMPTS || '8',
+    10,
+  ),
 }));
+
+export interface FeeTier {
+  /** Null is the catch-all, and must be last. */
+  upTo: number | null;
+  fee: number;
+}
+
+function parseFeeTiers(raw: string): FeeTier[] {
+  const tiers = raw
+    .split(',')
+    .map((part) => part.trim())
+    .filter(Boolean)
+    .map((part) => {
+      const [bound, fee] = part.split(':');
+      return {
+        upTo: bound === '*' ? null : Number(bound),
+        fee: Number(fee),
+      };
+    })
+    .filter(
+      (tier) =>
+        Number.isFinite(tier.fee) &&
+        tier.fee >= 0 &&
+        (tier.upTo === null || Number.isFinite(tier.upTo)),
+    );
+
+  return tiers.length > 0
+    ? tiers
+    : [
+        { upTo: 5000, fee: 10 },
+        { upTo: 50000, fee: 25 },
+        { upTo: null, fee: 50 },
+      ];
+}
 
 export const pushConfig = registerAs('push', () => ({
   publicKey: process.env.VAPID_PUBLIC_KEY,

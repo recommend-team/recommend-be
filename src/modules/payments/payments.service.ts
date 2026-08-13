@@ -27,6 +27,22 @@ export interface ResolvedAccount {
 /** Paystack rejected the account itself — not a network or credential problem. */
 export class AccountResolutionError extends Error {}
 
+/**
+ * The money has not settled into our Paystack balance yet. Retryable, and the ordinary
+ * case for a withdrawal requested the same day the order was paid for.
+ */
+export class InsufficientPaystackBalanceError extends Error {}
+
+/** Paystack will never accept this transfer. Retrying cannot help. */
+export class TransferRejectedError extends Error {}
+export class TransferOtpRequiredError extends Error {}
+
+export interface TransferResult {
+  transferCode: string;
+  /** Paystack's own word: `success`, `pending`, `otp`, … */
+  status: string;
+}
+
 @Injectable()
 export class PaymentsService {
   private readonly logger = new Logger(PaymentsService.name);
@@ -217,6 +233,76 @@ export class PaymentsService {
     return json.recipient_code;
   }
 
+  /**
+   * Send money to a recipient.
+   *
+   * `reference` is ours and is reused on every retry, so Paystack deduplicates and a
+   * retry can never send twice. That property is what makes the retry loop safe.
+   *
+   * Failures are typed by whether retrying could ever help — an unsettled balance clears
+   * on its own, a frozen account never does, and treating them alike either gives up on
+   * money that would have arrived or retries forever against a wall.
+   */
+  async initiateTransfer(params: {
+    amountNgn: number;
+    recipientCode: string;
+    reference: string;
+    reason: string;
+  }): Promise<TransferResult> {
+    let response: Response;
+    try {
+      response = await fetch(`${this.baseUrl}/transfer`, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${this.secretKey}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          source: 'balance',
+          amount: Math.round(params.amountNgn * 100),
+          recipient: params.recipientCode,
+          reference: params.reference,
+          reason: params.reason,
+        }),
+      });
+    } catch (err) {
+      this.logger.error(`Paystack network error on transfer`, err);
+      throw new InternalServerErrorException(
+        'Could not reach the payment gateway to send that transfer.',
+      );
+    }
+
+    const json = (await response.json()) as {
+      status: boolean;
+      message?: string;
+      data?: { transfer_code?: string; status?: string };
+    };
+
+    if (!response.ok || !json.status || !json.data) {
+      const message = json.message ?? 'Paystack refused the transfer.';
+
+      if (isInsufficientBalance(message)) {
+        throw new InsufficientPaystackBalanceError(message);
+      }
+      if (response.status >= 500) {
+        throw new InternalServerErrorException(message);
+      }
+      throw new TransferRejectedError(message);
+    }
+
+    if (json.data.status === 'otp') {
+      throw new TransferOtpRequiredError(
+        'Paystack is requiring an OTP for transfers. Disable Transfers OTP in the ' +
+          'Paystack dashboard — no withdrawal can complete until it is off.',
+      );
+    }
+
+    return {
+      transferCode: json.data.transfer_code ?? '',
+      status: json.data.status ?? 'pending',
+    };
+  }
+
   // ─── Transport ──────────────────────────────────────────────────────────────
 
   private async get<T>(
@@ -312,4 +398,17 @@ export class PaymentsService {
 
     return { event: payload.event, data: payload.data };
   }
+}
+
+/**
+ * Paystack has no error code for this, only prose, so the wording is all there is to go
+ * on.
+ */
+function isInsufficientBalance(message: string): boolean {
+  const normalised = message.toLowerCase();
+  return (
+    normalised.includes('balance is not enough') ||
+    normalised.includes('insufficient balance') ||
+    normalised.includes('insufficient funds')
+  );
 }

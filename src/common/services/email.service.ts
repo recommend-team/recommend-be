@@ -170,6 +170,14 @@ export class EmailService {
           <p><strong>${context.bankName} ${context.masked}</strong> was ${context.action} ${context.action === 'added' ? 'to' : 'from'} your Recommend payout accounts.</p>
           <p><strong>If this was not you, contact support immediately</strong> — this is how earnings get redirected.</p>
         `;
+      case 'withdrawal-requested':
+        return `
+          <h1>Your withdrawal is on its way</h1>
+          <p>Hello ${context.name},</p>
+          <p><strong>₦${context.amountSent}</strong> is on its way to your bank, after a ₦${context.feeAmount} transfer fee.</p>
+          <p>Reference: ${context.reference}</p>
+          <p><strong>If you did not request this, contact support immediately.</strong></p>
+        `;
       default:
         return '<p>Email from Recommend</p>';
     }

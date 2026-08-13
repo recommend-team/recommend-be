@@ -113,12 +113,23 @@ export class WalletService {
    * A stored balance is the classic way to lose money: one double-processed event and the
    * number is wrong with no way to find out where. Summing is slower and always explicable.
    */
-  async balanceOf(userId: string): Promise<number> {
-    return (await this.summaryOf(userId)).balance;
+  /**
+   * Pass `manager` when the caller holds a lock: read it on their connection, or the sum
+   * comes from outside their transaction and the lock has protected nothing.
+   */
+  async balanceOf(userId: string, manager?: EntityManager): Promise<number> {
+    return (await this.summaryOf(userId, manager)).balance;
   }
 
-  async summaryOf(userId: string): Promise<WalletSummary> {
-    const row = await this.entries
+  async summaryOf(
+    userId: string,
+    manager?: EntityManager,
+  ): Promise<WalletSummary> {
+    const repository = manager
+      ? manager.getRepository(WalletEntry)
+      : this.entries;
+
+    const row = await repository
       .createQueryBuilder('entry')
       .select('COALESCE(SUM(entry.amount), 0)', 'balance')
       .addSelect('COUNT(entry.id)', 'count')
