@@ -13,6 +13,20 @@ export interface PaystackInitResult {
   reference: string;
 }
 
+export interface Bank {
+  name: string;
+  code: string;
+  slug: string;
+}
+
+export interface ResolvedAccount {
+  accountNumber: string;
+  accountName: string;
+}
+
+/** Paystack rejected the account itself — not a network or credential problem. */
+export class AccountResolutionError extends Error {}
+
 @Injectable()
 export class PaymentsService {
   private readonly logger = new Logger(PaymentsService.name);
@@ -135,6 +149,137 @@ export class PaymentsService {
         typeof json.data.amount === 'number' ? json.data.amount / 100 : null,
       paidAt: json.data.paid_at ? new Date(json.data.paid_at) : null,
     };
+  }
+
+  // ─── Payouts ────────────────────────────────────────────────────────────────
+
+  /**
+   * Every bank Paystack can send to. The vendor picks from this, so an unsupported bank
+   * is unselectable rather than a failure discovered at the first withdrawal.
+   */
+  async listBanks(): Promise<Bank[]> {
+    const json = await this.get<{ name: string; code: string; slug: string }[]>(
+      '/bank?currency=NGN&perPage=200',
+      'load the bank list',
+    );
+
+    return json.map((bank) => ({
+      name: bank.name,
+      code: bank.code,
+      slug: bank.slug,
+    }));
+  }
+
+  /**
+   * Prove the account exists at that bank, and get the name it is actually held under.
+   *
+   * The resolved name is authoritative over anything the user typed — that is the whole
+   * point of asking Paystack rather than trusting a form field.
+   */
+  async resolveAccount(
+    accountNumber: string,
+    bankCode: string,
+  ): Promise<ResolvedAccount> {
+    const query = `account_number=${encodeURIComponent(
+      accountNumber,
+    )}&bank_code=${encodeURIComponent(bankCode)}`;
+
+    const json = await this.get<{
+      account_number: string;
+      account_name: string;
+    }>(`/bank/resolve?${query}`, 'verify that account', AccountResolutionError);
+
+    return {
+      accountNumber: json.account_number,
+      accountName: json.account_name,
+    };
+  }
+
+  /** The handle a transfer is addressed to. Created once per account. */
+  async createTransferRecipient(params: {
+    name: string;
+    accountNumber: string;
+    bankCode: string;
+  }): Promise<string> {
+    const json = await this.post<{ recipient_code: string }>(
+      '/transferrecipient',
+      {
+        type: 'nuban',
+        name: params.name,
+        account_number: params.accountNumber,
+        bank_code: params.bankCode,
+        currency: 'NGN',
+      },
+      'register that account for payouts',
+      AccountResolutionError,
+    );
+
+    return json.recipient_code;
+  }
+
+  // ─── Transport ──────────────────────────────────────────────────────────────
+
+  private async get<T>(
+    path: string,
+    action: string,
+    RejectionError?: new (message: string) => Error,
+  ): Promise<T> {
+    return this.call<T>('GET', path, undefined, action, RejectionError);
+  }
+
+  private async post<T>(
+    path: string,
+    body: Record<string, unknown>,
+    action: string,
+    RejectionError?: new (message: string) => Error,
+  ): Promise<T> {
+    return this.call<T>('POST', path, body, action, RejectionError);
+  }
+
+  /**
+   * A Paystack call, with the two failures kept apart: we could not reach them, versus
+   * they answered and said no. The first is ours to retry, the second is the user's to fix.
+   */
+  private async call<T>(
+    method: 'GET' | 'POST',
+    path: string,
+    body: Record<string, unknown> | undefined,
+    action: string,
+    RejectionError?: new (message: string) => Error,
+  ): Promise<T> {
+    let response: Response;
+    try {
+      response = await fetch(`${this.baseUrl}${path}`, {
+        method,
+        headers: {
+          Authorization: `Bearer ${this.secretKey}`,
+          ...(body ? { 'Content-Type': 'application/json' } : {}),
+        },
+        body: body ? JSON.stringify(body) : undefined,
+      });
+    } catch (err) {
+      this.logger.error(`Paystack network error on ${path}`, err);
+      throw new InternalServerErrorException(
+        `Could not reach the payment gateway to ${action}. Please try again.`,
+      );
+    }
+
+    const json = (await response.json()) as {
+      status: boolean;
+      message?: string;
+      data?: T;
+    };
+
+    if (!response.ok || !json.status || json.data === undefined) {
+      const message = json.message ?? `Could not ${action}.`;
+      this.logger.warn(`Paystack refused ${path}: ${message}`);
+      if (RejectionError && response.status >= 400 && response.status < 500) {
+        throw new RejectionError(message);
+      }
+      throw new InternalServerErrorException(message);
+    }
+
+    return json.data;
   }
 
   /**

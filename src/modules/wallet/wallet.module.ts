@@ -1,9 +1,14 @@
 import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { WalletEntry } from './entities/wallet-entry.entity';
+import { Account } from './entities/account.entity';
 import { WalletService } from './wallet.service';
+import { AccountsService } from './accounts.service';
 import { WalletController } from './wallet.controller';
+import { AccountsController } from './accounts.controller';
 import { EarningListener } from './earning.listener';
+import { PaymentsModule } from '../payments/payments.module';
+import { CommonModule } from '../../common/common.module';
 
 /**
  * The ledger, and what fills it.
@@ -13,9 +18,13 @@ import { EarningListener } from './earning.listener';
  * here and move money.
  */
 @Module({
-  imports: [TypeOrmModule.forFeature([WalletEntry])],
-  controllers: [WalletController],
-  providers: [WalletService, EarningListener],
-  exports: [WalletService],
+  imports: [
+    TypeOrmModule.forFeature([WalletEntry, Account]),
+    PaymentsModule,
+    CommonModule,
+  ],
+  controllers: [WalletController, AccountsController],
+  providers: [WalletService, AccountsService, EarningListener],
+  exports: [WalletService, AccountsService],
 })
 export class WalletModule {}

@@ -12,6 +12,7 @@ import configuration, {
   googleConfig,
   deliveryConfig,
   platformConfig,
+  walletConfig,
   pushConfig,
   chatConfig,
 } from './configuration';
@@ -34,6 +35,7 @@ import { validate } from './config.validation';
         googleConfig,
         deliveryConfig,
         platformConfig,
+        walletConfig,
         pushConfig,
         chatConfig,
       ],

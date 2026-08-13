@@ -152,6 +152,32 @@ export const platformConfig = registerAs('platform', () => {
   };
 });
 
+export const walletConfig = registerAs('wallet', () => ({
+  maxPayoutAccounts: parseInt(process.env.MAX_PAYOUT_ACCOUNTS || '4', 10),
+  codeTtlMinutes: parseInt(
+    process.env.PAYOUT_ACCOUNT_CODE_TTL_MINUTES || '15',
+    10,
+  ),
+  /** Six digits falls in seconds unthrottled. */
+  maxCodeAttempts: parseInt(
+    process.env.PAYOUT_ACCOUNT_MAX_CODE_ATTEMPTS || '5',
+    10,
+  ),
+  resendSeconds: parseInt(
+    process.env.PAYOUT_ACCOUNT_RESEND_SECONDS || '60',
+    10,
+  ),
+  /**
+   * How long one password confirmation covers further sensitive actions. Per-action
+   * re-entry trains vendors into a weak password or a saved one, which protects nothing.
+   */
+  passwordConfirmationMinutes: parseInt(
+    process.env.PASSWORD_CONFIRMATION_TTL_MINUTES || '15',
+    10,
+  ),
+  bankListCacheHours: parseInt(process.env.BANK_LIST_CACHE_HOURS || '24', 10),
+}));
+
 export const pushConfig = registerAs('push', () => ({
   publicKey: process.env.VAPID_PUBLIC_KEY,
   privateKey: process.env.VAPID_PRIVATE_KEY,
