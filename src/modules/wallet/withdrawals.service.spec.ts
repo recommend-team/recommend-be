@@ -2,7 +2,7 @@ import { Test, TestingModule } from '@nestjs/testing';
 import { ConfigService } from '@nestjs/config';
 import { getRepositoryToken } from '@nestjs/typeorm';
 import { DataSource, EntityManager } from 'typeorm';
-import { BadRequestException } from '@nestjs/common';
+import { BadRequestException, Logger } from '@nestjs/common';
 import { WithdrawalsService } from './withdrawals.service';
 import { WalletService, NewEntry } from './wallet.service';
 import { Withdrawal, WithdrawalStatus } from './entities/withdrawal.entity';
@@ -11,6 +11,7 @@ import { WalletEntryType } from './entities/wallet-entry.entity';
 import {
   InsufficientPaystackBalanceError,
   PaymentsService,
+  TransferNotPermittedError,
   TransferOtpRequiredError,
   TransferRejectedError,
 } from '../payments/payments.service';
@@ -290,6 +291,34 @@ describe('WithdrawalsService', () => {
       await service.send(row);
 
       expect(row.status).toBe(WithdrawalStatus.FAILED);
+    });
+
+    it('flags an account-level block as blocking everyone, not this vendor', async () => {
+      // Observed from Paystack on a test key before the business is upgraded. Retrying
+      // cannot help, and it will fail every vendor's withdrawal identically.
+      payments.initiateTransfer.mockRejectedValue(
+        new TransferNotPermittedError(
+          'You cannot initiate third party payouts as a starter business',
+        ),
+      );
+      const logged: string[] = [];
+      jest
+        .spyOn(Logger.prototype, 'error')
+        .mockImplementation((message: unknown) => {
+          logged.push(String(message));
+        });
+
+      const row = withdrawal();
+      await service.send(row);
+
+      expect(row.status).toBe(WithdrawalStatus.FAILED);
+      expect(logged.join(' ')).toMatch(/BLOCKED FOR EVERY VENDOR/);
+      expect(ledger).toContainEqual(
+        expect.objectContaining({
+          type: WalletEntryType.WITHDRAWAL_REVERSED,
+          amount: 4800,
+        }),
+      );
     });
 
     it('keeps a network failure retryable, since it may have landed', async () => {

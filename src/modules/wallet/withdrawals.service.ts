@@ -15,6 +15,7 @@ import { WalletService } from './wallet.service';
 import {
   InsufficientPaystackBalanceError,
   PaymentsService,
+  TransferNotPermittedError,
   TransferOtpRequiredError,
   TransferRejectedError,
 } from '../payments/payments.service';
@@ -209,10 +210,13 @@ export class WithdrawalsService {
       return;
     }
 
-    if (error instanceof TransferOtpRequiredError) {
-      // Every withdrawal will fail this way until the dashboard setting changes, so it is
-      // logged as the configuration fault it is rather than a fault of this one transfer.
-      this.logger.error(message);
+    if (
+      error instanceof TransferOtpRequiredError ||
+      error instanceof TransferNotPermittedError
+    ) {
+      this.logger.error(
+        `PAYOUTS ARE BLOCKED FOR EVERY VENDOR — Paystack said: ${message}`,
+      );
       await this.fail(withdrawal, message);
       return;
     }

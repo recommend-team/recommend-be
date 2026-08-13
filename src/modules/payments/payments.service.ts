@@ -37,6 +37,16 @@ export class InsufficientPaystackBalanceError extends Error {}
 export class TransferRejectedError extends Error {}
 export class TransferOtpRequiredError extends Error {}
 
+/**
+ * Our own Paystack account is not allowed to pay out — an unupgraded "starter business",
+ * transfers not enabled, or similar.
+ *
+ * Separate from `TransferRejectedError` because it is not about this withdrawal: it will
+ * block every one of them. Failing them one at a time looks like bad luck with vendors'
+ * banks, when the truth is a single account-level setting.
+ */
+export class TransferNotPermittedError extends Error {}
+
 export interface TransferResult {
   transferCode: string;
   /** Paystack's own word: `success`, `pending`, `otp`, … */
@@ -284,6 +294,9 @@ export class PaymentsService {
       if (isInsufficientBalance(message)) {
         throw new InsufficientPaystackBalanceError(message);
       }
+      if (isNotPermitted(message)) {
+        throw new TransferNotPermittedError(message);
+      }
       if (response.status >= 500) {
         throw new InternalServerErrorException(message);
       }
@@ -410,5 +423,21 @@ function isInsufficientBalance(message: string): boolean {
     normalised.includes('balance is not enough') ||
     normalised.includes('insufficient balance') ||
     normalised.includes('insufficient funds')
+  );
+}
+
+/**
+ * Restrictions on our own account rather than on the transfer.
+ *
+ * "You cannot initiate third party payouts as a starter business" is the exact wording a
+ * test key returns before the business is upgraded — observed, not guessed.
+ */
+function isNotPermitted(message: string): boolean {
+  const normalised = message.toLowerCase();
+  return (
+    normalised.includes('starter business') ||
+    normalised.includes('cannot initiate third party payouts') ||
+    normalised.includes('transfers are not available') ||
+    normalised.includes('not enabled for transfers')
   );
 }
