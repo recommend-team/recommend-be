@@ -4,6 +4,8 @@ import {
   IsNumber,
   IsString,
   IsOptional,
+  Max,
+  Min,
   validateSync,
 } from 'class-validator';
 
@@ -117,6 +119,12 @@ class EnvironmentVariables {
   @IsOptional()
   @IsNumber()
   DELIVERY_FEE_NGN?: number;
+
+  @IsOptional()
+  @IsNumber()
+  @Min(0)
+  @Max(100)
+  PLATFORM_FEE_PERCENT?: number;
 
   @IsOptional()
   @IsString()

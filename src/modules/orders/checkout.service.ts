@@ -18,8 +18,8 @@ import { OrderStatus } from '../../common/enums/order-status.enum';
 import { FulfillmentType } from '../../common/enums/fulfillment-type.enum';
 import { SellerStatus } from '../../common/enums/seller-status.enum';
 
-/** Platform's cut of every vendor's goods subtotal. */
-const PLATFORM_FEE_RATE = 0.2;
+
+const FALLBACK_PLATFORM_FEE_RATE = 0.2;
 
 export type CartChangeReason =
   | 'REMOVED'
@@ -72,6 +72,21 @@ export class CheckoutService {
     return fulfillmentType === FulfillmentType.DELIVERY
       ? round2(this.configService.get<number>('delivery.feeNgn') ?? 0)
       : 0;
+  }
+
+  /**
+   * Recommend's cut of a vendor's subtotal, as a fraction.
+   *
+   * Read per checkout rather than cached on the instance, so a rate change takes effect on
+   * the next order instead of the next deploy. Orders already placed are untouched: their
+   * fee and payout were written onto the row when they were created, and nothing recomputes
+   * them afterwards.
+   */
+  private platformFeeRate(): number {
+    return (
+      this.configService.get<number>('platform.feeRate') ??
+      FALLBACK_PLATFORM_FEE_RATE
+    );
   }
 
   /**
@@ -309,9 +324,12 @@ export class CheckoutService {
       });
       const savedCheckout = await manager.save(checkout);
 
+      const feeRate = this.platformFeeRate();
+
       for (const group of grouped.values()) {
-        // Each vendor is owed 80% of THEIR items. Delivery never enters this.
-        const platformFee = round2(group.subtotal * PLATFORM_FEE_RATE);
+        // Each vendor is owed their items less the platform's cut. Delivery never enters
+        // this. Both figures are written onto the row here and never recomputed.
+        const platformFee = round2(group.subtotal * feeRate);
         const vendorAmount = round2(group.subtotal - platformFee);
 
         const order = manager.create(Order, {

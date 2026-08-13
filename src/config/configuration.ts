@@ -143,6 +143,15 @@ export const deliveryConfig = registerAs('delivery', () => ({
   feeNgn: parseInt(process.env.DELIVERY_FEE_NGN || '1500', 10),
 }));
 
+export const platformConfig = registerAs('platform', () => {
+  const feePercent = parseInt(process.env.PLATFORM_FEE_PERCENT || '20', 10);
+  return {
+    feePercent,
+    /** The fraction checkout multiplies a vendor's subtotal by. Converted once, here. */
+    feeRate: feePercent / 100,
+  };
+});
+
 export const pushConfig = registerAs('push', () => ({
   publicKey: process.env.VAPID_PUBLIC_KEY,
   privateKey: process.env.VAPID_PRIVATE_KEY,

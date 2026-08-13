@@ -11,6 +11,7 @@ import { FulfillmentType } from '../../common/enums/fulfillment-type.enum';
 import { SellerStatus } from '../../common/enums/seller-status.enum';
 
 const DELIVERY_FEE = 1500;
+const DEFAULT_FEE_PERCENT = 20;
 
 interface SavedRow {
   id?: string;
@@ -62,9 +63,22 @@ describe('CheckoutService', () => {
     orders: SavedOrder[];
     items: SavedItem[];
   };
+  /** Mutable so a test can move the rate the way an operator would. */
+  let feePercent: number;
+  let config: { get: jest.Mock };
 
   beforeEach(async () => {
     saved = { checkouts: [], orders: [], items: [] };
+    feePercent = DEFAULT_FEE_PERCENT;
+    config = {
+      // Key-aware, because the service now reads two different numbers. A mock answering
+      // every key with the same value would have paid vendors a 1,500% fee.
+      get: jest.fn((key: string) => {
+        if (key === 'delivery.feeNgn') return DELIVERY_FEE;
+        if (key === 'platform.feeRate') return feePercent / 100;
+        return undefined;
+      }),
+    };
     products = { find: jest.fn().mockResolvedValue([]) };
     checkouts = { delete: jest.fn() };
     payments = {
@@ -102,10 +116,7 @@ describe('CheckoutService', () => {
         { provide: getRepositoryToken(Product), useValue: products },
         { provide: getRepositoryToken(Checkout), useValue: checkouts },
         { provide: PaymentsService, useValue: payments },
-        {
-          provide: ConfigService,
-          useValue: { get: jest.fn().mockReturnValue(DELIVERY_FEE) },
-        },
+        { provide: ConfigService, useValue: config },
         {
           provide: DataSource,
           useValue: {
@@ -226,6 +237,72 @@ describe('CheckoutService', () => {
 
       expect(result.deliveryFee).toBe(0);
       expect(result.totalAmount).toBe(result.goodsTotal);
+    });
+  });
+
+  describe('the commission rate is configuration', () => {
+    beforeEach(() => {
+      products.find.mockResolvedValue([
+        product({ id: 'jollof', price: 3000, vendorId: 'mamas' }),
+      ]);
+    });
+
+    const buy = () =>
+      service.createCheckout({
+        ...baseDto,
+        items: [{ productId: 'jollof', quantity: 2 }],
+      } as never);
+
+    it('splits at whatever rate is configured', async () => {
+      feePercent = 15;
+      await buy();
+
+      expect(saved.orders[0]).toMatchObject({
+        totalAmount: 6000,
+        platformFee: 900,
+        vendorAmount: 5100,
+      });
+    });
+
+    it('pays the vendor everything at 0%', async () => {
+      feePercent = 0;
+      await buy();
+
+      expect(saved.orders[0]).toMatchObject({
+        platformFee: 0,
+        vendorAmount: 6000,
+      });
+    });
+
+    it('still reconciles at a changed rate', async () => {
+      feePercent = 15;
+      const result = await buy();
+
+      const payouts = saved.orders.reduce((s, o) => s + o.vendorAmount, 0);
+      const fees = saved.orders.reduce((s, o) => s + o.platformFee, 0);
+
+      expect(payouts + fees + result.deliveryFee).toBe(result.totalAmount);
+    });
+
+    it('leaves the delivery fee alone — it is not a commission', async () => {
+      feePercent = 15;
+      const result = await buy();
+
+      expect(result.deliveryFee).toBe(DELIVERY_FEE);
+    });
+
+    it('falls back to 20% rather than 0 when the namespace is missing', async () => {
+      // A missing namespace reading as 0 would silently hand vendors the platform's cut.
+      config.get.mockImplementation((key: string) =>
+        key === 'delivery.feeNgn' ? DELIVERY_FEE : undefined,
+      );
+
+      await buy();
+
+      expect(saved.orders[0]).toMatchObject({
+        platformFee: 1200,
+        vendorAmount: 4800,
+      });
     });
   });
 
