@@ -87,23 +87,12 @@ export const cloudinaryConfig = registerAs('cloudinary', () => ({
 
 export const openaiConfig = registerAs('openai', () => ({
   apiKey: process.env.OPENAI_API_KEY,
-  // gpt-4-turbo-preview was retired and now 404s. Discovery is short prompts over
-  // small tool results, so the cheapest capable tool-calling model is the right
-  // default; move up to gpt-4.1-mini or gpt-4o if reply quality needs it.
   model: process.env.OPENAI_MODEL || 'gpt-4o-mini',
   temperature: parseFloat(process.env.OPENAI_TEMPERATURE || '0.2'),
 }));
 
-export const emailConfig = registerAs('email', () => ({
-  host: process.env.EMAIL_HOST,
-  port: parseInt(process.env.EMAIL_PORT || '587', 10),
-  secure: process.env.EMAIL_SECURE === 'true',
-  auth: {
-    user: process.env.EMAIL_USER,
-    pass: process.env.EMAIL_PASSWORD,
-  },
-  from: process.env.EMAIL_FROM || 'noreply@recommend.ng',
-}));
+// No `emailConfig` here. `EmailService` reads BREVO_API_KEY and BREVO_SENDER_EMAIL
+// directly; an SMTP namespace nothing consumed only advertised variables that do nothing.
 
 export const paymentConfig = registerAs('payment', () => ({
   provider: process.env.PAYMENT_PROVIDER || 'paystack',

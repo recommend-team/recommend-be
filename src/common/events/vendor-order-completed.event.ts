@@ -1,4 +1,3 @@
-
 export const VENDOR_ORDER_COMPLETED_EVENT = 'vendor-order.completed';
 
 export class VendorOrderCompletedEvent {

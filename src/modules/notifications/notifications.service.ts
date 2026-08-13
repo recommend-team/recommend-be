@@ -11,6 +11,14 @@ import {
   CheckoutPaidEvent,
   CheckoutPaidVendorOrder,
 } from '../../common/events/checkout-paid.event';
+import {
+  WALLET_CREDITED_EVENT,
+  WITHDRAWAL_FAILED_EVENT,
+  WITHDRAWAL_SETTLED_EVENT,
+  WalletCreditedEvent,
+  WithdrawalFailedEvent,
+  WithdrawalSettledEvent,
+} from '../../common/events/wallet.events';
 
 @Injectable()
 export class NotificationsService {
@@ -25,19 +33,12 @@ export class NotificationsService {
     private readonly emailService: EmailService,
   ) {}
 
-  /**
-   * A paid checkout is the moment vendors need to know something. Each vendor is
-   * told about their own part only — never the whole basket, which may include
-   * another restaurant's items.
-   */
   @OnEvent(CHECKOUT_PAID_EVENT)
   async onCheckoutPaid(event: CheckoutPaidEvent): Promise<void> {
     for (const order of event.orders) {
       try {
         await this.notifyVendorOfOrder(event, order);
       } catch (error) {
-        // One vendor's notification failing must not stop the others, and must
-        // never bubble back into the webhook that triggered it.
         this.logger.error(
           `Failed to notify vendor ${order.vendorId} about order ${order.orderId}: ${
             error instanceof Error ? error.message : 'unknown error'
@@ -95,6 +96,111 @@ export class NotificationsService {
         }),
       this.emailVendor(order.vendorId, title, body, event, order),
     ]);
+  }
+
+  @OnEvent(WALLET_CREDITED_EVENT)
+  async onWalletCredited(event: WalletCreditedEvent): Promise<void> {
+    await this.safely('wallet credit', event.userId, async () => {
+      await this.create({
+        userId: event.userId,
+        type: NotificationType.WALLET_CREDITED,
+        title: 'Added to your wallet',
+        body: `₦${event.vendorAmount.toLocaleString()} from order ${event.reference} is now available to withdraw.`,
+        data: {
+          orderId: event.orderId,
+          reference: event.reference,
+          amount: event.vendorAmount,
+        },
+      });
+    });
+  }
+
+  /** Money reached their bank. Worth interrupting for — it is the end of the loop. */
+  @OnEvent(WITHDRAWAL_SETTLED_EVENT)
+  async onWithdrawalSettled(event: WithdrawalSettledEvent): Promise<void> {
+    await this.safely('withdrawal settled', event.userId, async () => {
+      const title = 'Withdrawal paid out';
+      const body = `₦${event.amountSent.toLocaleString()} has reached your bank account.`;
+
+      const notification = await this.create({
+        userId: event.userId,
+        type: NotificationType.WITHDRAWAL_SETTLED,
+        title,
+        body,
+        data: {
+          withdrawalId: event.withdrawalId,
+          reference: event.reference,
+          amountSent: event.amountSent,
+        },
+      });
+
+      await this.push(event.userId, title, body, notification.id);
+    });
+  }
+
+  /**
+   * Their money did not arrive. The most important notification in the wallet: the
+   * balance silently going back up, with no message, is how a vendor concludes we lost it.
+   */
+  @OnEvent(WITHDRAWAL_FAILED_EVENT)
+  async onWithdrawalFailed(event: WithdrawalFailedEvent): Promise<void> {
+    await this.safely('withdrawal failed', event.userId, async () => {
+      const title = event.reversed
+        ? 'Withdrawal returned'
+        : 'Withdrawal did not go through';
+      const body =
+        `₦${event.amountReturned.toLocaleString()} is back in your wallet. ` +
+        (event.reversed
+          ? 'The transfer was sent but the bank returned it.'
+          : 'Check your payout account details and try again.');
+
+      const notification = await this.create({
+        userId: event.userId,
+        type: NotificationType.WITHDRAWAL_FAILED,
+        title,
+        body,
+        data: {
+          withdrawalId: event.withdrawalId,
+          reference: event.reference,
+          amountReturned: event.amountReturned,
+          // Not shown to the vendor — Paystack's wording is for whoever they ask.
+          reason: event.reason,
+        },
+      });
+
+      await this.push(event.userId, title, body, notification.id);
+    });
+  }
+
+  private async push(
+    userId: string,
+    title: string,
+    body: string,
+    notificationId: string,
+  ): Promise<void> {
+    await this.pushService
+      .sendToUser(userId, { title, body, data: { notificationId } })
+      .catch((error: unknown) => {
+        this.logger.warn(`Push failed for user ${userId}`, error);
+        return 0;
+      });
+  }
+
+  /** A notification that cannot be written must never unwind the money that caused it. */
+  private async safely(
+    what: string,
+    userId: string,
+    work: () => Promise<void>,
+  ): Promise<void> {
+    try {
+      await work();
+    } catch (error) {
+      this.logger.error(
+        `Failed to notify ${userId} of ${what}: ${
+          error instanceof Error ? error.message : 'unknown error'
+        }`,
+      );
+    }
   }
 
   private async emailVendor(

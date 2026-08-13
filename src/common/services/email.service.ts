@@ -1,4 +1,8 @@
-import { Injectable, InternalServerErrorException } from '@nestjs/common';
+import {
+  Injectable,
+  InternalServerErrorException,
+  Logger,
+} from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import * as brevo from '@getbrevo/brevo';
 
@@ -13,6 +17,7 @@ export interface EmailOptions {
 
 @Injectable()
 export class EmailService {
+  private readonly logger = new Logger(EmailService.name);
   private apiInstance: brevo.TransactionalEmailsApi;
 
   constructor(private readonly configService: ConfigService) {
@@ -22,6 +27,14 @@ export class EmailService {
       this.apiInstance.setApiKey(
         brevo.TransactionalEmailsApiApiKeys.apiKey,
         apiKey,
+      );
+    }
+
+    if (!apiKey || !this.configService.get<string>('BREVO_SENDER_EMAIL')) {
+      this.logger.error(
+        'BREVO_API_KEY or BREVO_SENDER_EMAIL is not set — NO EMAIL WILL BE SENT. ' +
+          'Vendors will not be told about orders, and payout verification codes will ' +
+          'not arrive.',
       );
     }
   }

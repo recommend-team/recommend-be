@@ -12,13 +12,11 @@ export enum NotificationType {
   ORDER_CANCELLED = 'ORDER_CANCELLED',
   KYC_APPROVED = 'KYC_APPROVED',
   KYC_REJECTED = 'KYC_REJECTED',
+  WALLET_CREDITED = 'WALLET_CREDITED',
+  WITHDRAWAL_SETTLED = 'WITHDRAWAL_SETTLED',
+  WITHDRAWAL_FAILED = 'WITHDRAWAL_FAILED',
 }
 
-/**
- * The in-app notification feed. This is the record of record: email and web push
- * are best-effort delivery on top of it, so a vendor who missed both still sees
- * everything the next time they open their dashboard.
- */
 @Entity('notifications')
 export class Notification {
   @PrimaryGeneratedColumn('uuid')

@@ -2,6 +2,7 @@ import { Test, TestingModule } from '@nestjs/testing';
 import { ConfigService } from '@nestjs/config';
 import { getRepositoryToken } from '@nestjs/typeorm';
 import { DataSource, EntityManager } from 'typeorm';
+import { EventEmitter2 } from '@nestjs/event-emitter';
 import { BadRequestException, NotFoundException } from '@nestjs/common';
 import { WalletService, NewEntry } from './wallet.service';
 import { WithdrawalsService } from './withdrawals.service';
@@ -151,6 +152,7 @@ describe('admin controls', () => {
           },
           { provide: PaymentsService, useValue: payments },
           { provide: EmailService, useValue: { sendEmail: jest.fn() } },
+          { provide: EventEmitter2, useValue: { emit: jest.fn() } },
           {
             provide: ConfigService,
             useValue: { get: jest.fn().mockReturnValue(8) },

@@ -2,6 +2,7 @@ import { Test, TestingModule } from '@nestjs/testing';
 import { ConfigService } from '@nestjs/config';
 import { getRepositoryToken } from '@nestjs/typeorm';
 import { DataSource, EntityManager } from 'typeorm';
+import { EventEmitter2 } from '@nestjs/event-emitter';
 import { BadRequestException, Logger } from '@nestjs/common';
 import { WithdrawalsService } from './withdrawals.service';
 import { WalletService, NewEntry } from './wallet.service';
@@ -134,6 +135,7 @@ describe('WithdrawalsService', () => {
         { provide: WalletService, useValue: wallet },
         { provide: PaymentsService, useValue: payments },
         { provide: EmailService, useValue: email },
+        { provide: EventEmitter2, useValue: { emit: jest.fn() } },
         {
           provide: ConfigService,
           useValue: { get: jest.fn((key: string) => CONFIG[key]) },

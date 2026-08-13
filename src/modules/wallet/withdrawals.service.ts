@@ -6,6 +6,7 @@ import {
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { ConfigService } from '@nestjs/config';
+import { EventEmitter2 } from '@nestjs/event-emitter';
 import { DataSource, LessThan, Repository } from 'typeorm';
 import { randomBytes } from 'crypto';
 import { Withdrawal, WithdrawalStatus } from './entities/withdrawal.entity';
@@ -22,6 +23,12 @@ import {
 import { EmailService } from '../../common/services/email.service';
 import { User } from '../auth/entities/auth.entity';
 import type { FeeTier } from '../../config/configuration';
+import {
+  WITHDRAWAL_FAILED_EVENT,
+  WITHDRAWAL_SETTLED_EVENT,
+  WithdrawalFailedEvent,
+  WithdrawalSettledEvent,
+} from '../../common/events/wallet.events';
 
 export interface WithdrawalQuote {
   amountRequested: number;
@@ -43,6 +50,7 @@ export class WithdrawalsService {
     private readonly email: EmailService,
     private readonly config: ConfigService,
     private readonly dataSource: DataSource,
+    private readonly events: EventEmitter2,
   ) {}
 
   /** What the vendor will actually receive, shown before they confirm. */
@@ -267,6 +275,16 @@ export class WithdrawalsService {
     this.logger.log(
       `Withdrawal ${reference} settled — ₦${withdrawal.amountSent} reached the bank`,
     );
+
+    this.events.emit(
+      WITHDRAWAL_SETTLED_EVENT,
+      new WithdrawalSettledEvent(
+        withdrawal.userId,
+        withdrawal.id,
+        withdrawal.reference,
+        Number(withdrawal.amountSent),
+      ),
+    );
   }
 
   /**
@@ -326,6 +344,18 @@ export class WithdrawalsService {
 
     this.logger.warn(
       `Withdrawal ${withdrawal.reference} ${status.toLowerCase()} (${reason}) — ₦${withdrawal.amountRequested} returned`,
+    );
+
+    this.events.emit(
+      WITHDRAWAL_FAILED_EVENT,
+      new WithdrawalFailedEvent(
+        withdrawal.userId,
+        withdrawal.id,
+        withdrawal.reference,
+        Number(withdrawal.amountRequested),
+        reason,
+        status === WithdrawalStatus.REVERSED,
+      ),
     );
   }
 
