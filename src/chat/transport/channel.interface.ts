@@ -27,4 +27,13 @@ export interface ChannelAdapter {
 
   /** Live connection (PWA) or always-addressable (WhatsApp). */
   isReachable(channelAddress: string): boolean;
+
+  /**
+   * Signal that a reply is being composed. Optional because not every channel has one —
+   * but WhatsApp does, so it belongs on the seam rather than in PWA-specific code.
+   *
+   * It matters most when a person is answering: a buyer who believes they are talking to
+   * software will wait through "typing…" and will not wait through silence.
+   */
+  emitTyping?(channelAddress: string, isTyping: boolean): void;
 }

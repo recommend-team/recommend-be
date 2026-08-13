@@ -9,6 +9,8 @@ import { ConversationService } from './conversation/conversation.service';
 import { SessionService } from './session/session.service';
 import { ChatRateLimitService } from './session/rate-limit.service';
 import { EngineService } from './engine/engine.service';
+import { HandoverService } from './engine/handover.service';
+import { AdminChatController } from './transport/admin/admin-chat.controller';
 import { PaymentConfirmationListener } from './engine/payment-confirmation.listener';
 import { OrderStatusListener } from './engine/order-status.listener';
 import { AppreciationService } from './engine/appreciation.service';
@@ -48,11 +50,13 @@ import { Area } from '../modules/locations/entities/area.entity';
     JwtModule.register({}),
     OrdersModule,
   ],
+  controllers: [AdminChatController],
   providers: [
     ConversationService,
     SessionService,
     ChatRateLimitService,
     EngineService,
+    HandoverService,
     CheckoutFlow,
     PaymentConfirmationListener,
     OrderStatusListener,

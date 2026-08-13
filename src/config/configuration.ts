@@ -126,6 +126,17 @@ export const chatConfig = registerAs('chat', () => ({
     10,
   ),
   rateLimitPerHour: parseInt(process.env.CHAT_RATE_LIMIT_PER_HOUR || '200', 10),
+  /**
+   * How long an admin can be silent before a waiting buyer gets the assistant back.
+   *
+   * Measured from the admin's last message and checked only when a buyer speaks, so a
+   * hold is never released into a live conversation — and never leaves anyone waiting on
+   * a person who has gone.
+   */
+  adminHandoverStaleMinutes: parseInt(
+    process.env.ADMIN_HANDOVER_STALE_MINUTES || '30',
+    10,
+  ),
 }));
 
 export const deliveryConfig = registerAs('delivery', () => ({

@@ -25,6 +25,8 @@ export interface RecordOutboundInput {
   payload?: MessagePayload;
   author?: MessageAuthor;
   channelMessageId?: string | null;
+  /** Set when a person typed it. The author stays `ASSISTANT` either way. */
+  adminId?: string | null;
 }
 
 @Injectable()
@@ -121,6 +123,7 @@ export class ConversationService {
       payload: input.payload ?? null,
       channelMessageId: input.channelMessageId ?? null,
       clientMessageId: null,
+      adminId: input.adminId ?? null,
     });
 
     const saved = await this.messagesRepository.save(message);

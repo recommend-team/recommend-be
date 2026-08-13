@@ -79,6 +79,31 @@ export class Conversation extends BaseEntity {
   @Column({ type: 'timestamptz', nullable: true })
   lastMessageAt!: Date | null;
 
+  // ─── Human takeover ─────────────────────────────────────────────────────────
+
+  /**
+   * The admin currently answering, if any. While set, the engine records inbound
+   * messages and replies to none of them.
+   */
+  @Column({ type: 'uuid', nullable: true })
+  @Index()
+  heldByAdminId!: string | null;
+
+  @Column({ type: 'timestamptz', nullable: true })
+  heldAt!: Date | null;
+
+  /**
+   * When the admin last said something. Staleness is measured from here, not from
+   * `heldAt` — an admin mid-conversation has not abandoned it.
+   */
+  @Column({ type: 'timestamptz', nullable: true })
+  lastAdminMessageAt!: Date | null;
+
   @OneToMany(() => ChatMessage, (message) => message.conversation)
   messages!: ChatMessage[];
+
+  /** Whether a person is answering this conversation right now. */
+  isHeld(): boolean {
+    return this.heldByAdminId !== null;
+  }
 }

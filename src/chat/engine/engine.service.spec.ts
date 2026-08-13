@@ -6,6 +6,7 @@ import { Conversation } from '../conversation/entities/conversation.entity';
 import { ChatChannel, ConversationState } from '../enums/chat.enums';
 import { DiscoveryService } from './discovery/discovery.service';
 import { CheckoutFlow } from './flows/checkout.flow';
+import { HandoverService } from './handover.service';
 import { ORDERING_PORT } from '../ports/ordering.port';
 
 const conversation = {
@@ -29,6 +30,7 @@ describe('EngineService', () => {
   let registry: { send: jest.Mock };
   let discovery: { discover: jest.Mock };
   let checkoutFlow: { start: jest.Mock; handle: jest.Mock };
+  let handover: { shouldStaySilent: jest.Mock };
 
   beforeEach(async () => {
     conversations = {
@@ -41,6 +43,7 @@ describe('EngineService', () => {
       setArea: jest.fn(),
     };
     registry = { send: jest.fn().mockResolvedValue(null) };
+    handover = { shouldStaySilent: jest.fn().mockResolvedValue(false) };
     discovery = {
       discover: jest.fn().mockResolvedValue({
         messages: [{ text: 'Here is what I found:' }],
@@ -61,6 +64,7 @@ describe('EngineService', () => {
         { provide: ChannelRegistry, useValue: registry },
         { provide: DiscoveryService, useValue: discovery },
         { provide: CheckoutFlow, useValue: checkoutFlow },
+        { provide: HandoverService, useValue: handover },
         {
           provide: ORDERING_PORT,
           useValue: { listOrders: jest.fn(), completeOrder: jest.fn() },
@@ -205,5 +209,56 @@ describe('EngineService', () => {
 
     expect(greeting.text).toContain('Recommend');
     expect(registry.send).toHaveBeenCalled();
+  });
+
+  describe('when an admin is answering', () => {
+    beforeEach(() => {
+      handover.shouldStaySilent.mockResolvedValue(true);
+    });
+
+    it('still records what the buyer said', async () => {
+      // The whole point of taking over is to read them. Suppressing the reply must never
+      // suppress the message.
+      await service.handleInbound({ conversation, text: 'this is broken' });
+
+      expect(conversations.recordInbound).toHaveBeenCalledWith(
+        expect.objectContaining({ text: 'this is broken' }),
+      );
+    });
+
+    it('says nothing at all', async () => {
+      const replies = await service.handleInbound({
+        conversation,
+        text: 'this is broken',
+      });
+
+      expect(replies).toEqual([]);
+      expect(conversations.recordOutbound).not.toHaveBeenCalled();
+      expect(registry.send).not.toHaveBeenCalled();
+    });
+
+    it('spends nothing on the model', async () => {
+      await service.handleInbound({ conversation, text: 'find me jollof' });
+
+      expect(discovery.discover).not.toHaveBeenCalled();
+    });
+
+    it('does not run the checkout flow either', async () => {
+      await service.handleInbound({ conversation, text: '08012345678' });
+
+      expect(checkoutFlow.handle).not.toHaveBeenCalled();
+    });
+
+    it('answers again the moment the hold lapses', async () => {
+      handover.shouldStaySilent.mockResolvedValue(false);
+
+      const replies = await service.handleInbound({
+        conversation,
+        text: 'still there?',
+      });
+
+      expect(replies).toHaveLength(1);
+      expect(discovery.discover).toHaveBeenCalled();
+    });
   });
 });

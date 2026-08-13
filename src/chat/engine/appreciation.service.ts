@@ -28,7 +28,8 @@ export class AppreciationService {
 
   constructor(private readonly configService: ConfigService) {
     const apiKey = this.configService.get<string>('openai.apiKey');
-    this.model = this.configService.get<string>('openai.model') ?? 'gpt-4o-mini';
+    this.model =
+      this.configService.get<string>('openai.model') ?? 'gpt-4o-mini';
     this.client = apiKey ? new OpenAI({ apiKey }) : null;
   }
 

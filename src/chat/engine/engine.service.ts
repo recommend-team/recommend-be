@@ -7,6 +7,7 @@ import {
   PendingCartLine,
 } from '../conversation/entities/conversation.entity';
 import { CheckoutFlow } from './flows/checkout.flow';
+import { HandoverService } from './handover.service';
 import { ConversationState } from '../enums/chat.enums';
 import { DiscoveryService } from './discovery/discovery.service';
 import { ORDERING_PORT } from '../ports/ordering.port';
@@ -40,6 +41,7 @@ export class EngineService {
     private readonly channelRegistry: ChannelRegistry,
     private readonly discoveryService: DiscoveryService,
     private readonly checkoutFlow: CheckoutFlow,
+    private readonly handover: HandoverService,
     @Inject(ORDERING_PORT) private readonly ordering: OrderingPort,
   ) {}
 
@@ -60,6 +62,16 @@ export class EngineService {
     // A retry of a message we have already answered. Staying silent is correct —
     // replying again would double up in the client's thread.
     if (!inbound) return [];
+
+    // A person is answering. The message is on the record and visible to them; the
+    // assistant simply does not speak over it. Checked after recording, never before —
+    // a held conversation must still capture everything the buyer says.
+    if (await this.handover.shouldStaySilent(conversation)) {
+      this.logger.debug(
+        `Conversation ${conversation.id} is held by an admin — not replying`,
+      );
+      return [];
+    }
 
     if (input.cart) {
       await this.conversationService.mergeContext(conversation.id, {

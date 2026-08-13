@@ -55,4 +55,16 @@ export class ChatMessage extends BaseEntity {
   @Column({ type: 'varchar', nullable: true })
   @Index()
   clientMessageId!: string | null;
+
+  /**
+   * The admin who actually typed this, on a message the buyer sees as the assistant's.
+   *
+   * A separate column rather than a fourth `MessageAuthor`: the buyer must not be able to
+   * tell a person stepped in, and an author value that means "admin" is one careless
+   * serialiser away from telling them. Author stays `ASSISTANT`; attribution lives here,
+   * where nothing buyer-facing reads.
+   */
+  @Column({ type: 'uuid', nullable: true })
+  @Index()
+  adminId!: string | null;
 }
