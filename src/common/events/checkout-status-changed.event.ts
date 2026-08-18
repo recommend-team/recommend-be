@@ -26,5 +26,6 @@ export class CheckoutStatusChangedEvent {
     /** What they bought, so a closing message can be about their order and not generic. */
     readonly items: { name: string; quantity: number }[],
     readonly vendorNames: string[],
+    readonly deliveryCode: string | null,
   ) {}
 }

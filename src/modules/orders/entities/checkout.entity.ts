@@ -80,6 +80,22 @@ export class Checkout {
   @Column({ type: 'timestamptz', nullable: true })
   paidAt!: Date | null;
 
+  /**
+   * Read out by the customer at the door and checked by the rider against the order they
+   * are carrying — so the bag reaches the person who ordered it and not whoever answers.
+   *
+   * On the checkout rather than the order because one rider carries the whole basket:
+   * a three-vendor purchase is still one handover, and three codes would be three ways
+   * for the customer to read out the wrong one.
+   *
+   * Six uppercase letters, which is exactly what the column holds. Plaintext, because
+   * the rider and admin both have to say it aloud. Null until dispatch, and re-minted on
+   * every dispatch so a resent parcel cannot be opened with the code from the first
+   * attempt.
+   */
+  @Column({ type: 'varchar', length: 6, nullable: true })
+  deliveryCode!: string | null;
+
   @OneToMany(() => Order, (order) => order.checkout)
   orders!: Order[];
 

@@ -5,6 +5,7 @@ import {
   Logger,
   NotFoundException,
 } from '@nestjs/common';
+import { randomInt } from 'crypto';
 import { InjectRepository } from '@nestjs/typeorm';
 import { EventEmitter2 } from '@nestjs/event-emitter';
 import { DataSource, EntityManager, Repository } from 'typeorm';
@@ -132,6 +133,13 @@ export class OrderLifecycleService {
 
     const outbox: Outbox = [];
     await this.dataSource.transaction(async (manager) => {
+      // Minted here rather than at payment so it cannot be learned before there is a
+      // rider to check it, and written through the same manager as the status change —
+      // an order is never dispatched without a code, and a rollback takes both.
+      const deliveryCode = newDeliveryCode();
+      await manager.update(Checkout, { id: checkout.id }, { deliveryCode });
+      checkout.deliveryCode = deliveryCode;
+
       await this.moveCheckout(
         manager,
         checkout,
@@ -339,6 +347,7 @@ export class OrderLifecycleService {
         (checkout.orders ?? [])
           .map((order) => order.vendor?.businessName)
           .filter((name): name is string => !!name),
+        checkout.deliveryCode ?? null,
       ),
     });
   }
@@ -404,6 +413,28 @@ export class OrderLifecycleService {
       }
     }
   }
+}
+
+/** Uppercase A–Z. Digits are deliberately absent — a code is all letters or nothing. */
+const CODE_ALPHABET = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
+const CODE_LENGTH = 6;
+
+/**
+ * Six uppercase letters, from the CSPRNG rather than `Math.random` — cheap here, and it
+ * means the question never has to be asked again if the code ever guards more than a
+ * doorstep.
+ *
+ * Not checked for uniqueness against other orders: it is only ever compared with the one
+ * checkout the rider is already holding, never looked up by code, so a collision between
+ * two unrelated deliveries has nothing to collide in. At 26⁶ they are vanishingly rare
+ * regardless.
+ */
+function newDeliveryCode(): string {
+  let code = '';
+  for (let index = 0; index < CODE_LENGTH; index += 1) {
+    code += CODE_ALPHABET[randomInt(0, CODE_ALPHABET.length)];
+  }
+  return code;
 }
 
 function rankOf(status: OrderStatus): number {

@@ -22,6 +22,7 @@ const event = (
     to,
     [{ name: 'Jollof Rice', quantity: 2 }],
     ['Tasty Pot Ikeja'],
+    to === OrderStatus.DISPATCHED ? 'KDPXRM' : null,
   );
 
 describe('OrderStatusListener', () => {
@@ -87,6 +88,36 @@ describe('OrderStatusListener', () => {
       'session-1',
       expect.objectContaining({ messageId: 'm1' }),
     );
+  });
+
+  it('gives the buyer their delivery code in the same message', async () => {
+    // One message, not two: the code and the reason it matters arrive together, and the
+    // buyer's thread is pushed up the screen once.
+    await listener.onStatusChanged(event(OrderStatus.DISPATCHED));
+
+    expect(sentText()).toContain('KDPXRM');
+    expect(sentText()).toMatch(/rider/i);
+  });
+
+  it('still announces a dispatch that carries no code', async () => {
+    // An admin forcing the status straight to DISPATCHED mints nothing. The buyer is
+    // told their order is coming and is not shown the word "undefined".
+    const forced = new CheckoutStatusChangedEvent(
+      'ck1',
+      'REC-AAA',
+      'Ada Obi',
+      '+2348012345678',
+      FulfillmentType.DELIVERY,
+      OrderStatus.PAID,
+      OrderStatus.DISPATCHED,
+      [{ name: 'Jollof Rice', quantity: 2 }],
+      ['Tasty Pot Ikeja'],
+      null,
+    );
+
+    await listener.onStatusChanged(forced);
+
+    expect(sentText()).toBe('Your order is on its way.');
   });
 
   it('has the assistant write the thank-you, and passes it the order', async () => {

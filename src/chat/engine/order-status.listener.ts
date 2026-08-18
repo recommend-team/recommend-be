@@ -84,14 +84,12 @@ export class OrderStatusListener {
     const isPickup = event.fulfillmentType === FulfillmentType.PICKUP;
 
     switch (event.to) {
-      // On a pickup order this is the buyer's cue to leave the house, and the only
-      // message that matters. On a delivery it is an internal handoff signal.
       case OrderStatus.READY:
         return isPickup ? 'Your order is ready for collection.' : null;
-
-      // Only ever set on a delivery, and only once a rider has everything.
       case OrderStatus.DISPATCHED:
-        return 'Your order is on its way.';
+        return event.deliveryCode
+          ? `Your order is on its way. Your delivery code is ${event.deliveryCode} — read it to the rider when they arrive.`
+          : 'Your order is on its way.';
 
       case OrderStatus.COMPLETED:
         return this.appreciation.write({

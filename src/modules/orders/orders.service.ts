@@ -203,6 +203,8 @@ export class OrdersService {
     totalAmount: number;
     fulfillmentType: string;
     createdAt: Date;
+    /** See below — present only while the order is out with a rider. */
+    deliveryCode: string | null;
     vendors: {
       status: OrderStatus;
       items: { name: string; quantity: number; unitPrice: number }[];
@@ -224,6 +226,17 @@ export class OrdersService {
       totalAmount: Number(checkout.totalAmount),
       fulfillmentType: checkout.fulfillmentType,
       createdAt: checkout.createdAt,
+      // This endpoint is how a buyer who never used chat gets their code at all — there
+      // is no SMS to fall back on, and they hold the reference already.
+      //
+      // Gated on the live status rather than on the column being set, so it is exposed
+      // for exactly as long as somebody is at the door with it: not before dispatch,
+      // and not once the order is delivered. The row keeps the code either way, for
+      // support looking back at what was issued.
+      deliveryCode:
+        checkout.status === OrderStatus.DISPATCHED
+          ? (checkout.deliveryCode ?? null)
+          : null,
       vendors: (checkout.orders ?? []).map((order) => ({
         status: order.status,
         items: (order.items ?? []).map((item) => ({

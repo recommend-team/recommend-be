@@ -221,6 +221,104 @@ describe('OrderLifecycleService', () => {
     });
   });
 
+  describe('the delivery code', () => {
+    /** Every `deliveryCode` written through the transaction manager, in order. */
+    const codesWritten = () =>
+      manager.update.mock.calls
+        .map(([, , patch]) => (patch as { deliveryCode?: string }).deliveryCode)
+        .filter((code): code is string => code !== undefined);
+
+    it('mints six uppercase letters and writes them inside the transaction', async () => {
+      checkouts.findOne.mockResolvedValue(
+        checkoutWith({ status: OrderStatus.READY }),
+      );
+
+      await service.markDispatched('REC-AAA', {
+        type: StatusActor.ADMIN,
+        id: 'a1',
+      });
+
+      // Through `manager`, not the repository — a dispatch that rolls back must not
+      // leave a code behind for a rider to quote.
+      // Letters only, and never lowercase — the customer reads it out and the rider
+      // reads it back, and neither should have to wonder about case.
+      expect(codesWritten()).toEqual([expect.stringMatching(/^[A-Z]{6}$/)]);
+    });
+
+    it('carries the code on the event, so nothing re-reads the row to announce it', async () => {
+      checkouts.findOne.mockResolvedValue(
+        checkoutWith({ status: OrderStatus.READY }),
+      );
+
+      await service.markDispatched('REC-AAA', {
+        type: StatusActor.ADMIN,
+        id: 'a1',
+      });
+
+      const [, payload] = emitter.emit.mock.calls.find(
+        ([name]) => name === CHECKOUT_STATUS_CHANGED_EVENT,
+      ) as [string, { deliveryCode: string | null }];
+
+      expect(payload.deliveryCode).toBe(codesWritten()[0]);
+    });
+
+    it('mints a fresh one on re-dispatch, so a stale code cannot open the parcel', async () => {
+      // A returned order put back to READY by an admin override, then sent out again.
+      checkouts.findOne.mockResolvedValue(
+        checkoutWith({ status: OrderStatus.READY }),
+      );
+      await service.markDispatched('REC-AAA', {
+        type: StatusActor.ADMIN,
+        id: 'a1',
+      });
+
+      checkouts.findOne.mockResolvedValue(
+        checkoutWith({ status: OrderStatus.READY }),
+      );
+      await service.markDispatched('REC-AAA', {
+        type: StatusActor.ADMIN,
+        id: 'a1',
+      });
+
+      // Two codes issued, not one reused. Still asserted by count rather than by
+      // inequality: a collision is astronomically unlikely at 26⁶ but not impossible,
+      // and a suite that goes red on chance is worse than the property it checks.
+      expect(codesWritten()).toHaveLength(2);
+    });
+
+    it('leaves an already-dispatched order alone', async () => {
+      checkouts.findOne.mockResolvedValue(
+        checkoutWith({ status: OrderStatus.DISPATCHED }),
+      );
+
+      await service.markDispatched('REC-AAA', {
+        type: StatusActor.ADMIN,
+        id: 'a1',
+      });
+
+      // Re-minting here would strand a rider already holding the first code.
+      expect(codesWritten()).toEqual([]);
+    });
+
+    it('never mints one for a pickup order', async () => {
+      checkouts.findOne.mockResolvedValue(
+        checkoutWith({
+          status: OrderStatus.READY,
+          fulfillmentType: FulfillmentType.PICKUP,
+        }),
+      );
+
+      await expect(
+        service.markDispatched('REC-AAA', {
+          type: StatusActor.ADMIN,
+          id: 'a1',
+        }),
+      ).rejects.toThrow(/pickup/i);
+
+      expect(codesWritten()).toEqual([]);
+    });
+  });
+
   describe('completion', () => {
     it('takes the vendor orders with it, so payout reporting agrees', async () => {
       checkouts.findOne.mockResolvedValue(
