@@ -8,6 +8,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { ConfigService } from '@nestjs/config';
 import { Repository } from 'typeorm';
 import { Conversation } from '../conversation/entities/conversation.entity';
+import type { MessagePayload } from '../conversation/entities/message.entity';
 import { ConversationService } from '../conversation/conversation.service';
 import { ChannelRegistry } from '../transport/channel.registry';
 import { OutboundMessage } from '../transport/channel.interface';
@@ -90,10 +91,16 @@ export class HandoverService {
   }
 
   /** Speak to the buyer as the assistant. */
+  /**
+   * `payload` carries rich UI the client renders — today, a payment card. Optional, and
+   * never set from a request body: an admin composes text, and the platform attaches the
+   * payload for the things it generated itself, like a checkout it just created.
+   */
   async send(
     conversationId: string,
     adminId: string,
     text: string,
+    payload?: MessagePayload,
   ): Promise<OutboundMessage> {
     const conversation = await this.load(conversationId);
 
@@ -107,6 +114,7 @@ export class HandoverService {
       conversationId,
       text,
       adminId,
+      payload,
     });
 
     await this.conversations.update(
@@ -116,6 +124,7 @@ export class HandoverService {
 
     const outbound: OutboundMessage = {
       text,
+      payload: persisted.payload ?? undefined,
       messageId: persisted.id,
       createdAt: persisted.createdAt,
     };

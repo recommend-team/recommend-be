@@ -5,7 +5,7 @@ import {
   ConflictException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository, In } from 'typeorm';
+import { Repository, In, ILike } from 'typeorm';
 import { User } from '../auth/entities/auth.entity';
 import { Product } from '../products/entities/product.entity';
 import { Order } from '../orders/entities/order.entity';
@@ -431,6 +431,8 @@ export class AdminService {
   async getAllProducts(query: {
     vendorId?: string;
     isAvailable?: boolean;
+    /** Product name, matched loosely. Blank is the same as not searching. */
+    search?: string;
     page?: number;
     limit?: number;
   }): Promise<PaginatedResult<Product>> {
@@ -442,6 +444,11 @@ export class AdminService {
     if (query.vendorId) where['vendorId'] = query.vendorId;
     if (query.isAvailable !== undefined)
       where['isAvailable'] = query.isAvailable;
+
+    // `ILike` rather than a full-text index: this list is browsed by an admin looking
+    // for a product they can already half-name, not searched by buyers at volume.
+    const term = query.search?.trim();
+    if (term) where['name'] = ILike(`%${term}%`);
 
     const [items, total] = await this.productsRepo.findAndCount({
       where,

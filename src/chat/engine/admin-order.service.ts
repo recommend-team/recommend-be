@@ -8,8 +8,11 @@ import {
 } from '@nestjs/common';
 import { ConversationService } from '../conversation/conversation.service';
 import { CartChangedError } from '../adapters/local-ordering.adapter';
+import { HandoverService } from './handover.service';
+import { formatNaira } from '../utils/phone.util';
 import { ORDERING_PORT } from '../ports/ordering.port';
 import type {
+  BuyerOrderSummary,
   CartLine,
   OrderingPort,
   PlacedCheckout,
@@ -24,6 +27,13 @@ export interface AdminOrderInput {
   fulfillmentType?: 'PICKUP' | 'DELIVERY';
   deliveryAddress?: string;
   notes?: string;
+  /** Default true. False leaves the admin to send the link themselves. */
+  sendToBuyer?: boolean;
+}
+
+export interface AdminPlacedOrder extends PlacedCheckout {
+  /** Whether the payment card reached the buyer's thread. */
+  sent: boolean;
 }
 
 @Injectable()
@@ -33,13 +43,14 @@ export class AdminOrderService {
   constructor(
     @Inject(ORDERING_PORT) private readonly ordering: OrderingPort,
     private readonly conversations: ConversationService,
+    private readonly handover: HandoverService,
   ) {}
 
   async place(
     conversationId: string,
     adminId: string,
     input: AdminOrderInput,
-  ): Promise<PlacedCheckout> {
+  ): Promise<AdminPlacedOrder> {
     const conversation = await this.conversations.findById(conversationId);
     if (!conversation) throw new NotFoundException('Conversation not found');
 
@@ -119,7 +130,73 @@ export class AdminOrderService {
       `Admin ${adminId} placed ${placed.reference} for conversation ${conversationId}`,
     );
 
-    return placed;
+    const sent =
+      input.sendToBuyer === false
+        ? false
+        : await this.sendPaymentCard(conversationId, adminId, placed);
+
+    return { ...placed, sent };
+  }
+
+  /**
+   * The same payment card a buyer gets when they check out themselves — the inline
+   * Paystack sheet, not a bare URL. An admin-created customer should not get a visibly
+   * worse checkout than everyone else.
+   *
+   * Never fails the order. The checkout exists, the money is still collectable, and the
+   * admin has the link in the response to send by hand.
+   */
+  private async sendPaymentCard(
+    conversationId: string,
+    adminId: string,
+    placed: PlacedCheckout,
+  ): Promise<boolean> {
+    try {
+      await this.handover.send(
+        conversationId,
+        adminId,
+        `That's ${formatNaira(placed.totalAmount)} altogether. Tap below to pay — you won't leave this chat.`,
+        {
+          kind: 'payment_link',
+          data: {
+            reference: placed.reference,
+            accessCode: placed.accessCode,
+            publicKey: placed.paystackPublicKey,
+            authorizationUrl: placed.authorizationUrl,
+            goodsTotal: placed.goodsTotal,
+            deliveryFee: placed.deliveryFee,
+            totalAmount: placed.totalAmount,
+          },
+        },
+      );
+      return true;
+    } catch (error) {
+      this.logger.error(
+        `Placed ${placed.reference} but could not send the payment card: ${
+          error instanceof Error ? error.message : 'unknown error'
+        }`,
+      );
+      return false;
+    }
+  }
+
+  /**
+   * The most recent order this conversation placed, so an admin can watch it turn from
+   * unpaid to paid without leaving the thread.
+   *
+   * Read from `orderReferences` rather than `pendingPaymentReference`, which is cleared
+   * the moment the payment lands — the interesting part is what happens next.
+   */
+  async latestOrder(conversationId: string): Promise<BuyerOrderSummary | null> {
+    const conversation = await this.conversations.findById(conversationId);
+    if (!conversation) throw new NotFoundException('Conversation not found');
+
+    const references = conversation.context?.orderReferences ?? [];
+    const latest = references[references.length - 1];
+    if (!latest) return null;
+
+    const [order] = await this.ordering.listOrders([latest]);
+    return order ?? null;
   }
 
   /**

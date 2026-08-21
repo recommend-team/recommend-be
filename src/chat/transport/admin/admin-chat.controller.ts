@@ -70,6 +70,8 @@ const orderSchema = z.object({
     .min(5, 'Delivery address must be at least 5 characters')
     .optional(),
   notes: z.string().max(500).optional(),
+
+  sendToBuyer: z.boolean().optional(),
 });
 
 class AdminMessageDto {
@@ -88,6 +90,7 @@ class AdminOrderDto {
   fulfillmentType?: 'PICKUP' | 'DELIVERY';
   deliveryAddress?: string;
   notes?: string;
+  sendToBuyer?: boolean;
 }
 
 @ApiTags('Admin — chat')
@@ -274,12 +277,31 @@ export class AdminChatController {
       fulfillmentType: dto.fulfillmentType,
       deliveryAddress: dto.deliveryAddress,
       notes: dto.notes,
+      sendToBuyer: dto.sendToBuyer,
     });
 
     return {
-      message: 'Order placed. Send the buyer the payment link.',
+      message: placed.sent
+        ? 'Order placed and the payment link sent.'
+        : 'Order placed. Send the buyer the payment link.',
       data: placed,
     };
+  }
+
+  @Get(':id/order')
+  @ApiOperation({
+    summary: 'The most recent order this conversation placed',
+    description:
+      'Null when there has never been one. Read from the orders the conversation owns ' +
+      'rather than the pending payment marker, which is cleared the moment the money ' +
+      'lands — so the order stays visible as it moves from unpaid to delivered.',
+  })
+  @ApiParam({ name: 'id', description: 'Conversation id' })
+  @ApiResponse({ status: 200, description: 'The order, or null' })
+  @ApiResponse({ status: 404, description: 'No such conversation' })
+  async latestOrder(@Param('id', ParseUUIDPipe) id: string) {
+    const data = await this.adminOrders.latestOrder(id);
+    return { message: 'Order retrieved successfully', data };
   }
 
   @Post(':id/typing')

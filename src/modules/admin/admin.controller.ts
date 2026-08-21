@@ -158,6 +158,12 @@ export class AdminController {
     description: 'Filter by vendor UUID',
   })
   @ApiQuery({ name: 'isAvailable', required: false, type: Boolean })
+  @ApiQuery({
+    name: 'search',
+    required: false,
+    type: String,
+    description: 'Product name, matched loosely',
+  })
   @ApiQuery({ name: 'page', required: false, type: Number })
   @ApiQuery({ name: 'limit', required: false, type: Number })
   @ApiResponse({
@@ -167,6 +173,7 @@ export class AdminController {
   getAllProducts(
     @Query('vendorId') vendorId?: string,
     @Query('isAvailable') isAvailable?: string,
+    @Query('search') search?: string,
     @Query('page') page?: number,
     @Query('limit') limit?: number,
   ) {
@@ -179,6 +186,7 @@ export class AdminController {
     return this.adminService.getAllProducts({
       vendorId,
       isAvailable: available,
+      search,
       page,
       limit,
     });

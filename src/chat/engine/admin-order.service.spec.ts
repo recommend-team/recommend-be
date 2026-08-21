@@ -2,6 +2,7 @@ import { ConflictException } from '@nestjs/common';
 import { Test, TestingModule } from '@nestjs/testing';
 import { AdminOrderService } from './admin-order.service';
 import { ConversationService } from '../conversation/conversation.service';
+import { HandoverService } from './handover.service';
 import { ORDERING_PORT } from '../ports/ordering.port';
 import { CartChangedError } from '../adapters/local-ordering.adapter';
 import type { Conversation } from '../conversation/entities/conversation.entity';
@@ -40,21 +41,27 @@ const lines = [{ productId: 'p1', quantity: 2 }];
 
 describe('AdminOrderService', () => {
   let service: AdminOrderService;
-  let ordering: { placeCheckout: jest.Mock };
+  let ordering: { placeCheckout: jest.Mock; listOrders: jest.Mock };
   let conversations: { findById: jest.Mock; mergeContext: jest.Mock };
+  let handover: { send: jest.Mock };
 
   beforeEach(async () => {
-    ordering = { placeCheckout: jest.fn().mockResolvedValue(placed) };
+    ordering = {
+      placeCheckout: jest.fn().mockResolvedValue(placed),
+      listOrders: jest.fn().mockResolvedValue([]),
+    };
     conversations = {
       findById: jest.fn().mockResolvedValue(conversationWith()),
       mergeContext: jest.fn().mockResolvedValue(null),
     };
+    handover = { send: jest.fn().mockResolvedValue({ text: 'sent' }) };
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         AdminOrderService,
         { provide: ORDERING_PORT, useValue: ordering },
         { provide: ConversationService, useValue: conversations },
+        { provide: HandoverService, useValue: handover },
       ],
     }).compile();
 
@@ -168,6 +175,87 @@ describe('AdminOrderService', () => {
       // Setting AWAITING_PAYMENT here would fight takeover: the assistant is already
       // silent, handback resets the state, and the payment listener sets DISCOVERY.
       expect(patch()).not.toHaveProperty('state');
+    });
+  });
+
+  describe('sending the payment card', () => {
+    /** The payload argument handover was asked to deliver. */
+    const cardPayload = () => {
+      const calls = handover.send.mock.calls as unknown[][];
+      return calls[0]?.[3] as { kind: string; data: Record<string, unknown> };
+    };
+
+    it('sends the card into the thread without being asked', async () => {
+      const result = await service.place('c1', ADMIN, { lines });
+
+      expect(handover.send).toHaveBeenCalledTimes(1);
+      expect(result.sent).toBe(true);
+    });
+
+    it('sends the inline card, not a bare link', async () => {
+      // An admin-created buyer pays from inside the chat like everyone else. Dropping
+      // the access code would leave them with a URL and a worse checkout.
+      await service.place('c1', ADMIN, { lines });
+
+      expect(cardPayload().kind).toBe('payment_link');
+      expect(cardPayload().data).toEqual(
+        expect.objectContaining({
+          reference: 'REC-NEW',
+          accessCode: 'ac_1',
+          publicKey: 'pk_test',
+          authorizationUrl: 'https://paystack/x',
+          totalAmount: 8500,
+        }),
+      );
+    });
+
+    it('leaves the admin to send it when they ask to', async () => {
+      const result = await service.place('c1', ADMIN, {
+        lines,
+        sendToBuyer: false,
+      });
+
+      expect(handover.send).not.toHaveBeenCalled();
+      expect(result.sent).toBe(false);
+    });
+
+    it('keeps the order when the message cannot be delivered', async () => {
+      // The checkout exists and the money is still collectable. Unwinding a real order
+      // because a socket was down would be the worse outcome.
+      handover.send.mockRejectedValue(new Error('socket gone'));
+
+      const result = await service.place('c1', ADMIN, { lines });
+
+      expect(result.reference).toBe('REC-NEW');
+      expect(result.sent).toBe(false);
+      expect(conversations.mergeContext).toHaveBeenCalled();
+    });
+  });
+
+  describe('the latest order', () => {
+    it('reads the newest reference the conversation owns', async () => {
+      conversations.findById.mockResolvedValue(
+        conversationWith({
+          context: { orderReferences: ['REC-OLD', 'REC-NEWEST'] },
+        } as Partial<Conversation>),
+      );
+      ordering.listOrders.mockResolvedValue([
+        { reference: 'REC-NEWEST', status: 'PAID' },
+      ]);
+
+      const order = await service.latestOrder('c1');
+
+      expect(ordering.listOrders).toHaveBeenCalledWith(['REC-NEWEST']);
+      expect(order?.status).toBe('PAID');
+    });
+
+    it('is null for a conversation that has never ordered', async () => {
+      conversations.findById.mockResolvedValue(
+        conversationWith({ context: {} } as Partial<Conversation>),
+      );
+
+      expect(await service.latestOrder('c1')).toBeNull();
+      expect(ordering.listOrders).not.toHaveBeenCalled();
     });
   });
 
