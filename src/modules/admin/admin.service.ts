@@ -46,6 +46,7 @@ export interface TransactionSummary {
   paidAt: string | null;
   createdAt: string;
   deliveryCode: string | null;
+  createdByAdminId: string | null;
   vendors: {
     orderId: string;
     vendorId: string;
@@ -74,6 +75,7 @@ function toTransactionSummary(checkout: Checkout): TransactionSummary {
     paidAt: checkout.paidAt ? checkout.paidAt.toISOString() : null,
     createdAt: checkout.createdAt.toISOString(),
     deliveryCode: checkout.deliveryCode ?? null,
+    createdByAdminId: checkout.createdByAdminId ?? null,
     vendors: (checkout.orders ?? []).map((order) => ({
       orderId: order.id,
       vendorId: order.vendorId,

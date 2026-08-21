@@ -96,7 +96,10 @@ export class CheckoutService {
    * Prices, availability and vendor status are all re-read from the database here —
    * otherwise a buyer could post themselves a ₦100 order.
    */
-  async createCheckout(dto: CreateCheckoutDto): Promise<CheckoutResult> {
+  async createCheckout(
+    dto: CreateCheckoutDto,
+    createdByAdminId: string | null = null,
+  ): Promise<CheckoutResult> {
     const products = await this.loadProducts(dto);
     const changes = this.detectChanges(dto, products);
 
@@ -126,6 +129,7 @@ export class CheckoutService {
       goodsTotal,
       deliveryFee,
       totalAmount,
+      createdByAdminId,
     });
 
     let authorizationUrl: string;
@@ -304,6 +308,7 @@ export class CheckoutService {
       goodsTotal: number;
       deliveryFee: number;
       totalAmount: number;
+      createdByAdminId: string | null;
     },
   ): Promise<Checkout> {
     return this.dataSource.transaction(async (manager) => {
@@ -321,6 +326,10 @@ export class CheckoutService {
         totalAmount: totals.totalAmount,
         status: OrderStatus.PENDING_PAYMENT,
         paidAt: null,
+        // Written here, in the transaction that creates the row. A second UPDATE
+        // afterwards would leave a window in which an admin-created order is
+        // attributed to nobody.
+        createdByAdminId: totals.createdByAdminId,
       });
       const savedCheckout = await manager.save(checkout);
 

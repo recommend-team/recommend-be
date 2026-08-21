@@ -21,6 +21,7 @@ import {
 } from '@nestjs/swagger';
 import { z } from 'zod';
 import { HandoverService } from '../../engine/handover.service';
+import { AdminOrderService } from '../../engine/admin-order.service';
 import { ConversationService } from '../../conversation/conversation.service';
 import { CurrentUser } from '../../../modules/auth/decorators/current-user.decorator';
 import { Roles } from '../../../modules/auth/decorators/roles.decorator';
@@ -32,6 +33,44 @@ const messageSchema = z.object({
 });
 
 const typingSchema = z.object({ isTyping: z.boolean() });
+const orderLineSchema = z.object({
+  productId: z.string().uuid('productId must be a valid UUID'),
+  quantity: z
+    .number({ required_error: 'Quantity is required' })
+    .int('Quantity must be a whole number')
+    .min(1, 'Quantity must be at least 1')
+    .max(50, 'Quantity must be 50 or fewer'),
+  expectedUnitPrice: z.number().nonnegative().optional(),
+});
+
+/**
+ * Every buyer detail is optional: the conversation usually knows them already, and the
+ * service fills the gaps from `context.profile` before refusing anything.
+ */
+const orderSchema = z.object({
+  items: z
+    .array(orderLineSchema)
+    .min(1, 'Add at least one item')
+    .max(50, 'Too many items in one order'),
+  buyerName: z
+    .string()
+    .min(2, 'Buyer name must be at least 2 characters')
+    .optional(),
+  buyerPhone: z
+    .string()
+    .regex(
+      /^\+[1-9]\d{7,14}$/,
+      'buyerPhone must be in E.164 format (e.g. +2348012345678)',
+    )
+    .optional(),
+  buyerEmail: z.string().email('Invalid email').optional(),
+  fulfillmentType: z.enum(['PICKUP', 'DELIVERY']).optional(),
+  deliveryAddress: z
+    .string()
+    .min(5, 'Delivery address must be at least 5 characters')
+    .optional(),
+  notes: z.string().max(500).optional(),
+});
 
 class AdminMessageDto {
   text!: string;
@@ -39,6 +78,16 @@ class AdminMessageDto {
 
 class TypingDto {
   isTyping!: boolean;
+}
+
+class AdminOrderDto {
+  items!: { productId: string; quantity: number; expectedUnitPrice?: number }[];
+  buyerName?: string;
+  buyerPhone?: string;
+  buyerEmail?: string;
+  fulfillmentType?: 'PICKUP' | 'DELIVERY';
+  deliveryAddress?: string;
+  notes?: string;
 }
 
 @ApiTags('Admin — chat')
@@ -49,6 +98,7 @@ export class AdminChatController {
   constructor(
     private readonly handover: HandoverService,
     private readonly conversations: ConversationService,
+    private readonly adminOrders: AdminOrderService,
   ) {}
 
   @Get()
@@ -187,6 +237,49 @@ export class AdminChatController {
   ) {
     const sent = await this.handover.send(id, admin.id, dto.text);
     return { message: 'Sent', data: sent };
+  }
+
+  @Post(':id/order')
+  @ApiOperation({
+    summary: 'Place an order for the buyer',
+    description:
+      'Builds the basket on the buyer’s behalf and returns a payment link. Buyer ' +
+      'details omitted from the body are taken from what the conversation already ' +
+      'knows. The order is recorded against you, and is otherwise indistinguishable ' +
+      'from one the buyer placed themselves.',
+  })
+  @ApiParam({ name: 'id', description: 'Conversation id' })
+  @ApiBody({ type: AdminOrderDto })
+  @ApiResponse({ status: 201, description: 'Order placed — payment pending' })
+  @ApiResponse({
+    status: 400,
+    description: 'Missing a buyer detail the conversation does not know either',
+  })
+  @ApiResponse({
+    status: 409,
+    description:
+      'Take the conversation first, a payment is already pending on it, or the ' +
+      'basket no longer matches what is on sale',
+  })
+  async order(
+    @CurrentUser() admin: { id: string },
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body(new ZodValidationPipe(orderSchema)) dto: AdminOrderDto,
+  ) {
+    const placed = await this.adminOrders.place(id, admin.id, {
+      lines: dto.items,
+      buyerName: dto.buyerName,
+      buyerPhone: dto.buyerPhone,
+      buyerEmail: dto.buyerEmail,
+      fulfillmentType: dto.fulfillmentType,
+      deliveryAddress: dto.deliveryAddress,
+      notes: dto.notes,
+    });
+
+    return {
+      message: 'Order placed. Send the buyer the payment link.',
+      data: placed,
+    };
   }
 
   @Post(':id/typing')

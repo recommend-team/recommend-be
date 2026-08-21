@@ -28,6 +28,7 @@ export interface PlaceCheckoutInput {
   fulfillmentType: 'PICKUP' | 'DELIVERY';
   deliveryAddress?: string;
   notes?: string;
+  createdByAdminId?: string;
 }
 
 export interface PlacedCheckout {

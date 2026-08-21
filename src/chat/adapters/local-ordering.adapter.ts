@@ -49,22 +49,25 @@ export class LocalOrderingAdapter implements OrderingPort {
 
   async placeCheckout(input: PlaceCheckoutInput): Promise<PlacedCheckout> {
     try {
-      const result = await this.checkoutService.createCheckout({
-        items: input.lines.map((line) => ({
-          productId: line.productId,
-          quantity: line.quantity,
-          expectedUnitPrice: line.expectedUnitPrice,
-        })),
-        buyerName: input.buyerName,
-        buyerPhone: input.buyerPhone,
-        buyerEmail: input.buyerEmail,
-        fulfillmentType:
-          input.fulfillmentType === 'DELIVERY'
-            ? FulfillmentType.DELIVERY
-            : FulfillmentType.PICKUP,
-        deliveryAddress: input.deliveryAddress,
-        notes: input.notes,
-      });
+      const result = await this.checkoutService.createCheckout(
+        {
+          items: input.lines.map((line) => ({
+            productId: line.productId,
+            quantity: line.quantity,
+            expectedUnitPrice: line.expectedUnitPrice,
+          })),
+          buyerName: input.buyerName,
+          buyerPhone: input.buyerPhone,
+          buyerEmail: input.buyerEmail,
+          fulfillmentType:
+            input.fulfillmentType === 'DELIVERY'
+              ? FulfillmentType.DELIVERY
+              : FulfillmentType.PICKUP,
+          deliveryAddress: input.deliveryAddress,
+          notes: input.notes,
+        },
+        input.createdByAdminId ?? null,
+      );
 
       return {
         checkoutId: result.checkoutId,
