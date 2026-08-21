@@ -11,7 +11,7 @@
  */
 
 /**
- * Local dev servers we always allow.
+ * Local dev servers. Not included in deployed environments.
  *
  * Ports are assigned per app so they can all run at once — which they have to, because
  * a vendor marking an order ready and a buyer seeing it are two apps and one database.
@@ -27,6 +27,11 @@ const LOCAL_ORIGINS = [
 export function allowedOrigins(): string[] {
   // FRONTEND_URLS (plural) is comma-separated. There is more than one frontend now —
   // the vendor/admin web app and the customer PWA are separate origins.
+  //
+  // Deployed origins are configured per service rather than hardcoded here. Staging and
+  // production point at different frontends but both run with NODE_ENV=production —
+  // `config.validation.ts` admits only development/production/test, so there is no third
+  // value to branch on. The Render service is the only thing that knows which it is.
   const configured = (
     process.env.FRONTEND_URLS ??
     process.env.FRONTEND_URL ??
@@ -36,7 +41,16 @@ export function allowedOrigins(): string[] {
     .map((origin) => origin.trim().replace(/\/$/, ''))
     .filter(Boolean);
 
-  if (process.env.NODE_ENV === 'production') return configured;
+  if (process.env.NODE_ENV === 'production') {
+    if (configured.length === 0) {
+      // An empty allowlist blocks every browser request. Better to refuse to boot than
+      // to come up healthy with every frontend locked out.
+      throw new Error(
+        'FRONTEND_URLS must be set in production — an empty CORS allowlist blocks all frontends',
+      );
+    }
+    return [...new Set(configured)];
+  }
 
   return [...new Set([...configured, ...LOCAL_ORIGINS])];
 }
