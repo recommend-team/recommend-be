@@ -22,6 +22,7 @@ import {
 import { z } from 'zod';
 import { HandoverService } from '../../engine/handover.service';
 import { AdminOrderService } from '../../engine/admin-order.service';
+import { AdminCatalogService } from '../../engine/admin-catalog.service';
 import { ConversationService } from '../../conversation/conversation.service';
 import { CurrentUser } from '../../../modules/auth/decorators/current-user.decorator';
 import { Roles } from '../../../modules/auth/decorators/roles.decorator';
@@ -74,8 +75,16 @@ const orderSchema = z.object({
   sendToBuyer: z.boolean().optional(),
 });
 
+const areaSchema = z.object({
+  areaId: z.string().uuid('areaId must be a valid UUID'),
+});
+
 class AdminMessageDto {
   text!: string;
+}
+
+class AdminAreaDto {
+  areaId!: string;
 }
 
 class TypingDto {
@@ -102,6 +111,7 @@ export class AdminChatController {
     private readonly handover: HandoverService,
     private readonly conversations: ConversationService,
     private readonly adminOrders: AdminOrderService,
+    private readonly adminCatalog: AdminCatalogService,
   ) {}
 
   @Get()
@@ -286,6 +296,103 @@ export class AdminChatController {
         : 'Order placed. Send the buyer the payment link.',
       data: placed,
     };
+  }
+
+  @Get(':id/catalog/areas')
+  @ApiOperation({
+    summary: 'Areas to order into, with the buyer’s own preselected',
+    description:
+      'Returns the area the conversation already believes the buyer is in, so the admin ' +
+      'is usually not asked. `search` narrows the list when they are.',
+  })
+  @ApiParam({ name: 'id', description: 'Conversation id' })
+  @ApiQuery({ name: 'search', required: false, description: 'Area name' })
+  @ApiResponse({ status: 200, description: 'Areas, and the current one' })
+  async catalogAreas(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Query('search') search?: string,
+  ) {
+    const data = await this.adminCatalog.context(id, search);
+    return { message: 'Areas retrieved successfully', data };
+  }
+
+  @Post(':id/area')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    summary: 'Remember where this buyer is',
+    description:
+      'Stored on the conversation, not just the admin’s screen — the assistant reads the ' +
+      'same field, so it stops asking a question a person has already answered.',
+  })
+  @ApiParam({ name: 'id', description: 'Conversation id' })
+  @ApiBody({ type: AdminAreaDto })
+  @ApiResponse({ status: 200, description: 'Area remembered' })
+  @ApiResponse({
+    status: 404,
+    description: 'No such conversation, or no such area',
+  })
+  async setArea(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body(new ZodValidationPipe(areaSchema)) dto: AdminAreaDto,
+  ) {
+    const data = await this.adminCatalog.setArea(id, dto.areaId);
+    return { message: 'Area saved', data };
+  }
+
+  @Get(':id/catalog/stores')
+  @ApiOperation({
+    summary: 'Stores that can actually deliver to this buyer',
+    description:
+      'Approved vendors serving the area, open ones first. A vendor that does not serve ' +
+      'it is absent rather than disabled — checkout does not validate service area, so ' +
+      'anything shown here is orderable and anything orderable must be deliverable.',
+  })
+  @ApiParam({ name: 'id', description: 'Conversation id' })
+  @ApiQuery({
+    name: 'areaId',
+    required: false,
+    description: 'Defaults to the buyer’s',
+  })
+  @ApiQuery({ name: 'search', required: false, description: 'Store name' })
+  @ApiResponse({ status: 200, description: 'Stores' })
+  async catalogStores(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Query('areaId') areaId?: string,
+    @Query('search') search?: string,
+  ) {
+    const data = await this.adminCatalog.stores(id, { areaId, search });
+    return { message: 'Stores retrieved successfully', data };
+  }
+
+  @Get(':id/catalog/products')
+  @ApiOperation({
+    summary: 'What a store sells, or a search across the buyer’s area',
+    description:
+      'Available products from approved vendors. The area filter applies to a name ' +
+      'search too — knowing what you want is not a reason to reach a vendor who cannot ' +
+      'deliver it.',
+  })
+  @ApiParam({ name: 'id', description: 'Conversation id' })
+  @ApiQuery({ name: 'vendorId', required: false })
+  @ApiQuery({
+    name: 'areaId',
+    required: false,
+    description: 'Defaults to the buyer’s',
+  })
+  @ApiQuery({ name: 'search', required: false, description: 'Product name' })
+  @ApiResponse({ status: 200, description: 'Products' })
+  async catalogProducts(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Query('vendorId') vendorId?: string,
+    @Query('areaId') areaId?: string,
+    @Query('search') search?: string,
+  ) {
+    const data = await this.adminCatalog.products(id, {
+      areaId,
+      vendorId,
+      search,
+    });
+    return { message: 'Products retrieved successfully', data };
   }
 
   @Get(':id/order')

@@ -28,12 +28,12 @@ ports/          interfaces onto the rest of the platform
 adapters/       in-process implementations of those ports
 ```
 
-## Why the money path will be scripted
+## Why the money path is scripted
 
-When checkout arrives, `engine/flows/` will own everything leading to a charge — item
-selection, contact capture, address, confirmation — as a deterministic state machine, so
-no model output can invent a price, a quantity or an address. Discovery is where the LLM
-runs, and its tools stay read-only.
+`engine/flows/checkout.flow.ts` owns everything leading to a charge — name, phone,
+fulfilment, address, confirmation — as a deterministic state machine over the states from
+`SELECTING_ITEM` onwards, so no model output can invent a price, a quantity or an address.
+Discovery is where the LLM runs, and its tools stay read-only.
 
 ## Identity
 
@@ -63,7 +63,13 @@ dishes. A model outage falls back the same way.
 
 ## Status
 
-Built: session, persistence, Socket.IO transport, channel abstraction, LLM discovery
-with catalogue tools and area resolution.
-Not yet: checkout flow (B4), notifications and the payment return path (B5), WhatsApp
-adapter (post-approval), response streaming (see the plan).
+**Built:** session, persistence, Socket.IO transport (clustered over Redis), channel
+abstraction, LLM discovery with catalogue tools and area resolution, the scripted checkout
+flow (B4), the payment return path (B5) in `engine/payment-confirmation.listener.ts`, and
+the buyer's two post-payment messages in `engine/order-status.listener.ts` — with the
+closing thank-you written by `engine/appreciation.service.ts` rather than templated.
+
+**Not yet:** WhatsApp adapter (post-approval), response streaming (see the plan).
+
+`transport/whatsapp/` does not exist yet — it is named in the layout above as the slot the
+Cloud API adapter drops into, not as a folder you will find.

@@ -11,6 +11,7 @@ import { ChatRateLimitService } from './session/rate-limit.service';
 import { EngineService } from './engine/engine.service';
 import { HandoverService } from './engine/handover.service';
 import { AdminOrderService } from './engine/admin-order.service';
+import { AdminCatalogService } from './engine/admin-catalog.service';
 import { AdminChatController } from './transport/admin/admin-chat.controller';
 import { AdminChatGateway } from './transport/admin/admin-chat.gateway';
 import { PaymentConfirmationListener } from './engine/payment-confirmation.listener';
@@ -60,6 +61,7 @@ import { Area } from '../modules/locations/entities/area.entity';
     EngineService,
     HandoverService,
     AdminOrderService,
+    AdminCatalogService,
     CheckoutFlow,
     PaymentConfirmationListener,
     OrderStatusListener,
