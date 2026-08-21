@@ -7,6 +7,7 @@ import { Role } from '../../common/enums/roles.enum';
 import { SellerStatus } from '../../common/enums/seller-status.enum';
 import {
   CatalogPort,
+  CategorySummary,
   ProductSearchQuery,
   ProductSummary,
   VendorSearchQuery,
@@ -28,6 +29,40 @@ export class LocalCatalogAdapter implements CatalogPort {
     @InjectRepository(Product)
     private readonly productsRepository: Repository<Product>,
   ) {}
+
+  async listCategories(query: {
+    areaId?: string;
+  }): Promise<CategorySummary[]> {
+    const qb = this.usersRepository
+      .createQueryBuilder('vendor')
+      .select('vendor.businessCategory', 'name')
+      .addSelect('COUNT(*)', 'count')
+      .where('vendor.role = :role', { role: Role.SELLER })
+      .andWhere('vendor.status = :status', { status: SellerStatus.APPROVED })
+      .andWhere('vendor.slug IS NOT NULL')
+      .andWhere('vendor.businessCategory IS NOT NULL')
+      .andWhere("vendor.businessCategory <> ''");
+    if (query.areaId) {
+      qb.andWhere(
+        `EXISTS (
+           SELECT 1 FROM vendor_service_areas vsa
+           WHERE vsa."vendorId" = vendor.id AND vsa."areaId" = :areaId
+         )`,
+        { areaId: query.areaId },
+      );
+    }
+
+    const rows = await qb
+      .groupBy('vendor.businessCategory')
+      .orderBy('COUNT(*)', 'DESC')
+      .addOrderBy('vendor.businessCategory', 'ASC')
+      .getRawMany<{ name: string; count: string }>();
+
+    return rows.map((row) => ({
+      name: row.name,
+      storeCount: Number(row.count),
+    }));
+  }
 
   async searchVendors(query: VendorSearchQuery): Promise<VendorSummary[]> {
     const limit = clamp(query.limit, 8);

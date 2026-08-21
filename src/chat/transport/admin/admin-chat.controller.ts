@@ -339,6 +339,29 @@ export class AdminChatController {
     return { message: 'Area saved', data };
   }
 
+  @Get(':id/catalog/categories')
+  @ApiOperation({
+    summary: 'The kinds of shop that serve this buyer',
+    description:
+      'Counted from the vendors themselves rather than a fixed list — `businessCategory` ' +
+      'is free text. Scoped to the area, so a category with nothing nearby is never ' +
+      'offered.',
+  })
+  @ApiParam({ name: 'id', description: 'Conversation id' })
+  @ApiQuery({
+    name: 'areaId',
+    required: false,
+    description: 'Defaults to the buyer’s',
+  })
+  @ApiResponse({ status: 200, description: 'Categories with store counts' })
+  async catalogCategories(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Query('areaId') areaId?: string,
+  ) {
+    const data = await this.adminCatalog.categories(id, areaId);
+    return { message: 'Categories retrieved successfully', data };
+  }
+
   @Get(':id/catalog/stores')
   @ApiOperation({
     summary: 'Stores that can actually deliver to this buyer',
@@ -358,9 +381,14 @@ export class AdminChatController {
   async catalogStores(
     @Param('id', ParseUUIDPipe) id: string,
     @Query('areaId') areaId?: string,
+    @Query('category') category?: string,
     @Query('search') search?: string,
   ) {
-    const data = await this.adminCatalog.stores(id, { areaId, search });
+    const data = await this.adminCatalog.stores(id, {
+      areaId,
+      category,
+      search,
+    });
     return { message: 'Stores retrieved successfully', data };
   }
 
@@ -385,11 +413,13 @@ export class AdminChatController {
     @Param('id', ParseUUIDPipe) id: string,
     @Query('vendorId') vendorId?: string,
     @Query('areaId') areaId?: string,
+    @Query('category') category?: string,
     @Query('search') search?: string,
   ) {
     const data = await this.adminCatalog.products(id, {
       areaId,
       vendorId,
+      category,
       search,
     });
     return { message: 'Products retrieved successfully', data };

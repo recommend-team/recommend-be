@@ -48,7 +48,21 @@ export interface ProductSearchQuery {
   limit?: number;
 }
 
+/**
+ * A kind of shop, counted.
+ *
+ * Derived from what vendors actually are rather than a fixed taxonomy — `businessCategory`
+ * is free text a vendor supplied, so the only honest list is the one in the data. Scoped
+ * to an area, it also stops offering a category nothing nearby can fulfil.
+ */
+export interface CategorySummary {
+  name: string;
+  storeCount: number;
+}
+
 export interface CatalogPort {
+  /** The categories with at least one open-or-closed approved store, newest first. */
+  listCategories(query: { areaId?: string }): Promise<CategorySummary[]>;
   searchVendors(query: VendorSearchQuery): Promise<VendorSummary[]>;
   getVendorById(vendorId: string): Promise<VendorSummary | null>;
   searchProducts(query: ProductSearchQuery): Promise<ProductSummary[]>;

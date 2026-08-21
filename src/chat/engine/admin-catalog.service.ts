@@ -4,6 +4,7 @@ import { CATALOG_PORT } from '../ports/catalog.port';
 import { LOCATION_PORT } from '../ports/location.port';
 import type {
   CatalogPort,
+  CategorySummary,
   ProductSummary,
   VendorSummary,
 } from '../ports/catalog.port';
@@ -57,15 +58,29 @@ export class AdminCatalogService {
 
   async stores(
     conversationId: string,
-    query: { areaId?: string; search?: string; limit?: number },
+    query: {
+      areaId?: string;
+      category?: string;
+      search?: string;
+      limit?: number;
+    },
   ): Promise<VendorSummary[]> {
     const areaId = await this.resolveArea(conversationId, query.areaId);
 
     return this.catalog.searchVendors({
       text: query.search?.trim() || undefined,
       areaId: areaId ?? undefined,
+      categories: categoryFilter(query.category),
       limit: query.limit ?? 20,
     });
+  }
+
+  async categories(
+    conversationId: string,
+    areaId?: string,
+  ): Promise<CategorySummary[]> {
+    const resolved = await this.resolveArea(conversationId, areaId);
+    return this.catalog.listCategories({ areaId: resolved ?? undefined });
   }
 
   async products(
@@ -73,6 +88,7 @@ export class AdminCatalogService {
     query: {
       areaId?: string;
       vendorId?: string;
+      category?: string;
       search?: string;
       limit?: number;
     },
@@ -83,6 +99,7 @@ export class AdminCatalogService {
       text: query.search?.trim() || undefined,
       vendorId: query.vendorId,
       areaId: areaId ?? undefined,
+      categories: categoryFilter(query.category),
       limit: query.limit ?? 20,
     });
   }
@@ -102,4 +119,8 @@ export class AdminCatalogService {
     if (!conversation) throw new NotFoundException('Conversation not found');
     return conversation;
   }
+}
+function categoryFilter(category?: string): string[] | undefined {
+  const name = category?.trim();
+  return name ? [name] : undefined;
 }

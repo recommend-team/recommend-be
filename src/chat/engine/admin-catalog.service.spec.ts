@@ -20,7 +20,11 @@ const conversationWith = (over: Partial<Conversation> = {}): Conversation =>
 
 describe('AdminCatalogService', () => {
   let service: AdminCatalogService;
-  let catalog: { searchVendors: jest.Mock; searchProducts: jest.Mock };
+  let catalog: {
+    searchVendors: jest.Mock;
+    searchProducts: jest.Mock;
+    listCategories: jest.Mock;
+  };
   let locations: {
     listAreas: jest.Mock;
     searchAreas: jest.Mock;
@@ -32,6 +36,7 @@ describe('AdminCatalogService', () => {
     catalog = {
       searchVendors: jest.fn().mockResolvedValue([]),
       searchProducts: jest.fn().mockResolvedValue([]),
+      listCategories: jest.fn().mockResolvedValue([]),
     };
     locations = {
       listAreas: jest.fn().mockResolvedValue([area(IKEJA, 'Ikeja')]),
@@ -159,6 +164,51 @@ describe('AdminCatalogService', () => {
       expect(catalog.searchProducts).toHaveBeenCalledWith(
         expect.objectContaining({ text: undefined }),
       );
+    });
+  });
+
+  describe('categories', () => {
+    it('lists only what serves this buyer', async () => {
+      // A category with no store nearby is worse than none — it reads as a dead end.
+      await service.categories('c1');
+
+      expect(catalog.listCategories).toHaveBeenCalledWith({ areaId: IKEJA });
+    });
+
+    it('follows the admin to another area', async () => {
+      await service.categories('c1', LEKKI);
+
+      expect(catalog.listCategories).toHaveBeenCalledWith({ areaId: LEKKI });
+    });
+
+    it('narrows stores to the chosen kind of shop', async () => {
+      await service.stores('c1', { category: 'Restaurant' });
+
+      expect(catalog.searchVendors).toHaveBeenCalledWith(
+        expect.objectContaining({
+          areaId: IKEJA,
+          categories: ['Restaurant'],
+        }),
+      );
+    });
+
+    it('narrows products the same way', async () => {
+      await service.products('c1', { category: 'Gadgets' });
+
+      expect(catalog.searchProducts).toHaveBeenCalledWith(
+        expect.objectContaining({ categories: ['Gadgets'] }),
+      );
+    });
+
+    it('treats no category as every category', async () => {
+      await service.stores('c1', {});
+      await service.stores('c1', { category: '   ' });
+
+      for (const call of catalog.searchVendors.mock.calls as [
+        { categories?: string[] },
+      ][]) {
+        expect(call[0].categories).toBeUndefined();
+      }
     });
   });
 
