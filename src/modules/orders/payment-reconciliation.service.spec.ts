@@ -58,17 +58,22 @@ describe('PaymentReconciliationService', () => {
   it('only looks at orders old enough to have missed their own confirmation', async () => {
     await service.sweep();
 
-    const where = checkouts.find.mock.calls[0][0].where as {
-      status: OrderStatus;
-      createdAt: { value: [Date, Date] } | Date[];
-    };
+    // `mock.calls` is any[][]; naming the shape once keeps the indexing typed.
+    const calls = checkouts.find.mock.calls as [
+      {
+        where: {
+          status: OrderStatus;
+          createdAt: { value: [Date, Date] } | Date[];
+        };
+      },
+    ][];
+    const where = calls[0][0].where;
     expect(where.status).toBe(OrderStatus.PENDING_PAYMENT);
 
     // Between(oldest, newest) — the newest edge is the grace period, so an order placed
     // seconds ago is left to the buyer's own app rather than raced.
-    const [oldest, newest] = (
-      where.createdAt as { value: [Date, Date] }
-    ).value ?? [new Date(), new Date()];
+    const [oldest, newest] = (where.createdAt as { value: [Date, Date] })
+      .value ?? [new Date(), new Date()];
     const minutesAgo = (Date.now() - newest.getTime()) / 60_000;
     const hoursAgo = (Date.now() - oldest.getTime()) / 3_600_000;
 
