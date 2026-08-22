@@ -12,7 +12,7 @@ export interface StorefrontResponse {
     businessName: string | null;
     businessDescription: string | null;
     businessCategory: string | null;
-    businessAreas: string[] | null;
+    serviceAreas: { id: string; name: string }[];
     businessLogoUrl: string | null;
     businessBannerUrl: string | null;
     whatsappNumber: string | null;
@@ -46,7 +46,7 @@ export interface StoreListItem {
   businessName: string | null;
   businessDescription: string | null;
   businessCategory: string | null;
-  businessAreas: string[] | null;
+  serviceAreas: { id: string; name: string }[];
   businessLogoUrl: string | null;
   slug: string | null;
   isOpen: boolean;
@@ -83,12 +83,12 @@ export class StoreService {
         'businessName',
         'businessDescription',
         'businessCategory',
-        'businessAreas',
         'businessLogoUrl',
         'slug',
         'isOpen',
         'createdAt',
       ],
+      relations: ['serviceAreas'],
       skip,
       take: validLimit,
       order: { createdAt: 'DESC' },
@@ -97,7 +97,20 @@ export class StoreService {
     return {
       message: 'Stores retrieved successfully',
       data: {
-        items,
+        items: items.map((vendor) => ({
+          id: vendor.id,
+          businessName: vendor.businessName,
+          businessDescription: vendor.businessDescription,
+          businessCategory: vendor.businessCategory,
+          serviceAreas: (vendor.serviceAreas ?? []).map((area) => ({
+            id: area.id,
+            name: area.name,
+          })),
+          businessLogoUrl: vendor.businessLogoUrl,
+          slug: vendor.slug,
+          isOpen: vendor.isOpen,
+          createdAt: vendor.createdAt,
+        })),
         total,
         page: validPage,
         limit: validLimit,
@@ -109,7 +122,10 @@ export class StoreService {
   async getStorefront(
     slug: string,
   ): Promise<{ message: string; data: StorefrontResponse }> {
-    const vendor = await this.usersRepository.findOne({ where: { slug } });
+    const vendor = await this.usersRepository.findOne({
+      where: { slug },
+      relations: ['serviceAreas'],
+    });
     if (!vendor) throw new NotFoundException('Storefront not found');
 
     const products = await this.productsService.findAvailableByVendor(
@@ -124,7 +140,10 @@ export class StoreService {
           businessName: vendor.businessName,
           businessDescription: vendor.businessDescription,
           businessCategory: vendor.businessCategory,
-          businessAreas: vendor.businessAreas,
+          serviceAreas: (vendor.serviceAreas ?? []).map((area) => ({
+            id: area.id,
+            name: area.name,
+          })),
           businessLogoUrl: vendor.businessLogoUrl,
           businessBannerUrl: vendor.businessBannerUrl,
           whatsappNumber: vendor.whatsappNumber,

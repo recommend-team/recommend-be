@@ -5,6 +5,9 @@ import {
   Post,
   Body,
   Query,
+  Param,
+  ParseUUIDPipe,
+  GoneException,
   HttpCode,
   HttpStatus,
 } from '@nestjs/common';
@@ -14,9 +17,11 @@ import {
   ApiResponse,
   ApiBearerAuth,
   ApiBody,
+  ApiParam,
   ApiQuery,
 } from '@nestjs/swagger';
 import { SellersService } from './sellers.service';
+import { OrderLifecycleService } from '../orders/order-lifecycle.service';
 import { Roles } from '../auth/decorators/roles.decorator';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { Role } from '../../common/enums/roles.enum';
@@ -32,10 +37,6 @@ import {
   updateRegisteredKycSchema,
   updateNonRegisteredKycSchema,
 } from './dto/update-kyc.dto';
-import {
-  UpdatePayoutRequestDto,
-  updatePayoutSchema,
-} from './dto/update-payout.dto';
 import { VendorType } from '../../common/enums/vendor-type.enum';
 
 @ApiTags('Sellers')
@@ -43,7 +44,10 @@ import { VendorType } from '../../common/enums/vendor-type.enum';
 @Controller('sellers')
 @Roles(Role.SELLER)
 export class SellersController {
-  constructor(private readonly sellersService: SellersService) {}
+  constructor(
+    private readonly sellersService: SellersService,
+    private readonly lifecycle: OrderLifecycleService,
+  ) {}
 
   @Get('profile')
   @ApiOperation({
@@ -117,26 +121,21 @@ export class SellersController {
   }
 
   @Patch('profile/payout')
-  @HttpCode(HttpStatus.OK)
   @ApiOperation({
-    summary: 'Update bank / payout details',
+    deprecated: true,
+    summary: 'Gone — use the payout account endpoints',
     description:
-      'Set the bank account details used for order payouts. All four fields are required. ' +
-      'Use the Paystack bank list to get the correct bank code.',
+      'Bank details are no longer a profile field. They are verified accounts now: ' +
+      'POST /sellers/payout-accounts, then confirm with the emailed code. Details saved ' +
+      'through this endpoint were migrated as unverified and need confirming once.',
   })
-  @ApiBody({ type: UpdatePayoutRequestDto })
-  @ApiResponse({ status: 200, description: 'Payout details updated' })
-  @ApiResponse({
-    status: 400,
-    description: 'Validation failed — check account number format',
-  })
-  @ApiResponse({ status: 403, description: 'Forbidden' })
-  async updatePayout(
-    @CurrentUser() user: User,
-    @Body(new ZodValidationPipe(updatePayoutSchema))
-    dto: UpdatePayoutRequestDto,
-  ) {
-    return this.sellersService.updatePayout(user.id, dto);
+  @ApiResponse({ status: 410, description: 'Endpoint retired' })
+  updatePayout() {
+    throw new GoneException({
+      code: 'ENDPOINT_RETIRED',
+      message:
+        'Payout details moved to verified payout accounts. Use POST /sellers/payout-accounts.',
+    });
   }
 
   // ─── Orders & Earnings ──────────────────────────────────────────────────────
@@ -164,14 +163,62 @@ export class SellersController {
     });
   }
 
+  @Patch('orders/:id/ready')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    summary: 'Mark an order ready for pickup',
+    description:
+      'The vendor\'s only transition: "I have the goods, a rider can collect". Show it ' +
+      'as **Ready for pickup**, never as Accept — a button marked Accept gets tapped ' +
+      'the moment an order appears, and dispatch then sends a rider for food that is ' +
+      'not cooked. Once every vendor on the basket is ready, the whole order becomes ' +
+      'ready; on a pickup order that is what tells the buyer to come.',
+  })
+  @ApiParam({ name: 'id', description: 'Order id (this vendor’s own)' })
+  @ApiResponse({ status: 200, description: 'Marked ready' })
+  @ApiResponse({ status: 400, description: 'The order has not been paid for' })
+  @ApiResponse({
+    status: 403,
+    description: 'That order belongs to someone else',
+  })
+  @ApiResponse({ status: 404, description: 'Order not found' })
+  async markOrderReady(
+    @CurrentUser() user: User,
+    @Param('id', ParseUUIDPipe) id: string,
+  ) {
+    await this.lifecycle.markReady(id, user.id);
+    return { message: 'Order marked ready for pickup' };
+  }
+
+  @Get('sales')
+  @ApiOperation({
+    summary: 'What I have sold',
+    description:
+      'Gross and net of commission, with a twelve-month breakdown, counting every order ' +
+      'that has been paid for. ' +
+      '**This is not the wallet balance.** It answers "what have I sold", where the ' +
+      'wallet answers "what can I withdraw" — and they differ by every order that is ' +
+      'paid but not yet confirmed received. See GET /sellers/wallet.',
+  })
+  @ApiResponse({ status: 200, description: 'Sales summary' })
+  async getSales(@CurrentUser() user: User) {
+    return this.sellersService.getSales(user.id);
+  }
+
+  /**
+   * The old name. Kept working rather than broken: the vendor app and the web dashboard
+   * both call it, and a rename is not worth an outage.
+   */
   @Get('earnings')
   @ApiOperation({
-    summary: 'Get earnings summary',
+    deprecated: true,
+    summary: 'Deprecated — use GET /sellers/sales',
     description:
-      'Returns total gross revenue, net revenue (after 20% platform fee), and monthly breakdown for the last 12 months.',
+      'Renamed so it stops competing with the wallet balance, which is a different ' +
+      'number answering a different question. Identical response.',
   })
-  @ApiResponse({ status: 200, description: 'Earnings summary' })
+  @ApiResponse({ status: 200, description: 'Sales summary' })
   async getEarnings(@CurrentUser() user: User) {
-    return this.sellersService.getEarnings(user.id);
+    return this.sellersService.getSales(user.id);
   }
 }

@@ -12,33 +12,33 @@ import { User } from '../../auth/entities/auth.entity';
 @Entity('products')
 export class Product {
   @PrimaryGeneratedColumn('uuid')
-  id: string;
+  id!: string;
 
   @Column({ type: 'uuid' })
-  vendorId: string;
+  vendorId!: string;
 
   @ManyToOne(() => User, { onDelete: 'CASCADE' })
   @JoinColumn({ name: 'vendorId' })
-  vendor: User;
+  vendor!: User;
 
   @Column({ type: 'varchar', length: 100 })
-  name: string;
+  name!: string;
 
   @Column({ type: 'text', nullable: true })
-  description: string | null;
+  description!: string | null;
 
   @Column({ type: 'decimal', precision: 10, scale: 2 })
-  price: number;
+  price!: number;
 
   @Column({ type: 'varchar', nullable: true })
-  imageUrl: string | null;
+  imageUrl!: string | null;
 
   @Column({ type: 'boolean', default: true })
-  isAvailable: boolean;
+  isAvailable!: boolean;
 
   @CreateDateColumn({ type: 'timestamptz' })
-  createdAt: Date;
+  createdAt!: Date;
 
   @UpdateDateColumn({ type: 'timestamptz' })
-  updatedAt: Date;
+  updatedAt!: Date;
 }

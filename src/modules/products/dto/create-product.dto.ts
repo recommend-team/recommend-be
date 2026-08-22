@@ -26,7 +26,7 @@ export type CreateProductDto = z.infer<typeof createProductSchema>;
 /** Swagger class for @ApiBody */
 export class CreateProductRequestDto {
   @ApiProperty({ example: 'Jollof Rice', minLength: 2, maxLength: 100 })
-  name: string;
+  name!: string;
 
   @ApiPropertyOptional({
     example: 'Smoky Nigerian jollof rice with grilled chicken',
@@ -35,7 +35,7 @@ export class CreateProductRequestDto {
   description?: string;
 
   @ApiProperty({ example: 2500.0, description: 'Price in NGN' })
-  price: number;
+  price!: number;
 
   @ApiPropertyOptional({
     example: 'https://res.cloudinary.com/example/image.jpg',

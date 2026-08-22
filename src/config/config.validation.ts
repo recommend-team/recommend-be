@@ -4,6 +4,8 @@ import {
   IsNumber,
   IsString,
   IsOptional,
+  Max,
+  Min,
   validateSync,
 } from 'class-validator';
 
@@ -15,13 +17,13 @@ enum Environment {
 
 class EnvironmentVariables {
   @IsEnum(Environment)
-  NODE_ENV: Environment;
+  NODE_ENV!: Environment;
 
   @IsNumber()
-  PORT: number;
+  PORT!: number;
 
   @IsString()
-  DATABASE_URL: string;
+  DATABASE_URL!: string;
 
   @IsOptional()
   @IsString()
@@ -32,10 +34,10 @@ class EnvironmentVariables {
   DATABASE_LOGGING?: string;
 
   @IsString()
-  JWT_SECRET: string;
+  JWT_SECRET!: string;
 
   @IsString()
-  JWT_REFRESH_SECRET: string;
+  JWT_REFRESH_SECRET!: string;
 
   @IsOptional()
   @IsString()
@@ -44,6 +46,10 @@ class EnvironmentVariables {
   @IsOptional()
   @IsString()
   JWT_REFRESH_EXPIRES_IN?: string;
+
+  @IsOptional()
+  @IsString()
+  REDIS_URL?: string;
 
   @IsOptional()
   @IsString()
@@ -100,6 +106,37 @@ class EnvironmentVariables {
   @IsOptional()
   @IsString()
   SENDGRID_API_KEY?: string;
+
+  @IsOptional()
+  @IsNumber()
+  CHAT_MAX_HISTORY_MESSAGES?: number;
+
+  @IsOptional()
+  @IsNumber()
+  CHAT_MAX_TOOL_ROUNDS?: number;
+
+  /** Flat delivery fee in naira, charged once per checkout on DELIVERY orders. */
+  @IsOptional()
+  @IsNumber()
+  DELIVERY_FEE_NGN?: number;
+
+  @IsOptional()
+  @IsNumber()
+  @Min(0)
+  @Max(100)
+  PLATFORM_FEE_PERCENT?: number;
+
+  @IsOptional()
+  @IsString()
+  VAPID_PUBLIC_KEY?: string;
+
+  @IsOptional()
+  @IsString()
+  VAPID_PRIVATE_KEY?: string;
+
+  @IsOptional()
+  @IsString()
+  VAPID_SUBJECT?: string;
 }
 
 export function validate(config: Record<string, unknown>) {

@@ -14,9 +14,15 @@ import { ProductsModule } from './modules/products/products.module';
 import { OrdersModule } from './modules/orders/orders.module';
 import { PaymentsModule } from './modules/payments/payments.module';
 import { StoreModule } from './modules/store/store.module';
+import { LocationsModule } from './modules/locations/locations.module';
+import { ChatModule } from './chat/chat.module';
+import { NotificationsModule } from './modules/notifications/notifications.module';
+import { WalletModule } from './modules/wallet/wallet.module';
+import { EventEmitterModule } from '@nestjs/event-emitter';
 import { JwtAuthGuard } from './modules/auth/guards/jwt-auth.guard';
 import { RolesGuard } from './modules/auth/guards/roles.guard';
 import { ApprovedOnlyGuard } from './modules/auth/guards/approved-only.guard';
+import { PasswordConfirmationGuard } from './modules/auth/guards/password-confirmation.guard';
 import { ResponseInterceptor } from './common/interceptors/response.interceptor';
 import { HttpExceptionFilter } from './common/filters/http-exception.filter';
 
@@ -34,6 +40,11 @@ import { HttpExceptionFilter } from './common/filters/http-exception.filter';
     OrdersModule,
     PaymentsModule,
     StoreModule,
+    LocationsModule,
+    ChatModule,
+    NotificationsModule,
+    WalletModule,
+    EventEmitterModule.forRoot(),
     // TODO: Enable BullModule once Redis/Upstash is configured for production
     // BullModule.forRootAsync({
     //   imports: [ConfigModule],
@@ -59,6 +70,8 @@ import { HttpExceptionFilter } from './common/filters/http-exception.filter';
     { provide: APP_GUARD, useClass: RolesGuard },
     // Global approval guard — enforces @ApprovedOnly() decorator (KYC-gated endpoints)
     { provide: APP_GUARD, useClass: ApprovedOnlyGuard },
+    // Re-authentication for @RequiresPassword() routes — anything that can redirect money
+    { provide: APP_GUARD, useClass: PasswordConfirmationGuard },
     // Global response interceptor — wraps all success responses
     { provide: APP_INTERCEPTOR, useClass: ResponseInterceptor },
     // Global exception filter — standardises all error responses

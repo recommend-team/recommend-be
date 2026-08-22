@@ -16,8 +16,11 @@
     "baseUrl": "./",
     "incremental": true,
     "skipLibCheck": true,
-    "strictNullChecks": true,
+    "strict": true,
     "forceConsistentCasingInFileNames": true,
+    // Kept off deliberately: turning either on is a separate cleanup, not part of
+    // enabling strict. Entities and DTOs use `!` since TypeORM and class-transformer
+    // assign their properties after construction.
     "noImplicitAny": false,
     "strictBindCallApply": false,
     "noFallthroughCasesInSwitch": false

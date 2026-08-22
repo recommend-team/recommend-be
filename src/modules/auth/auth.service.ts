@@ -559,7 +559,13 @@ export class AuthService {
     user: User,
     resetToken: string,
   ): Promise<void> {
-    const resetUrl = `${this.configService.get('app.frontendUrl')}/reset-password?token=${resetToken}`;
+    // Vendors live in the vendor app; everyone else resets on the web frontend.
+    const vendorAppUrl = this.configService.get<string>('app.vendorAppUrl');
+    const base =
+      user.role === Role.SELLER && vendorAppUrl
+        ? vendorAppUrl
+        : this.configService.get<string>('app.frontendUrl');
+    const resetUrl = `${base}/reset-password?token=${resetToken}`;
     try {
       await this.emailService.sendEmail({
         to: user.email,

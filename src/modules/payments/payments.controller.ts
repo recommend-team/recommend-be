@@ -12,6 +12,8 @@ import { ApiTags, ApiOperation, ApiResponse } from '@nestjs/swagger';
 import { Public } from '../auth/decorators/public.decorator';
 import { PaymentsService } from './payments.service';
 import { OrdersService } from '../orders/orders.service';
+import { WithdrawalsService } from '../wallet/withdrawals.service';
+import { WithdrawalStatus } from '../wallet/entities/withdrawal.entity';
 
 @ApiTags('Payments')
 @Controller('payments')
@@ -21,6 +23,7 @@ export class PaymentsController {
   constructor(
     private readonly paymentsService: PaymentsService,
     private readonly ordersService: OrdersService,
+    private readonly withdrawalsService: WithdrawalsService,
   ) {}
 
   @Post('webhook')
@@ -60,10 +63,27 @@ export class PaymentsController {
 
     this.logger.log(`Paystack webhook received: ${event}`);
 
-    if (event === 'charge.success') {
-      const reference = data['reference'] as string | undefined;
-      if (reference) {
-        await this.ordersService.handlePaymentSuccess(reference);
+    const reference = data['reference'] as string | undefined;
+
+    if (event === 'charge.success' && reference) {
+      await this.ordersService.handlePaymentSuccess(reference);
+    }
+
+    if (reference) {
+      if (event === 'transfer.success') {
+        await this.withdrawalsService.settle(reference);
+      } else if (event === 'transfer.failed') {
+        await this.withdrawalsService.failByReference(
+          reference,
+          (data['reason'] as string) ?? 'Paystack reported the transfer failed',
+          WithdrawalStatus.FAILED,
+        );
+      } else if (event === 'transfer.reversed') {
+        await this.withdrawalsService.failByReference(
+          reference,
+          (data['reason'] as string) ?? 'Paystack reversed the transfer',
+          WithdrawalStatus.REVERSED,
+        );
       }
     }
 
