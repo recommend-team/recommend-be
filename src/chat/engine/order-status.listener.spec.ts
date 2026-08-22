@@ -57,8 +57,13 @@ describe('OrderStatusListener', () => {
     listener = module.get(OrderStatusListener);
   });
 
-  const sentText = () =>
-    (conversations.recordOutbound.mock.calls[0]?.[0] as { text: string })?.text;
+  const sentText = () => {
+    // `mock.calls` is any[][]; naming the shape once keeps the indexing below typed.
+    const calls = conversations.recordOutbound.mock.calls as [
+      { text: string },
+    ][];
+    return calls[0]?.[0]?.text;
+  };
 
   it('says nothing when a delivery order becomes ready', async () => {
     // READY on a delivery is an internal handoff signal. The rider has not collected

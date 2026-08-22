@@ -1,5 +1,5 @@
 import { registerAs } from '@nestjs/config';
-import { DataSourceOptions } from 'typeorm';
+import type { PostgresConnectionOptions } from 'typeorm/driver/postgres/PostgresConnectionOptions';
 
 export default registerAs('app', () => ({
   nodeEnv: process.env.NODE_ENV || 'development',
@@ -9,6 +9,16 @@ export default registerAs('app', () => ({
   vendorAppUrl: process.env.VENDOR_APP_URL || '',
 }));
 
+const stripSslMode = (url: string): string => {
+  try {
+    const parsed = new URL(url);
+    parsed.searchParams.delete('sslmode');
+    return parsed.toString();
+  } catch {
+    return url;
+  }
+};
+
 export const databaseConfig = registerAs('database', () => {
   const entities = [__dirname + '/../**/*.entity{.ts,.js}'];
   const migrations = [__dirname + '/../database/migrations/*{.ts,.js}'];
@@ -17,11 +27,16 @@ export const databaseConfig = registerAs('database', () => {
     process.env.NODE_ENV !== 'production' &&
     process.env.DATABASE_SYNCHRONIZE === 'true';
 
+  const relaxTls = process.env.DATABASE_SSL === 'true';
+
+  const url =
+    process.env.DATABASE_URL ||
+    'postgresql://postgres:postgres@localhost:5432/recommend_db';
+
   return {
     type: 'postgres' as const,
-    url:
-      process.env.DATABASE_URL ||
-      'postgresql://postgres:postgres@localhost:5432/recommend_db',
+    url: relaxTls ? stripSslMode(url) : url,
+    ssl: relaxTls ? { rejectUnauthorized: false } : undefined,
     entities,
     migrations,
     migrationsRun: !synchronize,
@@ -34,11 +49,12 @@ export const databaseConfig = registerAs('database', () => {
 });
 
 // Helper function for TypeORM DataSource (used in data-source.ts)
-export const getTypeOrmConfig = (): DataSourceOptions => {
+export const getTypeOrmConfig = (): PostgresConnectionOptions => {
   const config = databaseConfig();
   return {
     type: config.type,
     url: config.url,
+    ssl: config.ssl,
     entities: config.entities,
     migrations: config.migrations,
     migrationsTableName: 'migrations',

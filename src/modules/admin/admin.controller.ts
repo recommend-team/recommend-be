@@ -267,7 +267,10 @@ export class AdminController {
   })
   @ApiParam({ name: 'reference', example: 'REC-9A3F2B7C1D4E' })
   @ApiResponse({ status: 200, description: 'Marked dispatched' })
-  @ApiResponse({ status: 400, description: 'Not every vendor is ready, or it is a pickup' })
+  @ApiResponse({
+    status: 400,
+    description: 'Not every vendor is ready, or it is a pickup',
+  })
   async dispatchTransaction(
     @CurrentUser() admin: User,
     @Param('reference') reference: string,

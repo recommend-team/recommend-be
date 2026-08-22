@@ -18,7 +18,6 @@ import { OrderStatus } from '../../common/enums/order-status.enum';
 import { FulfillmentType } from '../../common/enums/fulfillment-type.enum';
 import { SellerStatus } from '../../common/enums/seller-status.enum';
 
-
 const FALLBACK_PLATFORM_FEE_RATE = 0.2;
 
 export type CartChangeReason =

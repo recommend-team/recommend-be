@@ -30,9 +30,7 @@ export class LocalCatalogAdapter implements CatalogPort {
     private readonly productsRepository: Repository<Product>,
   ) {}
 
-  async listCategories(query: {
-    areaId?: string;
-  }): Promise<CategorySummary[]> {
+  async listCategories(query: { areaId?: string }): Promise<CategorySummary[]> {
     const qb = this.usersRepository
       .createQueryBuilder('vendor')
       .select('vendor.businessCategory', 'name')
