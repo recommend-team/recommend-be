@@ -1,4 +1,5 @@
 import { Inject, Injectable, Logger } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { ConversationService } from '../conversation/conversation.service';
 import { ChannelRegistry } from '../transport/channel.registry';
 import { OutboundMessage } from '../transport/channel.interface';
@@ -38,14 +39,27 @@ export interface InboundMessage {
 export class EngineService {
   private readonly logger = new Logger(EngineService.name);
 
+  /**
+   * How many past messages to load for a turn.
+   *
+   * Read from the same setting the discovery layer trims to. Fetching fewer than that
+   * silently caps the model's memory below what CHAT_MAX_HISTORY_MESSAGES advertises —
+   * raising the setting alone would then change nothing at all.
+   */
+  private readonly historyLimit: number;
+
   constructor(
     private readonly conversationService: ConversationService,
     private readonly channelRegistry: ChannelRegistry,
     private readonly discoveryService: DiscoveryService,
     private readonly checkoutFlow: CheckoutFlow,
     private readonly handover: HandoverService,
+    private readonly configService: ConfigService,
     @Inject(ORDERING_PORT) private readonly ordering: OrderingPort,
-  ) {}
+  ) {
+    this.historyLimit =
+      this.configService.get<number>('chat.maxHistoryMessages') ?? 12;
+  }
 
   /**
    * The full round trip: persist the buyer's message, work out a reply, persist it,
@@ -233,7 +247,7 @@ export class EngineService {
     text: string,
   ): Promise<OutboundMessage[]> {
     const history = await this.conversationService.getHistory(conversation.id, {
-      limit: 20,
+      limit: this.historyLimit,
     });
 
     const result = await this.discoveryService.discover({

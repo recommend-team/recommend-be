@@ -1,4 +1,5 @@
 import { Test, TestingModule } from '@nestjs/testing';
+import { ConfigService } from '@nestjs/config';
 import { EngineService } from './engine.service';
 import { ConversationService } from '../conversation/conversation.service';
 import { ChannelRegistry } from '../transport/channel.registry';
@@ -53,6 +54,10 @@ describe('flagging a conversation for attention', () => {
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         EngineService,
+        {
+          provide: ConfigService,
+          useValue: { get: () => 12 },
+        },
         {
           provide: ConversationService,
           useValue: {
@@ -213,6 +218,7 @@ describe('flagging a conversation for attention', () => {
       { discover } as never,
       {} as never,
       { shouldStaySilent: jest.fn().mockResolvedValue(true) } as never,
+      { get: () => 12 } as never,
       {} as never,
     );
     return { service: engine, flagForAttention: flag };
