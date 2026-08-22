@@ -1,4 +1,5 @@
 import { Test, TestingModule } from '@nestjs/testing';
+import { ConfigService } from '@nestjs/config';
 import { EngineService } from './engine.service';
 import { ConversationService } from '../conversation/conversation.service';
 import { ChannelRegistry } from '../transport/channel.registry';
@@ -60,6 +61,10 @@ describe('EngineService', () => {
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         EngineService,
+        {
+          provide: ConfigService,
+          useValue: { get: () => 12 },
+        },
         { provide: ConversationService, useValue: conversations },
         { provide: ChannelRegistry, useValue: registry },
         { provide: DiscoveryService, useValue: discovery },

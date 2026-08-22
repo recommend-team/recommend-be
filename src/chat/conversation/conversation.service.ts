@@ -275,7 +275,14 @@ export class ConversationService {
     return new Map(rows.map((row) => [row.id, row.text]));
   }
 
-  /** Newest-first page of history, oldest-first within the page for rendering. */
+  /**
+   * Newest-first page of history, oldest-first within the page for rendering.
+   *
+   * The hard ceiling of 100 guards the paginated endpoint a client calls — nobody gets
+   * to ask for the whole thread in one request. It is also, in effect, the ceiling on
+   * `CHAT_MAX_HISTORY_MESSAGES`: setting that higher clamps here rather than erroring,
+   * so the model would quietly see 100 whatever the config claimed.
+   */
   async getHistory(
     conversationId: string,
     options: { before?: Date; limit?: number } = {},
