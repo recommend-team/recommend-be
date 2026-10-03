@@ -435,6 +435,13 @@ export class AuthService {
   // ─── JWT validation ────────────────────────────────────────────────────────
 
   async validateUser(payload: JwtPayload): Promise<User | null> {
+    // A validly signed token with no subject is not a login. Without this check the id
+    // reaches `findOne` as undefined, TypeORM drops the condition, and the query returns
+    // whichever user happens to be first — in practice, the bootstrapped super admin.
+    if (typeof payload?.sub !== 'string' || payload.sub.length === 0) {
+      return null;
+    }
+
     const user = await this.usersRepository.findOne({
       where: { id: payload.sub },
     });

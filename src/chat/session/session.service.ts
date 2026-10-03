@@ -1,11 +1,16 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import { ConfigService } from '@nestjs/config';
-import { randomUUID } from 'crypto';
+import { createHmac, randomUUID } from 'crypto';
 
 export interface ChatSessionClaims {
   /** Channel-native address — for the PWA, a device-scoped opaque id. */
   sid: string;
+}
+
+export interface VerifiedSession {
+  sessionId: string;
+  legacy: boolean;
 }
 
 /**
@@ -16,33 +21,31 @@ export interface ChatSessionClaims {
  * history off it would let anyone read a stranger's orders by typing their number.
  *
  * The token proves continuity of a device and nothing more. It is not an identity and
- * confers no privileges anywhere else in the platform — note it is signed with the
- * chat secret and carries no `sub`, so it can never satisfy the platform's JWT guard.
+ * confers no privileges anywhere else in the platform.
  */
 @Injectable()
 export class SessionService {
   private readonly logger = new Logger(SessionService.name);
   private readonly secret: string;
+  /** The platform secret chat tokens used to be signed with. Verify-only, never signs. */
+  private readonly legacySecret: string;
 
   constructor(
     private readonly jwtService: JwtService,
     private readonly configService: ConfigService,
   ) {
-    this.secret = this.configService.get<string>('jwt.secret') ?? '';
+    this.legacySecret = this.configService.get<string>('jwt.secret') ?? '';
+    this.secret =
+      this.configService.get<string>('chat.sessionSecret') ||
+      createHmac('sha256', this.legacySecret)
+        .update('recommend:chat-session')
+        .digest('hex');
   }
 
   /** Mint a session for a device we have not seen before. */
   async issue(): Promise<{ token: string; sessionId: string }> {
     const sessionId = randomUUID();
-    const claims: ChatSessionClaims = { sid: sessionId };
-
-    const token = await this.jwtService.signAsync(claims, {
-      secret: this.secret,
-      // Long-lived: losing it loses the chat history, and there is no login to
-      // recover it with.
-      expiresIn: '365d',
-    });
-
+    const token = await this.tokenFor(sessionId);
     return { token, sessionId };
   }
 
@@ -64,16 +67,39 @@ export class SessionService {
 
   /** Returns the session id, or null if the token is missing, forged or expired. */
   async verify(token?: string): Promise<string | null> {
+    return (await this.inspect(token))?.sessionId ?? null;
+  }
+
+  /** As `verify`, and also says whether the token is due to be replaced. */
+  async inspect(token?: string): Promise<VerifiedSession | null> {
     if (!token) return null;
 
+    const current = await this.sidSignedWith(token, this.secret);
+    if (current) return { sessionId: current, legacy: false };
+
+    const legacy = this.legacySecret
+      ? await this.sidSignedWith(token, this.legacySecret)
+      : null;
+    if (legacy) return { sessionId: legacy, legacy: true };
+
+    this.logger.debug('Rejected an invalid chat session token');
+    return null;
+  }
+
+  /**
+   * The session id, if `token` is a chat token signed with `secret`. A platform access
+   * token signed with the same secret is not one — it has no `sid` — and is refused.
+   */
+  private async sidSignedWith(
+    token: string,
+    secret: string,
+  ): Promise<string | null> {
     try {
-      const claims = await this.jwtService.verifyAsync<ChatSessionClaims>(
-        token,
-        { secret: this.secret },
-      );
-      return claims.sid ?? null;
+      const claims = await this.jwtService.verifyAsync<
+        Partial<ChatSessionClaims>
+      >(token, { secret });
+      return typeof claims.sid === 'string' && claims.sid ? claims.sid : null;
     } catch {
-      this.logger.debug('Rejected an invalid chat session token');
       return null;
     }
   }

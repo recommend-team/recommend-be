@@ -78,7 +78,17 @@ export class PwaGateway implements OnGatewayInit, OnGatewayConnection {
   private async initialise(socket: Socket): Promise<void> {
     try {
       const presented = extractToken(socket);
-      let sessionId = await this.sessionService.verify(presented);
+      const verified = await this.sessionService.inspect(presented);
+      let sessionId = verified?.sessionId ?? null;
+
+      // Signed under the old scheme. Same session, same thread — just a token that is
+      // no longer signed with the platform's login secret.
+      if (verified?.legacy) {
+        socket.emit('session', {
+          token: await this.sessionService.tokenFor(verified.sessionId),
+          sessionId: verified.sessionId,
+        });
+      }
 
       // Unknown, forged or expired token: issue a fresh session rather than refusing
       // the connection. A buyer with a stale token gets a working chat, not an error.

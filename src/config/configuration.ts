@@ -126,6 +126,7 @@ export const googleConfig = registerAs('google', () => ({
 }));
 
 export const chatConfig = registerAs('chat', () => ({
+  sessionSecret: process.env.CHAT_SESSION_SECRET,
   /**
    * How many past messages go to the model. The main lever on per-turn token cost —
    * every extra message is paid for on every turn of every conversation.

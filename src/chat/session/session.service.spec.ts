@@ -3,6 +3,8 @@ import { JwtModule, JwtService } from '@nestjs/jwt';
 import { ConfigService } from '@nestjs/config';
 import { SessionService } from './session.service';
 
+const PLATFORM_SECRET = 'test-platform-jwt-secret';
+
 describe('SessionService', () => {
   let service: SessionService;
   let jwtService: JwtService;
@@ -14,7 +16,15 @@ describe('SessionService', () => {
         SessionService,
         {
           provide: ConfigService,
-          useValue: { get: jest.fn().mockReturnValue('test-chat-secret') },
+          useValue: {
+            get: jest.fn(
+              (key: string) =>
+                ({
+                  'chat.sessionSecret': 'test-chat-secret',
+                  'jwt.secret': PLATFORM_SECRET,
+                })[key],
+            ),
+          },
         },
       ],
     }).compile();
@@ -80,5 +90,68 @@ describe('SessionService', () => {
     expect(Object.keys(decoded)).toEqual(
       expect.arrayContaining(['sid', 'iat', 'exp']),
     );
+  });
+
+  it('is not signed with the platform JWT secret', async () => {
+    const { token } = await service.issue();
+
+    await expect(
+      jwtService.verifyAsync(token, { secret: PLATFORM_SECRET }),
+    ).rejects.toThrow();
+  });
+
+  it('still honours a token from the old scheme, and flags it for rotation', async () => {
+    const legacy = await jwtService.signAsync(
+      { sid: 'old-device' },
+      { secret: PLATFORM_SECRET },
+    );
+
+    await expect(service.inspect(legacy)).resolves.toEqual({
+      sessionId: 'old-device',
+      legacy: true,
+    });
+  });
+
+  it('does not flag a current token for rotation', async () => {
+    const { token, sessionId } = await service.issue();
+
+    await expect(service.inspect(token)).resolves.toEqual({
+      sessionId,
+      legacy: false,
+    });
+  });
+
+  it('refuses a platform access token as a chat session', async () => {
+    const access = await jwtService.signAsync(
+      { sub: 'user-1', role: 'ADMIN' },
+      { secret: PLATFORM_SECRET },
+    );
+
+    await expect(service.verify(access)).resolves.toBeNull();
+  });
+
+  it('derives a key distinct from JWT_SECRET when none is configured', async () => {
+    const module = await Test.createTestingModule({
+      imports: [JwtModule.register({})],
+      providers: [
+        SessionService,
+        {
+          provide: ConfigService,
+          useValue: {
+            get: jest.fn((key: string) =>
+              key === 'jwt.secret' ? PLATFORM_SECRET : undefined,
+            ),
+          },
+        },
+      ],
+    }).compile();
+    const unconfigured = module.get(SessionService);
+
+    const { token, sessionId } = await unconfigured.issue();
+
+    await expect(unconfigured.verify(token)).resolves.toBe(sessionId);
+    await expect(
+      jwtService.verifyAsync(token, { secret: PLATFORM_SECRET }),
+    ).rejects.toThrow();
   });
 });
