@@ -9,6 +9,7 @@ import { SellerStatus } from '../../common/enums/seller-status.enum';
 import {
   ADMIN_ALERT_EVENT,
   AdminAlertEvent,
+  ConversationHandedOverEvent,
   ConversationNeedsAttentionEvent,
   HeldConversationMessageEvent,
 } from '../../common/events/admin-alert.events';
@@ -103,6 +104,33 @@ describe('AdminAlertsService', () => {
           data: { alertId: emitted[0].id },
         }),
         { urgency: 'high', ttlSeconds: 900 },
+      );
+    });
+  });
+
+  describe('a buyer the assistant handed over', () => {
+    beforeEach(() =>
+      service.onHandedOver(
+        new ConversationHandedOverEvent('c1', 'Wants a refund', 'Ada', 5),
+      ),
+    );
+
+    it('alerts every active admin, saying how long they have', () => {
+      expect(emitted[0]).toMatchObject({
+        kind: 'CONVERSATION_HANDED_OVER',
+        title: 'Ada is waiting for you',
+        body: 'Wants a refund. The assistant answers again in 5 min if nobody takes it.',
+        url: '/admin/conversations/c1',
+        adminId: null,
+      });
+      expect(pushedTo()).toEqual(['a1', 'a2']);
+    });
+
+    it('expires the push with the wait — useless once the assistant has answered', () => {
+      expect(push.sendToUser).toHaveBeenCalledWith(
+        'a1',
+        expect.objectContaining({ tag: 'conversation:c1' }),
+        { urgency: 'high', ttlSeconds: 300 },
       );
     });
   });

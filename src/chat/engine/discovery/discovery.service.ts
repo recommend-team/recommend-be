@@ -38,7 +38,10 @@ export interface DiscoveryResult {
   messages: OutboundMessage[];
   resolvedAreaId: string | null;
   usedFallback: boolean;
+  modelFailed: boolean;
   foundNothing: boolean;
+  /** The model asked for a teammate, and why. The engine decides whether to honour it. */
+  handover: string | null;
 }
 
 @Injectable()
@@ -75,7 +78,7 @@ export class DiscoveryService {
 
   async discover(request: DiscoveryRequest): Promise<DiscoveryResult> {
     if (!this.client) {
-      return this.keywordFallback(request);
+      return this.keywordFallback(request, false);
     }
 
     try {
@@ -88,7 +91,7 @@ export class DiscoveryService {
           error instanceof Error ? error.message : 'unknown error'
         }`,
       );
-      return this.keywordFallback(request);
+      return this.keywordFallback(request, true);
     }
   }
 
@@ -166,6 +169,8 @@ export class DiscoveryService {
         });
       }
 
+      if (harvest.handoverReason) break;
+
       // Out of rounds with tools still pending — stop rather than loop forever.
       if (round === this.maxToolRounds) {
         this.logger.warn(
@@ -174,7 +179,10 @@ export class DiscoveryService {
       }
     }
 
-    return this.assemble(reply, harvest, false);
+    return this.assemble(reply, harvest, {
+      usedFallback: false,
+      modelFailed: false,
+    });
   }
   private async areaNamedIn(text: string): Promise<string | null> {
     try {
@@ -198,6 +206,7 @@ export class DiscoveryService {
    */
   private async keywordFallback(
     request: DiscoveryRequest,
+    modelFailed: boolean,
   ): Promise<DiscoveryResult> {
     const harvest = emptyHarvest();
     const query = stripFiller(request.text);
@@ -237,7 +246,7 @@ export class DiscoveryService {
           ? 'I could not match that exactly, but these vendors are near you:'
           : `I could not find anything matching "${query || request.text}". Try another search, or tell me which area you're in.`;
 
-    return this.assemble(reply, harvest, true);
+    return this.assemble(reply, harvest, { usedFallback: true, modelFailed });
   }
 
   // ─── Shared assembly ────────────────────────────────────────────────────────
@@ -249,7 +258,10 @@ export class DiscoveryService {
   private assemble(
     reply: string,
     harvest: ToolHarvest,
-    usedFallback: boolean,
+    {
+      usedFallback,
+      modelFailed,
+    }: { usedFallback: boolean; modelFailed: boolean },
   ): DiscoveryResult {
     const guarded = enforcePriceIntegrity(reply, harvest.prices);
 
@@ -283,8 +295,10 @@ export class DiscoveryService {
       messages,
       resolvedAreaId: harvest.resolvedAreaId,
       usedFallback,
+      modelFailed,
       foundNothing:
         harvest.products.length === 0 && harvest.vendors.length === 0,
+      handover: harvest.handoverReason,
     };
   }
 

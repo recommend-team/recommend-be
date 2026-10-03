@@ -34,6 +34,8 @@ describe('EngineService', () => {
   let handover: {
     shouldStaySilent: jest.Mock;
     announceBuyerWaiting: jest.Mock;
+    awaitingTeammate: jest.Mock;
+    requestHandover: jest.Mock;
   };
 
   beforeEach(async () => {
@@ -50,6 +52,8 @@ describe('EngineService', () => {
     handover = {
       shouldStaySilent: jest.fn().mockResolvedValue(false),
       announceBuyerWaiting: jest.fn(),
+      awaitingTeammate: jest.fn().mockResolvedValue('none'),
+      requestHandover: jest.fn().mockResolvedValue(true),
     };
     discovery = {
       discover: jest.fn().mockResolvedValue({

@@ -35,7 +35,24 @@ export class HeldConversationMessageEvent {
   ) {}
 }
 
+/**
+ * The assistant handed a buyer to a teammate and has gone quiet. The most urgent thing an
+ * admin can hear: someone is waiting on a person, and the clock is running.
+ */
+export const CONVERSATION_HANDED_OVER_EVENT = 'conversation.handed-over';
+
+export class ConversationHandedOverEvent {
+  constructor(
+    readonly conversationId: string,
+    readonly reason: string,
+    readonly buyerName: string | null,
+    /** How long the assistant will wait before answering the buyer itself. */
+    readonly waitMinutes: number,
+  ) {}
+}
+
 export type AdminAlertKind =
+  | 'CONVERSATION_HANDED_OVER'
   | 'CONVERSATION_FLAGGED'
   | 'HELD_CONVERSATION_MESSAGE'
   | 'NEW_PAID_ORDER'

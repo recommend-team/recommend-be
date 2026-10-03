@@ -41,6 +41,8 @@ export interface ConversationSummary {
   heldByAdminId: string | null;
   needsAttentionAt: Date | null;
   attentionReason: string | null;
+  handoverRequestedAt: Date | null;
+  handoverReason: string | null;
   createdAt: Date;
 }
 
@@ -178,6 +180,7 @@ export class ConversationService {
     conversationId: string,
     reason: string,
     buyerName: string | null = null,
+    options: { silent?: boolean } = {},
   ): Promise<void> {
     const result = await this.conversationsRepository.update(
       { id: conversationId, needsAttentionAt: IsNull() },
@@ -186,7 +189,7 @@ export class ConversationService {
 
     // Only when this call raised the flag. One already up has been announced, and
     // repeating it on every struggling turn would teach admins to ignore it.
-    if (result.affected === 1) {
+    if (result.affected === 1 && !options.silent) {
       try {
         this.events.emit(
           CONVERSATION_NEEDS_ATTENTION_EVENT,
@@ -231,13 +234,16 @@ export class ConversationService {
 
     const builder = this.conversationsRepository
       .createQueryBuilder('c')
-      .orderBy('c."needsAttentionAt"', 'ASC', 'NULLS LAST')
+      .orderBy('c."handoverRequestedAt"', 'ASC', 'NULLS LAST')
+      .addOrderBy('c."needsAttentionAt"', 'ASC', 'NULLS LAST')
       .addOrderBy('c."lastMessageAt"', 'DESC', 'NULLS LAST')
       .skip((page - 1) * limit)
       .take(limit);
 
     if (query.needingAttention) {
-      builder.andWhere('c."needsAttentionAt" IS NOT NULL');
+      builder.andWhere(
+        '(c."needsAttentionAt" IS NOT NULL OR c."handoverRequestedAt" IS NOT NULL)',
+      );
     }
 
     if (query.search?.trim()) {
@@ -257,7 +263,10 @@ export class ConversationService {
     const [rows, total] = await builder.getManyAndCount();
 
     const needingAttention = await this.conversationsRepository.count({
-      where: { needsAttentionAt: Not(IsNull()) },
+      where: [
+        { needsAttentionAt: Not(IsNull()) },
+        { handoverRequestedAt: Not(IsNull()) },
+      ],
     });
 
     // One query for the last message of every row on the page, rather than one per row.
@@ -275,6 +284,8 @@ export class ConversationService {
         heldByAdminId: row.heldByAdminId,
         needsAttentionAt: row.needsAttentionAt,
         attentionReason: row.attentionReason,
+        handoverRequestedAt: row.handoverRequestedAt,
+        handoverReason: row.handoverReason,
         createdAt: row.createdAt,
       })),
       total,

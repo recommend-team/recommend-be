@@ -90,14 +90,31 @@ export class EngineService {
       return [];
     }
 
+    const handover = await this.handover.awaitingTeammate(conversation);
+    if (handover === 'waiting') {
+      this.logger.debug(
+        `Conversation ${conversation.id} is waiting for a teammate — not replying`,
+      );
+      return [];
+    }
+
     if (input.cart) {
       await this.conversationService.mergeContext(conversation.id, {
         lastCartSnapshot: input.cart,
       });
     }
 
-    const replies = await this.composeReply(conversation, input.text);
-    return this.deliver(conversation, replies);
+    const replies = await this.composeReply(
+      conversation,
+      input.text,
+      inbound.id,
+    );
+    return this.deliver(
+      conversation,
+      handover === 'expired'
+        ? [{ text: SORRY_FOR_THE_WAIT }, ...replies]
+        : replies,
+    );
   }
 
   private async deliver(
@@ -169,6 +186,7 @@ export class EngineService {
   private async composeReply(
     conversation: Conversation,
     text: string,
+    inboundId: string | null,
   ): Promise<OutboundMessage[]> {
     const trimmed = text.trim();
 
@@ -185,7 +203,7 @@ export class EngineService {
     }
 
     if (conversation.state === ConversationState.DISCOVERY) {
-      return this.discover(conversation, trimmed);
+      return this.discover(conversation, trimmed, inboundId);
     }
 
     // Any other state means a checkout is in progress, and that path is scripted —
@@ -246,10 +264,15 @@ export class EngineService {
   private async discover(
     conversation: Conversation,
     text: string,
+    inboundId: string | null,
   ): Promise<OutboundMessage[]> {
-    const history = await this.conversationService.getHistory(conversation.id, {
-      limit: this.historyLimit,
-    });
+    const history = (
+      await this.conversationService.getHistory(conversation.id, {
+        limit: this.historyLimit + 1,
+      })
+    )
+      .filter((message) => message.id !== inboundId)
+      .slice(-this.historyLimit);
 
     const result = await this.discoveryService.discover({
       text,
@@ -268,29 +291,60 @@ export class EngineService {
       );
     }
 
-    await this.flagIfStruggling(conversation, text, history, result);
+    const struggled = result.modelFailed || result.foundNothing;
+    const repeated = repeatedThemselves(history, text);
+
+    const previousStreak = conversation.context?.strugglingTurns ?? 0;
+    const streak = struggled ? previousStreak + 1 : 0;
+    if (streak !== previousStreak) {
+      await this.conversationService.mergeContext(conversation.id, {
+        strugglingTurns: streak,
+      });
+      conversation.context = {
+        ...conversation.context,
+        strugglingTurns: streak,
+      };
+    }
+    const handoverReason =
+      result.handover ??
+      (repeated
+        ? 'The buyer asked the same thing twice'
+        : streak >= 2
+          ? 'The assistant could not help twice in a row'
+          : null);
+
+    if (handoverReason) {
+      if (await this.handover.requestHandover(conversation, handoverReason)) {
+        return [{ text: HANDING_OVER }];
+      }
+
+      if (result.handover) {
+        await this.flagIfStruggling(conversation, struggled, repeated);
+        return [{ text: CANNOT_HAND_OVER }];
+      }
+    }
+
+    await this.flagIfStruggling(conversation, struggled, repeated);
 
     return result.messages;
   }
 
   /**
-   * Raise a hand when the assistant is not coping.
+   * Raise a hand when the assistant is not coping — the quieter signal than a handover.
+   * It sorts the conversation up the admin queue, and alerts once.
    */
   private async flagIfStruggling(
     conversation: Conversation,
-    text: string,
-    history: ChatMessage[],
-    result: { usedFallback: boolean; foundNothing: boolean },
+    struggled: boolean,
+    repeated: boolean,
   ): Promise<void> {
     if (conversation.needsAttentionAt) return;
 
-    const reason = result.usedFallback
-      ? 'The assistant fell back to keyword search'
-      : result.foundNothing
-        ? 'Nothing matched what they asked for'
-        : repeatedThemselves(history, text)
-          ? 'The buyer asked the same thing twice'
-          : null;
+    const reason = repeated
+      ? 'The buyer asked the same thing twice'
+      : struggled
+        ? 'The assistant could not find what they asked for'
+        : null;
 
     if (!reason) return;
 
@@ -307,6 +361,15 @@ export class EngineService {
     );
   }
 }
+
+/**
+ * What the buyer sees when they are handed over. Never "a person", "a teammate" or "the
+ * bot": they are talking to Recommend throughout (ADMIN_CHAT_PLAN.md §2).
+ */
+const HANDING_OVER = 'Let me check on that for you — one moment.';
+const SORRY_FOR_THE_WAIT = 'Sorry to keep you waiting.';
+const CANNOT_HAND_OVER =
+  "I'm sorry, I can't sort that out from here just now. Is there anything I can help you find?";
 
 /**
  * The buyer saying the same thing again.

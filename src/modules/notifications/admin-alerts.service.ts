@@ -10,7 +10,9 @@ import {
   ADMIN_ALERT_EVENT,
   AdminAlertEvent,
   AdminAlertKind,
+  CONVERSATION_HANDED_OVER_EVENT,
   CONVERSATION_NEEDS_ATTENTION_EVENT,
+  ConversationHandedOverEvent,
   ConversationNeedsAttentionEvent,
   HELD_CONVERSATION_MESSAGE_EVENT,
   HeldConversationMessageEvent,
@@ -52,6 +54,26 @@ export class AdminAlertsService {
     private readonly pushService: PushService,
     private readonly events: EventEmitter2,
   ) {}
+
+  /** The assistant has gone quiet for a buyer and is waiting on one of us. */
+  @OnEvent(CONVERSATION_HANDED_OVER_EVENT)
+  async onHandedOver(event: ConversationHandedOverEvent): Promise<void> {
+    await this.send({
+      kind: 'CONVERSATION_HANDED_OVER',
+      title: `${event.buyerName ?? 'A buyer'} is waiting for you`,
+      body:
+        `${event.reason.replace(/\.$/, '')}. ` +
+        `The assistant answers again in ${event.waitMinutes} min if nobody takes it.`,
+      url: `/admin/conversations/${event.conversationId}`,
+      tag: `conversation:${event.conversationId}`,
+      adminId: null,
+      // Useless once the wait is over — the assistant has answered by then.
+      delivery: {
+        urgency: 'high',
+        ttlSeconds: Math.max(60, event.waitMinutes * 60),
+      },
+    });
+  }
 
   @OnEvent(CONVERSATION_NEEDS_ATTENTION_EVENT)
   async onNeedsAttention(

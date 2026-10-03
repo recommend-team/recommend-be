@@ -154,6 +154,10 @@ export const chatConfig = registerAs('chat', () => ({
     process.env.ADMIN_HANDOVER_STALE_MINUTES || '30',
     10,
   ),
+  handoverWaitMinutes: parseInt(
+    process.env.CHAT_HANDOVER_WAIT_MINUTES || '5',
+    10,
+  ),
 }));
 
 export const deliveryConfig = registerAs('delivery', () => ({

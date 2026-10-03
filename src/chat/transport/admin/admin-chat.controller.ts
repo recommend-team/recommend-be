@@ -172,6 +172,8 @@ export class AdminChatController {
         buyerPhone: conversation.context?.profile?.phone ?? null,
         needsAttentionAt: conversation.needsAttentionAt,
         attentionReason: conversation.attentionReason,
+        handoverRequestedAt: conversation.handoverRequestedAt,
+        handoverReason: conversation.handoverReason,
         messages: messages.map((message) => ({
           id: message.id,
           direction: message.direction,

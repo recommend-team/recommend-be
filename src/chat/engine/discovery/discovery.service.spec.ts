@@ -4,6 +4,17 @@ import { DiscoveryService } from './discovery.service';
 import { CATALOG_PORT } from '../../ports/catalog.port';
 import { LOCATION_PORT } from '../../ports/location.port';
 
+const mockCreate = jest.fn<Promise<unknown>, unknown[]>();
+jest.mock('openai', () => ({
+  __esModule: true,
+  // Read lazily: jest.mock is hoisted above mockCreate's declaration.
+  default: jest.fn(() => ({
+    chat: {
+      completions: { create: (...args: unknown[]) => mockCreate(...args) },
+    },
+  })),
+}));
+
 const product = (over: Partial<Record<string, unknown>> = {}) => ({
   id: 'p1',
   name: 'Jollof Rice',
@@ -203,5 +214,92 @@ describe('DiscoveryService (keyword fallback)', () => {
     });
 
     expect(result.messages[0].text).not.toMatch(/\d{3,}/);
+  });
+});
+
+/**
+ * The model path, with the OpenAI client replaced. What matters here is not what the model
+ * says but what the service does with it: a request for a teammate, and an outage.
+ */
+describe('DiscoveryService (model)', () => {
+  let service: DiscoveryService;
+
+  beforeEach(async () => {
+    mockCreate.mockReset();
+
+    const module: TestingModule = await Test.createTestingModule({
+      providers: [
+        DiscoveryService,
+        {
+          provide: ConfigService,
+          useValue: {
+            get: (key: string) =>
+              key === 'openai.apiKey' ? 'sk-test' : undefined,
+          },
+        },
+        {
+          provide: CATALOG_PORT,
+          useValue: {
+            searchProducts: jest.fn().mockResolvedValue([]),
+            searchVendors: jest.fn().mockResolvedValue([]),
+          },
+        },
+        {
+          provide: LOCATION_PORT,
+          useValue: { searchAreas: jest.fn().mockResolvedValue([]) },
+        },
+      ],
+    }).compile();
+
+    service = module.get(DiscoveryService);
+  });
+
+  const toolCall = (name: string, args: Record<string, unknown>) => ({
+    choices: [
+      {
+        message: {
+          role: 'assistant',
+          content: null,
+          tool_calls: [
+            {
+              id: 'call-1',
+              type: 'function',
+              function: { name, arguments: JSON.stringify(args) },
+            },
+          ],
+        },
+      },
+    ],
+  });
+
+  it('reports a request for a teammate, and stops there', async () => {
+    mockCreate.mockResolvedValueOnce(
+      toolCall('request_teammate', { reason: 'Asking where order REC-1 is' }),
+    );
+
+    const result = await service.discover({
+      text: 'where is my order REC-1',
+      areaId: null,
+      history: [],
+    });
+
+    expect(result.handover).toBe('Asking where order REC-1 is');
+    // No second round: whatever the model would say next is not sent.
+    expect(mockCreate).toHaveBeenCalledTimes(1);
+    expect(result.modelFailed).toBe(false);
+  });
+
+  it('says the model failed when it did, as distinct from having no key', async () => {
+    mockCreate.mockRejectedValueOnce(new Error('503 from OpenAI'));
+
+    const result = await service.discover({
+      text: 'jollof',
+      areaId: null,
+      history: [],
+    });
+
+    expect(result.usedFallback).toBe(true);
+    expect(result.modelFailed).toBe(true);
+    expect(result.handover).toBeNull();
   });
 });

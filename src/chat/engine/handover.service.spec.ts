@@ -9,11 +9,14 @@ import { ChannelRegistry } from '../transport/channel.registry';
 import { ChatChannel, ConversationState } from '../enums/chat.enums';
 import { EventEmitter2 } from '@nestjs/event-emitter';
 import {
+  CONVERSATION_HANDED_OVER_EVENT,
+  ConversationHandedOverEvent,
   HELD_CONVERSATION_MESSAGE_EVENT,
   HeldConversationMessageEvent,
 } from '../../common/events/admin-alert.events';
 
 const STALE_MINUTES = 30;
+const WAIT_MINUTES = 5;
 const minutesAgo = (n: number) => new Date(Date.now() - n * 60_000);
 
 describe('HandoverService', () => {
@@ -23,6 +26,8 @@ describe('HandoverService', () => {
   let sent: { address: string; text: string }[];
   let emitTyping: jest.Mock;
   let recordOutbound: jest.Mock;
+  let flagForAttention: jest.Mock;
+  let mergeContext: jest.Mock;
   const events = { emit: jest.fn() };
 
   const conversation = (over: Partial<Conversation> = {}): Conversation =>
@@ -48,13 +53,15 @@ describe('HandoverService', () => {
       update: jest.fn((_where: unknown, patch: Record<string, unknown>) => {
         updates.push(patch);
         Object.assign(row, patch);
-        return Promise.resolve(undefined);
+        return Promise.resolve({ affected: 1 });
       }),
     };
 
     recordOutbound = jest.fn(() =>
       Promise.resolve({ id: 'm1', createdAt: new Date() }),
     );
+    flagForAttention = jest.fn();
+    mergeContext = jest.fn();
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -62,7 +69,12 @@ describe('HandoverService', () => {
         { provide: getRepositoryToken(Conversation), useValue: conversations },
         {
           provide: ConversationService,
-          useValue: { recordOutbound, clearAttention: jest.fn() },
+          useValue: {
+            recordOutbound,
+            clearAttention: jest.fn(),
+            flagForAttention,
+            mergeContext,
+          },
         },
         {
           provide: ChannelRegistry,
@@ -82,7 +94,11 @@ describe('HandoverService', () => {
         },
         {
           provide: ConfigService,
-          useValue: { get: jest.fn().mockReturnValue(STALE_MINUTES) },
+          useValue: {
+            get: jest.fn((key: string) =>
+              key === 'chat.handoverWaitMinutes' ? WAIT_MINUTES : STALE_MINUTES,
+            ),
+          },
         },
         {
           provide: EventEmitter2,
@@ -319,6 +335,132 @@ describe('HandoverService', () => {
       service.announceBuyerWaiting(conversation(), 'hello');
 
       expect(events.emit).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('the assistant asking for a teammate', () => {
+    beforeEach(() => events.emit.mockClear());
+
+    it('marks it waiting, flags it quietly, and alerts with the wait', async () => {
+      row = conversation({ context: { profile: { name: 'Ada' } } });
+
+      await expect(
+        service.requestHandover(row, 'Wants a refund'),
+      ).resolves.toBe(true);
+
+      expect(row.handoverRequestedAt).toBeInstanceOf(Date);
+      expect(row.handoverReason).toBe('Wants a refund');
+      // Quietly — the handover's own alert is the louder one.
+      expect(flagForAttention).toHaveBeenCalledWith(
+        'c1',
+        'Wants a refund',
+        'Ada',
+        {
+          silent: true,
+        },
+      );
+      expect(events.emit).toHaveBeenCalledWith(
+        CONVERSATION_HANDED_OVER_EVENT,
+        new ConversationHandedOverEvent(
+          'c1',
+          'Wants a refund',
+          'Ada',
+          WAIT_MINUTES,
+        ),
+      );
+    });
+
+    it('will not hand over a conversation someone already holds', async () => {
+      row = conversation({ heldByAdminId: 'admin-1' });
+
+      await expect(service.requestHandover(row, 'x')).resolves.toBe(false);
+      expect(events.emit).not.toHaveBeenCalled();
+    });
+
+    it('will not hand over twice while one is waiting', async () => {
+      row = conversation({ handoverRequestedAt: minutesAgo(1) });
+
+      await expect(service.requestHandover(row, 'x')).resolves.toBe(false);
+    });
+
+    it('will not park the buyer again after a handover went unanswered', async () => {
+      row = conversation({
+        context: { unansweredHandoverAt: new Date().toISOString() },
+      });
+
+      await expect(service.requestHandover(row, 'x')).resolves.toBe(false);
+      expect(updates).toHaveLength(0);
+    });
+
+    it('loses a race cleanly', async () => {
+      // Two turns at once: the conditional update lets only one of them through.
+      row = conversation();
+      const repository = (
+        service as unknown as { conversations: { update: jest.Mock } }
+      ).conversations;
+      repository.update.mockResolvedValueOnce({ affected: 0 });
+
+      await expect(service.requestHandover(row, 'x')).resolves.toBe(false);
+      expect(events.emit).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('waiting for a teammate', () => {
+    it('is nothing to wait for without a handover', async () => {
+      await expect(service.awaitingTeammate(conversation())).resolves.toBe(
+        'none',
+      );
+    });
+
+    it('waits inside the window', async () => {
+      row = conversation({ handoverRequestedAt: minutesAgo(WAIT_MINUTES - 1) });
+
+      await expect(service.awaitingTeammate(row)).resolves.toBe('waiting');
+      expect(updates).toHaveLength(0);
+    });
+
+    it('gives up after it, clears the handover, and remembers nobody came', async () => {
+      row = conversation({
+        handoverRequestedAt: minutesAgo(WAIT_MINUTES + 1),
+        handoverReason: 'Wants a refund',
+      });
+
+      await expect(service.awaitingTeammate(row)).resolves.toBe('expired');
+
+      expect(row.handoverRequestedAt).toBeNull();
+      expect(row.handoverReason).toBeNull();
+      const [, patch] = mergeContext.mock.calls[0] as [
+        string,
+        { unansweredHandoverAt?: string },
+      ];
+      expect(typeof patch.unansweredHandoverAt).toBe('string');
+    });
+
+    it('is nothing to wait for once an admin holds it', async () => {
+      row = conversation({
+        heldByAdminId: 'admin-1',
+        handoverRequestedAt: minutesAgo(WAIT_MINUTES + 1),
+      });
+
+      await expect(service.awaitingTeammate(row)).resolves.toBe('none');
+    });
+
+    it('is answered by an admin taking it', async () => {
+      row = conversation({
+        handoverRequestedAt: minutesAgo(1),
+        handoverReason: 'Wants a refund',
+        context: { unansweredHandoverAt: 'earlier', strugglingTurns: 2 },
+      });
+
+      await service.take('c1', 'admin-1');
+
+      expect(row.handoverRequestedAt).toBeNull();
+      expect(row.handoverReason).toBeNull();
+      // A clean slate: once a person has dealt with it, the assistant may ask again.
+      expect(mergeContext).toHaveBeenCalledWith('c1', {
+        unansweredHandoverAt: undefined,
+        strugglingTurns: 0,
+      });
     });
   });
 });
