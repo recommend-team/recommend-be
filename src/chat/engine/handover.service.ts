@@ -11,6 +11,7 @@ import { Conversation } from '../conversation/entities/conversation.entity';
 import type { MessagePayload } from '../conversation/entities/message.entity';
 import { ConversationService } from '../conversation/conversation.service';
 import { ChannelRegistry } from '../transport/channel.registry';
+import { BuyerPushService } from './buyer-push.service';
 import { OutboundMessage } from '../transport/channel.interface';
 import { ConversationState } from '../enums/chat.enums';
 import { EventEmitter2 } from '@nestjs/event-emitter';
@@ -21,13 +22,6 @@ import {
   HeldConversationMessageEvent,
 } from '../../common/events/admin-alert.events';
 
-/**
- * A person answering instead of the assistant.
- *
- * The buyer is never told. Their messages are recorded as always and simply go
- * unanswered by the engine; anything the admin sends reaches them by the same path and in
- * the same shape as the bot's own replies.
- */
 @Injectable()
 export class HandoverService {
   private readonly logger = new Logger(HandoverService.name);
@@ -39,6 +33,7 @@ export class HandoverService {
     private readonly channels: ChannelRegistry,
     private readonly config: ConfigService,
     private readonly events: EventEmitter2,
+    private readonly buyerPush: BuyerPushService,
   ) {}
 
   /**
@@ -284,6 +279,21 @@ export class HandoverService {
       outbound,
     );
 
+    // A person may answer minutes after the buyer gave up and put the phone down —
+    // unlike the assistant, which only ever replies to something just said. Titled as
+    // Recommend, like everything else the buyer sees from us.
+    await this.buyerPush.notify(
+      conversationId,
+      {
+        title: 'Recommend',
+        body: preview(text),
+        type: 'REPLY',
+        url: '/',
+        tag: `reply:${conversationId}`,
+      },
+      { ttlSeconds: 60 * 60 },
+    );
+
     return outbound;
   }
 
@@ -359,4 +369,10 @@ export class HandoverService {
     if (!conversation) throw new NotFoundException('Conversation not found');
     return conversation;
   }
+}
+
+/** A notification shows two or three lines; the rest is in the chat. */
+function preview(text: string): string {
+  const flat = text.replace(/\s+/g, ' ').trim();
+  return flat.length > 140 ? `${flat.slice(0, 139)}…` : flat;
 }

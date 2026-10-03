@@ -1,3 +1,4 @@
+import { BuyerPushService } from './buyer-push.service';
 import { Test, TestingModule } from '@nestjs/testing';
 import { OrderStatusListener } from './order-status.listener';
 import { AppreciationService } from './appreciation.service';
@@ -25,6 +26,9 @@ const event = (
     to === OrderStatus.DISPATCHED ? 'KDPXRM' : null,
   );
 
+const buyerPush = { notify: jest.fn() };
+beforeEach(() => buyerPush.notify.mockClear());
+
 describe('OrderStatusListener', () => {
   let listener: OrderStatusListener;
   let conversations: { findForCheckout: jest.Mock; recordOutbound: jest.Mock };
@@ -51,6 +55,7 @@ describe('OrderStatusListener', () => {
         { provide: ConversationService, useValue: conversations },
         { provide: ChannelRegistry, useValue: registry },
         { provide: AppreciationService, useValue: appreciation },
+        { provide: BuyerPushService, useValue: buyerPush },
       ],
     }).compile();
 
@@ -123,6 +128,49 @@ describe('OrderStatusListener', () => {
     await listener.onStatusChanged(forced);
 
     expect(sentText()).toBe('Your order is on its way.');
+  });
+
+  describe('notifying a buyer who is away', () => {
+    it('pushes "ready for collection" to a pickup buyer', async () => {
+      await listener.onStatusChanged(
+        event(OrderStatus.READY, FulfillmentType.PICKUP),
+      );
+
+      expect(buyerPush.notify).toHaveBeenCalledWith(
+        'c1',
+        expect.objectContaining({
+          type: 'ORDER_READY',
+          tag: 'order:REC-AAA',
+          url: '/',
+        }),
+        { ttlSeconds: 21600 },
+      );
+    });
+
+    it('pushes the dispatch urgently, with the delivery code in it', async () => {
+      await listener.onStatusChanged(event(OrderStatus.DISPATCHED));
+
+      expect(buyerPush.notify).toHaveBeenCalledWith(
+        'c1',
+        expect.objectContaining({
+          type: 'ORDER_DISPATCHED',
+          body: expect.stringContaining('KDPXRM') as unknown as string,
+        }),
+        { urgency: 'high', ttlSeconds: 21600 },
+      );
+    });
+
+    it('does not push the thank-you — the buyer just confirmed receipt in the app', async () => {
+      await listener.onStatusChanged(event(OrderStatus.COMPLETED));
+
+      expect(buyerPush.notify).not.toHaveBeenCalled();
+    });
+
+    it('does not push what it does not tell the buyer at all', async () => {
+      await listener.onStatusChanged(event(OrderStatus.READY));
+
+      expect(buyerPush.notify).not.toHaveBeenCalled();
+    });
   });
 
   it('has the assistant write the thank-you, and passes it the order', async () => {

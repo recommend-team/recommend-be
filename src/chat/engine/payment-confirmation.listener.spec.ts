@@ -1,3 +1,4 @@
+import { BuyerPushService } from './buyer-push.service';
 import { Test, TestingModule } from '@nestjs/testing';
 import { PaymentConfirmationListener } from './payment-confirmation.listener';
 import { ConversationService } from '../conversation/conversation.service';
@@ -40,6 +41,9 @@ const event = (over: Partial<CheckoutPaidEvent> = {}) =>
     over,
   );
 
+const buyerPush = { notify: jest.fn() };
+beforeEach(() => buyerPush.notify.mockClear());
+
 describe('PaymentConfirmationListener', () => {
   let listener: PaymentConfirmationListener;
   let conversations: {
@@ -72,11 +76,26 @@ describe('PaymentConfirmationListener', () => {
         PaymentConfirmationListener,
         { provide: ConversationService, useValue: conversations },
         { provide: ChannelRegistry, useValue: registry },
+        { provide: BuyerPushService, useValue: buyerPush },
       ],
     }).compile();
 
     listener = module.get<PaymentConfirmationListener>(
       PaymentConfirmationListener,
+    );
+  });
+
+  it('pushes the buyer, who may have closed the app before Paystack confirmed', async () => {
+    await listener.onCheckoutPaid(event());
+
+    expect(buyerPush.notify).toHaveBeenCalledWith(
+      'c1',
+      expect.objectContaining({
+        title: 'Payment received',
+        type: 'PAYMENT_CONFIRMED',
+        tag: expect.stringMatching(/^order:/) as unknown as string,
+      }),
+      { ttlSeconds: 3600 },
     );
   });
 

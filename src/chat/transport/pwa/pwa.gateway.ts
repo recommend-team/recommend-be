@@ -17,6 +17,7 @@ import { PwaChannel } from './pwa.channel';
 import { ChatChannel } from '../../enums/chat.enums';
 import { ChatRateLimitService } from '../../session/rate-limit.service';
 import { allowedOrigins } from '../../../config/cors';
+import { BuyerPushService } from '../../engine/buyer-push.service';
 
 interface SocketData {
   sessionId: string;
@@ -43,6 +44,7 @@ export class PwaGateway implements OnGatewayInit, OnGatewayConnection {
     private readonly channelRegistry: ChannelRegistry,
     private readonly pwaChannel: PwaChannel,
     private readonly rateLimitService: ChatRateLimitService,
+    private readonly buyerPush: BuyerPushService,
   ) {}
 
   afterInit(server: Server): void {
@@ -409,6 +411,52 @@ export class PwaGateway implements OnGatewayInit, OnGatewayConnection {
         message: "We couldn't confirm that just now. Please try again.",
       });
     }
+  }
+
+  /**
+   * "Tell me when it's on its way." Registers this device for the few order updates
+   * worth a notification. The conversation is the socket's own — a device can only ever
+   * subscribe to its own thread. Answered with `push:subscribed`.
+   */
+  @SubscribeMessage('push:subscribe')
+  async onPushSubscribe(
+    @ConnectedSocket() socket: Socket,
+    @MessageBody()
+    body: { endpoint?: unknown; keys?: unknown; userAgent?: unknown },
+  ): Promise<void> {
+    const data = await this.awaitReady(socket);
+    if (!data?.conversationId) {
+      socket.emit('push:subscribed', { ok: false });
+      return;
+    }
+
+    try {
+      const ok = await this.buyerPush.subscribe(data.conversationId, {
+        endpoint: body?.endpoint,
+        keys: body?.keys,
+        userAgent: body?.userAgent,
+      });
+      socket.emit('push:subscribed', { ok });
+    } catch (error) {
+      this.logger.warn(
+        `Could not register a push device for ${data.conversationId}: ${
+          error instanceof Error ? error.message : 'unknown error'
+        }`,
+      );
+      socket.emit('push:subscribed', { ok: false });
+    }
+  }
+
+  @SubscribeMessage('push:unsubscribe')
+  async onPushUnsubscribe(
+    @ConnectedSocket() socket: Socket,
+    @MessageBody() body: { endpoint?: unknown },
+  ): Promise<void> {
+    const data = await this.awaitReady(socket);
+    if (!data?.conversationId) return;
+    await this.buyerPush
+      .unsubscribe(data.conversationId, body?.endpoint)
+      .catch(() => undefined);
   }
 }
 

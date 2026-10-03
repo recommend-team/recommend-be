@@ -1,6 +1,7 @@
 import { Test } from '@nestjs/testing';
 import { ConfigService } from '@nestjs/config';
 import { getRepositoryToken } from '@nestjs/typeorm';
+import { In } from 'typeorm';
 import * as webpush from 'web-push';
 import { PushService } from './push.service';
 import { PushSubscription } from './entities/push-subscription.entity';
@@ -84,6 +85,33 @@ describe('PushService', () => {
     await expect(
       service.sendToUser('v1', { title: 't', body: 'b' }),
     ).resolves.toBe(0);
-    expect(subscriptions.delete).toHaveBeenCalledWith({ id: 'd1' });
+    expect(subscriptions.delete).toHaveBeenCalledWith({
+      endpoint: In(['https://push.example/d1']),
+    });
+  });
+
+  describe('delivering to devices held elsewhere', () => {
+    it('sends to each, and reports the ones that are gone for the caller to forget', async () => {
+      sendNotification
+        .mockResolvedValueOnce({})
+        .mockRejectedValueOnce({ statusCode: 404 });
+
+      await expect(
+        service.deliver([device('d1'), device('d2')], {
+          title: 't',
+          body: 'b',
+        }),
+      ).resolves.toEqual({ delivered: 1, gone: ['https://push.example/d2'] });
+      // Not this module's table — nothing is deleted here.
+      expect(subscriptions.delete).not.toHaveBeenCalled();
+    });
+
+    it('never throws on an ordinary failure', async () => {
+      sendNotification.mockRejectedValue(new Error('network down'));
+
+      await expect(
+        service.deliver([device('d1')], { title: 't', body: 'b' }),
+      ).resolves.toEqual({ delivered: 0, gone: [] });
+    });
   });
 });

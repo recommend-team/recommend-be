@@ -1,3 +1,4 @@
+import { BuyerPushService } from './buyer-push.service';
 import { Test, TestingModule } from '@nestjs/testing';
 import { ConfigService } from '@nestjs/config';
 import { getRepositoryToken } from '@nestjs/typeorm';
@@ -18,6 +19,9 @@ import {
 const STALE_MINUTES = 30;
 const WAIT_MINUTES = 5;
 const minutesAgo = (n: number) => new Date(Date.now() - n * 60_000);
+
+const buyerPush = { notify: jest.fn() };
+beforeEach(() => buyerPush.notify.mockClear());
 
 describe('HandoverService', () => {
   let service: HandoverService;
@@ -101,6 +105,10 @@ describe('HandoverService', () => {
           },
         },
         {
+          provide: BuyerPushService,
+          useValue: buyerPush,
+        },
+        {
           provide: EventEmitter2,
           useValue: events,
         },
@@ -149,6 +157,7 @@ describe('HandoverService', () => {
           { provide: ChannelRegistry, useValue: {} },
           { provide: ConfigService, useValue: { get: () => STALE_MINUTES } },
           { provide: EventEmitter2, useValue: { emit: jest.fn() } },
+          { provide: BuyerPushService, useValue: buyerPush },
         ],
       }).compile();
 
@@ -177,6 +186,22 @@ describe('HandoverService', () => {
       expect(sent).toEqual([
         { address: 'session-1', text: 'Sorry about that — sorted now.' },
       ]);
+    });
+
+    it('pushes the reply as Recommend, collapsing quick replies into one', async () => {
+      await service.send('c1', 'admin-1', 'Sorry about that — sorted now.');
+
+      expect(buyerPush.notify).toHaveBeenCalledWith(
+        'c1',
+        {
+          title: 'Recommend',
+          body: 'Sorry about that — sorted now.',
+          type: 'REPLY',
+          url: '/',
+          tag: 'reply:c1',
+        },
+        { ttlSeconds: 3600 },
+      );
     });
 
     it('attributes the message without changing who the buyer sees', async () => {

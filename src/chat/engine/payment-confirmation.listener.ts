@@ -3,6 +3,7 @@ import { OnEvent } from '@nestjs/event-emitter';
 import { ConversationService } from '../conversation/conversation.service';
 import { ConversationState } from '../enums/chat.enums';
 import { ChannelRegistry } from '../transport/channel.registry';
+import { BuyerPushService } from './buyer-push.service';
 import {
   CHECKOUT_PAID_EVENT,
   CheckoutPaidEvent,
@@ -19,6 +20,7 @@ export class PaymentConfirmationListener {
   constructor(
     private readonly conversationService: ConversationService,
     private readonly channelRegistry: ChannelRegistry,
+    private readonly buyerPush: BuyerPushService,
   ) {}
 
   @OnEvent(CHECKOUT_PAID_EVENT)
@@ -95,6 +97,25 @@ export class PaymentConfirmationListener {
 
       this.logger.log(
         `Confirmed checkout ${event.reference} in conversation ${conversation.id}`,
+      );
+
+      // Paystack's confirmation can land after the buyer has closed the payment sheet,
+      // or the app. The full confirmation is in the thread; this says to go and look.
+      await this.buyerPush.notify(
+        conversation.id,
+        {
+          title: 'Payment received',
+          body:
+            `Order ${event.reference} is paid. We'll tell you when it's ` +
+            (event.fulfillmentType === 'PICKUP'
+              ? 'ready to collect.'
+              : 'on its way.'),
+          type: 'PAYMENT_CONFIRMED',
+          url: '/',
+          // The next update about this order replaces this one on the device.
+          tag: `order:${event.reference}`,
+        },
+        { ttlSeconds: 60 * 60 },
       );
     } catch (error) {
       // Never let this bubble into the webhook — Paystack would retry a payment we
