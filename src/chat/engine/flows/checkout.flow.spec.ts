@@ -401,6 +401,56 @@ describe('CheckoutFlow', () => {
       },
     );
 
+    it.each([
+      [
+        ConversationState.COLLECTING_ADDRESS,
+        '12 Allen Avenue, opposite Ojuelegba bus stop',
+      ],
+      [
+        ConversationState.COLLECTING_ADDRESS,
+        'Stop 3, Lekki Phase 1, after the cancel gate',
+      ],
+      [ConversationState.COLLECTING_NAME, 'Never Mind Okafor'],
+    ])(
+      'reads a %s answer containing a cancel word as the answer: "%s"',
+      async (state, answer) => {
+        await flow.handle(conversationAt(state), answer);
+
+        expect(conversations.setState).not.toHaveBeenCalledWith(
+          'c1',
+          ConversationState.DISCOVERY,
+        );
+        expect(conversations.mergeContext).toHaveBeenCalledWith('c1', {
+          profile:
+            state === ConversationState.COLLECTING_ADDRESS
+              ? { address: answer }
+              : { name: answer },
+        });
+      },
+    );
+
+    it.each([
+      'cancel',
+      'Stop please',
+      'never mind.',
+      'cancel the order',
+      'add something else',
+    ])(
+      'still lets the buyer out at the address step with "%s"',
+      async (answer) => {
+        const replies = await flow.handle(
+          conversationAt(ConversationState.COLLECTING_ADDRESS),
+          answer,
+        );
+
+        expect(conversations.setState).toHaveBeenCalledWith(
+          'c1',
+          ConversationState.DISCOVERY,
+        );
+        expect(replies[0].text).toContain('cart is still here');
+      },
+    );
+
     it('says it is waiting rather than re-asking while payment is pending', async () => {
       const replies = await flow.handle(
         conversationAt(ConversationState.AWAITING_PAYMENT),
