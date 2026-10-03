@@ -66,7 +66,13 @@ export class PaymentsController {
     const reference = data['reference'] as string | undefined;
 
     if (event === 'charge.success' && reference) {
-      await this.ordersService.handlePaymentSuccess(reference);
+      // Kobo on the wire. Checked against what the checkout is owed before anything is
+      // marked paid — a valid signature says Paystack sent this, not that it was enough.
+      const amountKobo = data['amount'];
+      await this.ordersService.handlePaymentSuccess(
+        reference,
+        typeof amountKobo === 'number' ? amountKobo / 100 : null,
+      );
     }
 
     if (reference) {
