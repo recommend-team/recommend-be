@@ -102,6 +102,22 @@ describe('NotificationsService', () => {
       expect(push.sendToUser).toHaveBeenCalledTimes(2);
     });
 
+    it('pushes an order alert that opens the order, urgently and briefly', async () => {
+      await service.onCheckoutPaid(
+        paidEvent([vendorOrder({ orderId: 'o9', vendorId: 'v1' })]),
+      );
+
+      expect(push.sendToUser).toHaveBeenCalledWith(
+        'v1',
+        expect.objectContaining({
+          type: NotificationType.NEW_ORDER,
+          url: '/orders/o9',
+          tag: 'order:o9',
+        }),
+        { urgency: 'high', ttlSeconds: 3600 },
+      );
+    });
+
     it('tells each vendor only about their own items and payout', async () => {
       await service.onCheckoutPaid(
         paidEvent([

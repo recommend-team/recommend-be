@@ -5,10 +5,38 @@ import { Repository } from 'typeorm';
 import * as webpush from 'web-push';
 import { PushSubscription } from './entities/push-subscription.entity';
 
+/**
+ * What a client's service worker receives. The shape is a contract with every app that
+ * subscribes — the vendor app's `sw.ts` reads it — so fields are added, never renamed.
+ */
 export interface PushPayload {
   title: string;
   body: string;
+  /** The `NotificationType`, so a client can decide how loudly to treat it. */
+  type?: string;
+  /** The in-app path a tap opens, e.g. `/orders/<id>`. Always a path, never a URL. */
+  url?: string;
+  /**
+   * Collapses repeats: a second push with the same tag replaces the first on the device
+   * instead of stacking beside it. `order:<id>`, `withdrawal:<id>`.
+   */
+  tag?: string;
   data?: Record<string, unknown>;
+}
+
+export interface PushDelivery {
+  /**
+   * `high` asks the push service to wake a dozing phone now rather than batch it. For
+   * what a person must act on — a new order — and nothing else, or the OS learns to
+   * ignore us.
+   */
+  urgency?: 'very-low' | 'low' | 'normal' | 'high';
+  /**
+   * How long the push service keeps trying a phone that is off. Past this the push is
+   * dropped, which is right for an alert that would be noise by the time it arrived —
+   * the feed still holds it.
+   */
+  ttlSeconds?: number;
 }
 
 /**
@@ -78,8 +106,20 @@ export class PushService {
    * swallowed — a push that cannot be delivered must never fail the transaction
    * that triggered it.
    */
-  async sendToUser(userId: string, payload: PushPayload): Promise<number> {
+  async sendToUser(
+    userId: string,
+    payload: PushPayload,
+    delivery: PushDelivery = {},
+  ): Promise<number> {
     if (!this.enabled) return 0;
+
+    // Left unset, web-push applies its own defaults (normal urgency, four weeks).
+    const options = {
+      ...(delivery.urgency ? { urgency: delivery.urgency } : {}),
+      ...(delivery.ttlSeconds !== undefined
+        ? { TTL: delivery.ttlSeconds }
+        : {}),
+    };
 
     const devices = await this.subscriptions.find({ where: { userId } });
     if (devices.length === 0) return 0;
@@ -95,6 +135,7 @@ export class PushService {
               keys: device.keys,
             },
             JSON.stringify(payload),
+            options,
           );
           delivered += 1;
         } catch (error) {
