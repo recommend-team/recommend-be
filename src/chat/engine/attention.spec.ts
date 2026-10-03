@@ -217,7 +217,10 @@ describe('flagging a conversation for attention', () => {
       { send: jest.fn() } as never,
       { discover } as never,
       {} as never,
-      { shouldStaySilent: jest.fn().mockResolvedValue(true) } as never,
+      {
+        shouldStaySilent: jest.fn().mockResolvedValue(true),
+        announceBuyerWaiting: jest.fn(),
+      } as never,
       { get: () => 12 } as never,
       {} as never,
     );

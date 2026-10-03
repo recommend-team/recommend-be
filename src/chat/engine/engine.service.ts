@@ -86,6 +86,7 @@ export class EngineService {
       this.logger.debug(
         `Conversation ${conversation.id} is held by an admin — not replying`,
       );
+      this.handover.announceBuyerWaiting(conversation, input.text);
       return [];
     }
 
@@ -293,7 +294,11 @@ export class EngineService {
 
     if (!reason) return;
 
-    await this.conversationService.flagForAttention(conversation.id, reason);
+    await this.conversationService.flagForAttention(
+      conversation.id,
+      reason,
+      conversation.context?.profile?.name ?? null,
+    );
     conversation.needsAttentionAt = new Date();
     conversation.attentionReason = reason;
 

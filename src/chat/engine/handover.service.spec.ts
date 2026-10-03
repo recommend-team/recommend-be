@@ -7,6 +7,11 @@ import { Conversation } from '../conversation/entities/conversation.entity';
 import { ConversationService } from '../conversation/conversation.service';
 import { ChannelRegistry } from '../transport/channel.registry';
 import { ChatChannel, ConversationState } from '../enums/chat.enums';
+import { EventEmitter2 } from '@nestjs/event-emitter';
+import {
+  HELD_CONVERSATION_MESSAGE_EVENT,
+  HeldConversationMessageEvent,
+} from '../../common/events/admin-alert.events';
 
 const STALE_MINUTES = 30;
 const minutesAgo = (n: number) => new Date(Date.now() - n * 60_000);
@@ -18,6 +23,7 @@ describe('HandoverService', () => {
   let sent: { address: string; text: string }[];
   let emitTyping: jest.Mock;
   let recordOutbound: jest.Mock;
+  const events = { emit: jest.fn() };
 
   const conversation = (over: Partial<Conversation> = {}): Conversation =>
     ({
@@ -78,6 +84,10 @@ describe('HandoverService', () => {
           provide: ConfigService,
           useValue: { get: jest.fn().mockReturnValue(STALE_MINUTES) },
         },
+        {
+          provide: EventEmitter2,
+          useValue: events,
+        },
       ],
     }).compile();
 
@@ -122,6 +132,7 @@ describe('HandoverService', () => {
           },
           { provide: ChannelRegistry, useValue: {} },
           { provide: ConfigService, useValue: { get: () => STALE_MINUTES } },
+          { provide: EventEmitter2, useValue: { emit: jest.fn() } },
         ],
       }).compile();
 
@@ -278,6 +289,36 @@ describe('HandoverService', () => {
 
     it('never silences a conversation nobody holds', async () => {
       await expect(service.shouldStaySilent(row)).resolves.toBe(false);
+    });
+  });
+
+  describe('a buyer writing while an admin holds it', () => {
+    beforeEach(() => events.emit.mockClear());
+
+    it('tells the admin holding it, and only them', () => {
+      service.announceBuyerWaiting(
+        conversation({
+          heldByAdminId: 'admin-1',
+          context: { profile: { name: 'Ada' } },
+        } as Partial<Conversation>),
+        'Is it coming?',
+      );
+
+      expect(events.emit).toHaveBeenCalledWith(
+        HELD_CONVERSATION_MESSAGE_EVENT,
+        new HeldConversationMessageEvent(
+          'c1',
+          'admin-1',
+          'Is it coming?',
+          'Ada',
+        ),
+      );
+    });
+
+    it('says nothing for a conversation nobody holds', () => {
+      service.announceBuyerWaiting(conversation(), 'hello');
+
+      expect(events.emit).not.toHaveBeenCalled();
     });
   });
 });

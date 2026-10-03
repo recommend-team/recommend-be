@@ -7,6 +7,10 @@ import {
   ChatMessageRecordedEvent,
 } from '../transport/admin/admin-chat.events';
 import {
+  CONVERSATION_NEEDS_ATTENTION_EVENT,
+  ConversationNeedsAttentionEvent,
+} from '../../common/events/admin-alert.events';
+import {
   Conversation,
   ConversationContext,
 } from './entities/conversation.entity';
@@ -173,11 +177,33 @@ export class ConversationService {
   async flagForAttention(
     conversationId: string,
     reason: string,
+    buyerName: string | null = null,
   ): Promise<void> {
-    await this.conversationsRepository.update(
+    const result = await this.conversationsRepository.update(
       { id: conversationId, needsAttentionAt: IsNull() },
       { needsAttentionAt: new Date(), attentionReason: reason },
     );
+
+    // Only when this call raised the flag. One already up has been announced, and
+    // repeating it on every struggling turn would teach admins to ignore it.
+    if (result.affected === 1) {
+      try {
+        this.events.emit(
+          CONVERSATION_NEEDS_ATTENTION_EVENT,
+          new ConversationNeedsAttentionEvent(
+            conversationId,
+            reason,
+            buyerName,
+          ),
+        );
+      } catch (error) {
+        this.logger.error(
+          `Failed to announce attention on ${conversationId}: ${
+            error instanceof Error ? error.message : 'unknown error'
+          }`,
+        );
+      }
+    }
   }
 
   /** Someone is looking at it now, so it is no longer waiting for anyone. */

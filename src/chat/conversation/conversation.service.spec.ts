@@ -5,6 +5,10 @@ import { ConversationService } from './conversation.service';
 import { Conversation } from './entities/conversation.entity';
 import { ChatMessage } from './entities/message.entity';
 import {
+  CONVERSATION_NEEDS_ATTENTION_EVENT,
+  ConversationNeedsAttentionEvent,
+} from '../../common/events/admin-alert.events';
+import {
   ChatChannel,
   MessageAuthor,
   MessageDirection,
@@ -34,21 +38,45 @@ describe('ConversationService', () => {
   let service: ConversationService;
   let conversations: MockRepo;
   let messages: MockRepo;
+  let events: { emit: jest.Mock };
 
   beforeEach(async () => {
     conversations = makeRepo();
     messages = makeRepo();
+    events = { emit: jest.fn() };
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         ConversationService,
         { provide: getRepositoryToken(Conversation), useValue: conversations },
         { provide: getRepositoryToken(ChatMessage), useValue: messages },
-        { provide: EventEmitter2, useValue: { emit: jest.fn() } },
+        { provide: EventEmitter2, useValue: events },
       ],
     }).compile();
 
     service = module.get<ConversationService>(ConversationService);
+  });
+
+  describe('flagForAttention', () => {
+    it('announces the flag when it raises it', async () => {
+      conversations.update.mockResolvedValue({ affected: 1 });
+
+      await service.flagForAttention('c1', 'Nothing matched', 'Ada');
+
+      expect(events.emit).toHaveBeenCalledWith(
+        CONVERSATION_NEEDS_ATTENTION_EVENT,
+        new ConversationNeedsAttentionEvent('c1', 'Nothing matched', 'Ada'),
+      );
+    });
+
+    it('stays quiet when the flag was already up', async () => {
+      // Repeating it on every struggling turn would teach admins to ignore it.
+      conversations.update.mockResolvedValue({ affected: 0 });
+
+      await service.flagForAttention('c1', 'Nothing matched');
+
+      expect(events.emit).not.toHaveBeenCalled();
+    });
   });
 
   describe('findOrCreate', () => {

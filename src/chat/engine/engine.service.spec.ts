@@ -31,7 +31,10 @@ describe('EngineService', () => {
   let registry: { send: jest.Mock };
   let discovery: { discover: jest.Mock };
   let checkoutFlow: { start: jest.Mock; handle: jest.Mock };
-  let handover: { shouldStaySilent: jest.Mock };
+  let handover: {
+    shouldStaySilent: jest.Mock;
+    announceBuyerWaiting: jest.Mock;
+  };
 
   beforeEach(async () => {
     conversations = {
@@ -44,7 +47,10 @@ describe('EngineService', () => {
       setArea: jest.fn(),
     };
     registry = { send: jest.fn().mockResolvedValue(null) };
-    handover = { shouldStaySilent: jest.fn().mockResolvedValue(false) };
+    handover = {
+      shouldStaySilent: jest.fn().mockResolvedValue(false),
+      announceBuyerWaiting: jest.fn(),
+    };
     discovery = {
       discover: jest.fn().mockResolvedValue({
         messages: [{ text: 'Here is what I found:' }],
@@ -228,6 +234,16 @@ describe('EngineService', () => {
 
       expect(conversations.recordInbound).toHaveBeenCalledWith(
         expect.objectContaining({ text: 'this is broken' }),
+      );
+    });
+
+    it('tells the admin there is someone waiting', async () => {
+      // The assistant's silence is only safe if the person holding it hears the buyer.
+      await service.handleInbound({ conversation, text: 'hello?' });
+
+      expect(handover.announceBuyerWaiting).toHaveBeenCalledWith(
+        conversation,
+        'hello?',
       );
     });
 

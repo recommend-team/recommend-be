@@ -13,6 +13,11 @@ import { ConversationService } from '../conversation/conversation.service';
 import { ChannelRegistry } from '../transport/channel.registry';
 import { OutboundMessage } from '../transport/channel.interface';
 import { ConversationState } from '../enums/chat.enums';
+import { EventEmitter2 } from '@nestjs/event-emitter';
+import {
+  HELD_CONVERSATION_MESSAGE_EVENT,
+  HeldConversationMessageEvent,
+} from '../../common/events/admin-alert.events';
 
 /**
  * A person answering instead of the assistant.
@@ -31,7 +36,36 @@ export class HandoverService {
     private readonly conversationService: ConversationService,
     private readonly channels: ChannelRegistry,
     private readonly config: ConfigService,
+    private readonly events: EventEmitter2,
   ) {}
+
+  /**
+   * Tell the admin holding this conversation that the buyer has written.
+   *
+   * Every message, to that admin alone — they are the one the buyer is waiting on, and
+   * nobody else should hear about a conversation that already has someone. Fire and
+   * forget: the buyer's message is recorded whatever happens here.
+   */
+  announceBuyerWaiting(conversation: Conversation, text: string): void {
+    if (!conversation.heldByAdminId) return;
+    try {
+      this.events.emit(
+        HELD_CONVERSATION_MESSAGE_EVENT,
+        new HeldConversationMessageEvent(
+          conversation.id,
+          conversation.heldByAdminId,
+          text,
+          conversation.context?.profile?.name ?? null,
+        ),
+      );
+    } catch (error) {
+      this.logger.error(
+        `Failed to tell admin ${conversation.heldByAdminId} about a message on ${conversation.id}: ${
+          error instanceof Error ? error.message : 'unknown error'
+        }`,
+      );
+    }
+  }
 
   /**
    * Claim a conversation.
