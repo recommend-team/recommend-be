@@ -162,7 +162,7 @@ describe('EngineService', () => {
     await service.handleInbound({ conversation, text: 'Hello' });
 
     expect(discovery.discover).not.toHaveBeenCalled();
-    expect(firstReplyText()).toContain('James here');
+    expect(firstReplyText()).toContain("I'm James from Recommend");
     expect(firstReplyText()).toContain('What are you looking for');
   });
 

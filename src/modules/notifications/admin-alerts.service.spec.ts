@@ -3,6 +3,7 @@ import { getRepositoryToken } from '@nestjs/typeorm';
 import { EventEmitter2 } from '@nestjs/event-emitter';
 import { AdminAlertsService } from './admin-alerts.service';
 import { PushService } from './push.service';
+import { Notification, NotificationType } from './entities/notification.entity';
 import { User } from '../auth/entities/auth.entity';
 import { Role } from '../../common/enums/roles.enum';
 import { SellerStatus } from '../../common/enums/seller-status.enum';
@@ -32,10 +33,12 @@ describe('AdminAlertsService', () => {
   let emitted: AdminAlertEvent[];
   let push: { sendToUser: jest.Mock };
   let users: { find: jest.Mock; findOne: jest.Mock };
+  let feed: { insert: jest.Mock };
 
   beforeEach(async () => {
     emitted = [];
     push = { sendToUser: jest.fn().mockResolvedValue(1) };
+    feed = { insert: jest.fn().mockResolvedValue({}) };
     users = {
       find: jest
         .fn()
@@ -53,6 +56,7 @@ describe('AdminAlertsService', () => {
       providers: [
         AdminAlertsService,
         { provide: getRepositoryToken(User), useValue: users },
+        { provide: getRepositoryToken(Notification), useValue: feed },
         { provide: PushService, useValue: push },
         {
           provide: EventEmitter2,
@@ -284,5 +288,67 @@ describe('AdminAlertsService', () => {
       ),
     ).resolves.toBeUndefined();
     expect(emitted).toHaveLength(1);
+  });
+
+  describe('the bell', () => {
+    const kept = () =>
+      (feed.insert.mock.calls[0] as [Record<string, unknown>[]])[0];
+
+    it('keeps one unread row per active admin, so each has their own read state', async () => {
+      await service.onNeedsAttention(
+        new ConversationNeedsAttentionEvent('c1', 'Stuck', 'Ada'),
+      );
+
+      expect(kept().map((row) => row.userId)).toEqual(['a1', 'a2']);
+      expect(kept()[0]).toMatchObject({
+        type: NotificationType.ADMIN_CONVERSATION_FLAGGED,
+        title: 'A buyer needs help',
+        readAt: null,
+        data: {
+          alertId: emitted[0].id,
+          kind: 'CONVERSATION_FLAGGED',
+          url: '/admin/conversations/c1',
+        },
+      });
+    });
+
+    it('keeps a held-conversation reply for the holding admin only', async () => {
+      await service.onHeldMessage(
+        new HeldConversationMessageEvent('c1', 'a2', 'Hello?', null),
+      );
+
+      expect(kept().map((row) => row.userId)).toEqual(['a2']);
+    });
+
+    it('writes the row before the socket alert, so a refreshing bell finds it', async () => {
+      const order: string[] = [];
+      feed.insert.mockImplementation(() => {
+        order.push('feed');
+        return Promise.resolve({});
+      });
+      const emit = jest.spyOn(service['events'], 'emit');
+      emit.mockImplementation(() => {
+        order.push('socket');
+        return true;
+      });
+
+      await service.onNeedsAttention(
+        new ConversationNeedsAttentionEvent('c1', 'Stuck', null),
+      );
+
+      expect(order).toEqual(['feed', 'socket']);
+    });
+
+    it('still alerts and pushes when the feed cannot be written', async () => {
+      feed.insert.mockRejectedValue(new Error('db down'));
+
+      await expect(
+        service.onNeedsAttention(
+          new ConversationNeedsAttentionEvent('c1', 'Stuck', null),
+        ),
+      ).resolves.toBeUndefined();
+      expect(emitted).toHaveLength(1);
+      expect(pushedTo()).toEqual(['a1', 'a2']);
+    });
   });
 });

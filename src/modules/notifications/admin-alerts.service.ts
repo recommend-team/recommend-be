@@ -6,6 +6,7 @@ import { randomUUID } from 'crypto';
 import { User } from '../auth/entities/auth.entity';
 import { Role } from '../../common/enums/roles.enum';
 import { PushDelivery, PushService } from './push.service';
+import { Notification, NotificationType } from './entities/notification.entity';
 import {
   ADMIN_ALERT_EVENT,
   AdminAlertEvent,
@@ -49,6 +50,16 @@ const CONVERSATION_DELIVERY: PushDelivery = {
 
 const PREVIEW_LENGTH = 140;
 
+/** How each alert is filed in the notifications feed. */
+const FEED_TYPE: Record<AdminAlertKind, NotificationType> = {
+  CONVERSATION_HANDED_OVER: NotificationType.ADMIN_CONVERSATION_HANDED_OVER,
+  CONVERSATION_FLAGGED: NotificationType.ADMIN_CONVERSATION_FLAGGED,
+  HELD_CONVERSATION_MESSAGE: NotificationType.ADMIN_HELD_CONVERSATION_MESSAGE,
+  NEW_PAID_ORDER: NotificationType.ADMIN_NEW_PAID_ORDER,
+  VENDOR_ORDER_READY: NotificationType.ADMIN_VENDOR_ORDER_READY,
+  WITHDRAWAL_FAILED: NotificationType.ADMIN_WITHDRAWAL_FAILED,
+};
+
 @Injectable()
 export class AdminAlertsService {
   private readonly logger = new Logger(AdminAlertsService.name);
@@ -56,6 +67,8 @@ export class AdminAlertsService {
   constructor(
     @InjectRepository(User)
     private readonly users: Repository<User>,
+    @InjectRepository(Notification)
+    private readonly notifications: Repository<Notification>,
     private readonly pushService: PushService,
     private readonly events: EventEmitter2,
   ) {}
@@ -197,8 +210,11 @@ export class AdminAlertsService {
   }
 
   /**
-   * Socket first, then push. Never throws: an alert that cannot be sent must not unwind
-   * whatever caused it — a payment, a refusal, a buyer's message.
+   * The feed, then the socket, then push. Never throws: an alert that cannot be sent must
+   * not unwind whatever caused it — a payment, a refusal, a buyer's message.
+   *
+   * The feed comes first so the bell, refreshing when the socket alert lands, finds the
+   * row already there. A feed that cannot be written still lets the socket and push go.
    */
   private async send(alert: Alert): Promise<void> {
     const event = new AdminAlertEvent(
@@ -211,6 +227,19 @@ export class AdminAlertsService {
       new Date(),
     );
 
+    const recipients: string[] = await (
+      alert.adminId ? Promise.resolve([alert.adminId]) : this.activeAdminIds()
+    ).catch((error: unknown) => {
+      this.logger.error(
+        `Failed to find admins for ${alert.kind}: ${
+          error instanceof Error ? error.message : 'unknown error'
+        }`,
+      );
+      return [];
+    });
+
+    await this.keep(alert, event, recipients);
+
     try {
       this.events.emit(ADMIN_ALERT_EVENT, event);
     } catch (error) {
@@ -218,10 +247,6 @@ export class AdminAlertsService {
     }
 
     try {
-      const recipients = alert.adminId
-        ? [alert.adminId]
-        : await this.activeAdminIds();
-
       await Promise.all(
         recipients.map((adminId) =>
           this.pushService
@@ -246,6 +271,36 @@ export class AdminAlertsService {
     } catch (error) {
       this.logger.error(
         `Failed to push ${alert.kind} to admins: ${
+          error instanceof Error ? error.message : 'unknown error'
+        }`,
+      );
+    }
+  }
+
+  /**
+   * One row per admin, so each has their own read state: one admin reading an alert does
+   * not clear it from anyone else's bell.
+   */
+  private async keep(
+    alert: Alert,
+    event: AdminAlertEvent,
+    recipients: string[],
+  ): Promise<void> {
+    if (recipients.length === 0) return;
+    try {
+      await this.notifications.insert(
+        recipients.map((userId) => ({
+          userId,
+          type: FEED_TYPE[alert.kind],
+          title: alert.title,
+          body: alert.body,
+          data: { alertId: event.id, kind: alert.kind, url: alert.url },
+          readAt: null,
+        })),
+      );
+    } catch (error) {
+      this.logger.error(
+        `Failed to keep ${alert.kind} in the admin feed: ${
           error instanceof Error ? error.message : 'unknown error'
         }`,
       );

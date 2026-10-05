@@ -211,8 +211,8 @@ export class EngineService {
       return [
         {
           text:
-            `Hey! ${this.assistantName} here. What are you looking for today, ` +
-            'and roughly where are you?',
+            `Hello, I'm ${this.assistantName} from Recommend. What are you looking for ` +
+            'today, and which area are you in?',
         },
       ];
     }
