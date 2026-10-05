@@ -12,7 +12,7 @@ import type { LocationPort } from '../../ports/location.port';
 import { OutboundMessage } from '../../transport/channel.interface';
 import { ChatMessage } from '../../conversation/entities/message.entity';
 import { MessageAuthor } from '../../enums/chat.enums';
-import { DISCOVERY_SYSTEM_PROMPT } from './prompt';
+import { buildDiscoveryPrompt } from './prompt';
 import {
   DISCOVERY_TOOLS,
   ToolHarvest,
@@ -52,6 +52,7 @@ export class DiscoveryService {
   private readonly temperature: number;
   private readonly maxHistory: number;
   private readonly maxToolRounds: number;
+  private readonly prompt: string;
 
   constructor(
     private readonly configService: ConfigService,
@@ -62,7 +63,10 @@ export class DiscoveryService {
     this.model =
       this.configService.get<string>('openai.model') ?? 'gpt-4-turbo-preview';
     this.temperature =
-      this.configService.get<number>('openai.temperature') ?? 0.2;
+      this.configService.get<number>('openai.temperature') ?? 0.6;
+    this.prompt = buildDiscoveryPrompt(
+      this.configService.get<string>('chat.assistantName') ?? 'James',
+    );
     this.maxHistory =
       this.configService.get<number>('chat.maxHistoryMessages') ?? 12;
     this.maxToolRounds =
@@ -74,6 +78,14 @@ export class DiscoveryService {
         'OPENAI_API_KEY is not set — discovery is running on keyword search only',
       );
     }
+  }
+
+  /**
+   * Whether replies come from the model. Without one, greetings and small talk get the
+   * engine's fixed replies — keyword search has nothing to say to "how far".
+   */
+  hasModel(): boolean {
+    return this.client !== null;
   }
 
   async discover(request: DiscoveryRequest): Promise<DiscoveryResult> {
@@ -114,7 +126,7 @@ export class DiscoveryService {
     };
 
     const messages: ChatCompletionMessageParam[] = [
-      { role: 'system', content: DISCOVERY_SYSTEM_PROMPT },
+      { role: 'system', content: this.prompt },
       ...(areaId
         ? [
             {
@@ -209,6 +221,7 @@ export class DiscoveryService {
     modelFailed: boolean,
   ): Promise<DiscoveryResult> {
     const harvest = emptyHarvest();
+    harvest.searched = true;
     const query = stripFiller(request.text);
 
     // Same rule as the model path: an area the buyer just named beats the one we
@@ -296,8 +309,13 @@ export class DiscoveryService {
       resolvedAreaId: harvest.resolvedAreaId,
       usedFallback,
       modelFailed,
+      // Only a search that came back empty. A turn of small talk searched for nothing,
+      // so it found nothing — that is not the assistant struggling, and counting it
+      // used to hand a buyer over for asking "who are you?".
       foundNothing:
-        harvest.products.length === 0 && harvest.vendors.length === 0,
+        harvest.searched &&
+        harvest.products.length === 0 &&
+        harvest.vendors.length === 0,
       handover: harvest.handoverReason,
     };
   }

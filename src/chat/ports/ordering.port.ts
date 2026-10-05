@@ -67,8 +67,15 @@ export interface BuyerOrderSummary {
   totalAmount: number;
   /** True only when confirming receipt is the buyer's next move. */
   canComplete: boolean;
+  /**
+   * The code to show — to the rider on a delivery, at the counter on a pickup. Null
+   * except while someone is waiting to check it.
+   */
+  handoverCode: string | null;
   vendors: {
     vendorName: string | null;
+    /** Where to collect from. Pickup orders only, and only once paid. */
+    pickupAddress: string | null;
     status: string;
     items: { name: string; quantity: number; lineTotal: number }[];
   }[];

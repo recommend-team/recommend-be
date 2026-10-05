@@ -10,6 +10,7 @@ import {
   CheckoutPaidEvent,
 } from '../../common/events/checkout-paid.event';
 import { PaymentsService } from '../payments/payments.service';
+import { liveHandoverCode } from './handover-code';
 
 export interface PaginatedOrders {
   items: Order[];
@@ -212,7 +213,7 @@ export class OrdersService {
     totalAmount: number;
     fulfillmentType: string;
     createdAt: Date;
-    /** See below — present only while the order is out with a rider. */
+    /** The handover code — only while a rider has it, or it waits at the counter. */
     deliveryCode: string | null;
     vendors: {
       status: OrderStatus;
@@ -236,16 +237,9 @@ export class OrdersService {
       fulfillmentType: checkout.fulfillmentType,
       createdAt: checkout.createdAt,
       // This endpoint is how a buyer who never used chat gets their code at all — there
-      // is no SMS to fall back on, and they hold the reference already.
-      //
-      // Gated on the live status rather than on the column being set, so it is exposed
-      // for exactly as long as somebody is at the door with it: not before dispatch,
-      // and not once the order is delivered. The row keeps the code either way, for
-      // support looking back at what was issued.
-      deliveryCode:
-        checkout.status === OrderStatus.DISPATCHED
-          ? (checkout.deliveryCode ?? null)
-          : null,
+      // is no SMS to fall back on, and they hold the reference already. Shown only while
+      // someone is waiting to check it: a rider at the door, or a vendor at the counter.
+      deliveryCode: liveHandoverCode(checkout),
       vendors: (checkout.orders ?? []).map((order) => ({
         status: order.status,
         items: (order.items ?? []).map((item) => ({

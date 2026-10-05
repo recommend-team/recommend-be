@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { DataSource, DataSourceOptions } from 'typeorm';
+import type { DatabaseTls } from '../configuration';
 
 @Module({
   imports: [
@@ -12,11 +13,10 @@ import { DataSource, DataSourceOptions } from 'typeorm';
         ({
           type: 'postgres',
           url: configService.get<string>('database.url'),
-          // Set when DATABASE_SSL=true, and undefined otherwise. A managed Postgres
-          // signs with its own CA, so without this the app cannot connect at all.
-          ssl: configService.get<{ rejectUnauthorized: boolean } | undefined>(
-            'database.ssl',
-          ),
+          // From DATABASE_CA_CERT (verified) or DATABASE_SSL=true (encrypted, unverified);
+          // undefined for a local Postgres. A managed Postgres signs with its own CA, so
+          // without one of them the app cannot connect at all.
+          ssl: configService.get<DatabaseTls>('database.ssl'),
           synchronize: configService.get<boolean>('database.synchronize'),
           logging: configService.get<boolean>('database.logging'),
           migrationsRun: configService.get<boolean>('database.migrationsRun'),

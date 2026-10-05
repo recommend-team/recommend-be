@@ -9,6 +9,7 @@ import { OrdersService } from './orders.service';
 import { CheckoutService } from './checkout.service';
 import { PaymentReconciliationService } from './payment-reconciliation.service';
 import { OrderLifecycleService } from './order-lifecycle.service';
+import { HandoverCodeService } from './handover-code.service';
 import { OrderStatusEvent } from './entities/order-status-event.entity';
 import { PaymentsModule } from '../payments/payments.module';
 import { PaymentsController } from '../payments/payments.controller';
@@ -32,7 +33,13 @@ import { WalletModule } from '../wallet/wallet.module';
     CheckoutService,
     PaymentReconciliationService,
     OrderLifecycleService,
+    HandoverCodeService,
   ],
-  exports: [OrdersService, CheckoutService, OrderLifecycleService],
+  exports: [
+    OrdersService,
+    CheckoutService,
+    OrderLifecycleService,
+    HandoverCodeService,
+  ],
 })
 export class OrdersModule {}

@@ -8,7 +8,10 @@ import { Checkout } from './entities/checkout.entity';
 import { StatusActor } from './entities/order-status-event.entity';
 import { OrderStatus } from '../../common/enums/order-status.enum';
 import { FulfillmentType } from '../../common/enums/fulfillment-type.enum';
-import { CHECKOUT_STATUS_CHANGED_EVENT } from '../../common/events/checkout-status-changed.event';
+import {
+  CHECKOUT_STATUS_CHANGED_EVENT,
+  CheckoutStatusChangedEvent,
+} from '../../common/events/checkout-status-changed.event';
 import {
   VENDOR_ORDER_COMPLETED_EVENT,
   VendorOrderCompletedEvent,
@@ -300,7 +303,7 @@ describe('OrderLifecycleService', () => {
       expect(codesWritten()).toEqual([]);
     });
 
-    it('never mints one for a pickup order', async () => {
+    it('never dispatches a pickup order, so mints nothing there', async () => {
       checkouts.findOne.mockResolvedValue(
         checkoutWith({
           status: OrderStatus.READY,
@@ -316,6 +319,82 @@ describe('OrderLifecycleService', () => {
       ).rejects.toThrow(/pickup/i);
 
       expect(codesWritten()).toEqual([]);
+    });
+  });
+
+  describe('the collection code, on a pickup', () => {
+    const codesWritten = () =>
+      manager.update.mock.calls
+        .map(([, , patch]) => (patch as { deliveryCode?: string }).deliveryCode)
+        .filter((code): code is string => code !== undefined);
+
+    const lastEvent = () =>
+      (emitter.emit.mock.calls as [string, CheckoutStatusChangedEvent][])
+        .filter(([name]) => name === CHECKOUT_STATUS_CHANGED_EVENT)
+        .pop()?.[1];
+
+    const becomeReady = async (over: Partial<Checkout>) => {
+      orders.findOne.mockResolvedValue({
+        id: 'o2',
+        vendorId: 'v2',
+        status: OrderStatus.PAID,
+        checkoutId: 'ck1',
+      });
+      refreshed = checkoutWith(over, [OrderStatus.READY, OrderStatus.READY]);
+      await service.markReady('o2', 'v2');
+    };
+
+    it('is minted when the order becomes ready to collect, and carried on the event', async () => {
+      await becomeReady({ fulfillmentType: FulfillmentType.PICKUP });
+
+      const [code] = codesWritten();
+      expect(code).toMatch(/^[A-Z]{6}$/);
+      expect(lastEvent()?.deliveryCode).toBe(code);
+    });
+
+    it('tells the buyer where to collect from — every vendor in the basket', async () => {
+      await becomeReady({
+        fulfillmentType: FulfillmentType.PICKUP,
+        orders: [
+          {
+            id: 'o1',
+            status: OrderStatus.READY,
+            items: [],
+            vendor: {
+              businessName: 'Mama Put',
+              businessAddress: '14 Herbert Macaulay Way, Yaba',
+            },
+          },
+          {
+            id: 'o2',
+            status: OrderStatus.READY,
+            items: [],
+            vendor: { businessName: 'GadgetHub', businessAddress: null },
+          },
+        ],
+      } as unknown as Partial<Checkout>);
+
+      expect(lastEvent()?.pickupPoints).toEqual([
+        { vendorName: 'Mama Put', address: '14 Herbert Macaulay Way, Yaba' },
+        { vendorName: 'GadgetHub', address: null },
+      ]);
+    });
+
+    it('keeps a code already issued rather than replacing it', async () => {
+      await becomeReady({
+        fulfillmentType: FulfillmentType.PICKUP,
+        deliveryCode: 'KEEPME',
+      });
+
+      expect(codesWritten()).toEqual([]);
+      expect(lastEvent()?.deliveryCode).toBe('KEEPME');
+    });
+
+    it('is not minted for a delivery becoming ready — that waits for dispatch', async () => {
+      await becomeReady({ fulfillmentType: FulfillmentType.DELIVERY });
+
+      expect(codesWritten()).toEqual([]);
+      expect(lastEvent()?.pickupPoints).toEqual([]);
     });
   });
 

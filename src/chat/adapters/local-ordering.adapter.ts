@@ -7,6 +7,7 @@ import { StatusActor } from '../../modules/orders/entities/order-status-event.en
 import { OrderStatus } from '../../common/enums/order-status.enum';
 import { CheckoutService } from '../../modules/orders/checkout.service';
 import { FulfillmentType } from '../../common/enums/fulfillment-type.enum';
+import { liveHandoverCode } from '../../modules/orders/handover-code';
 import {
   BuyerOrderSummary,
   CartRejection,
@@ -119,8 +120,16 @@ export class LocalOrderingAdapter implements OrderingPort {
         checkout.status === OrderStatus.DISPATCHED ||
         (checkout.status === OrderStatus.READY &&
           checkout.fulfillmentType === FulfillmentType.PICKUP),
+      handoverCode: liveHandoverCode(checkout),
       vendors: (checkout.orders ?? []).map((order) => ({
         vendorName: order.vendor?.businessName ?? null,
+        // Where to collect, once there is something paid for to collect. Not before:
+        // a vendor's address is for buyers with an order there.
+        pickupAddress:
+          checkout.fulfillmentType === FulfillmentType.PICKUP &&
+          checkout.status !== OrderStatus.PENDING_PAYMENT
+            ? (order.vendor?.businessAddress ?? null)
+            : null,
         status: order.status,
         items: (order.items ?? []).map((item) => ({
           name: item.productName,

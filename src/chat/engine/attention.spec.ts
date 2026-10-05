@@ -95,7 +95,10 @@ describe('attention and handover', () => {
           },
         },
         { provide: ChannelRegistry, useValue: { send: jest.fn() } },
-        { provide: DiscoveryService, useValue: { discover } },
+        {
+          provide: DiscoveryService,
+          useValue: { discover, hasModel: () => true },
+        },
         {
           provide: CheckoutFlow,
           useValue: { start: jest.fn(), handle: checkoutHandle },
@@ -237,6 +240,28 @@ describe('attention and handover', () => {
 
       // Coming back to a question after a detour is ordinary conversation, not confusion.
       expect(handover.requestHandover).not.toHaveBeenCalled();
+    });
+
+    it('answers "what is your name?" itself, after "who are you?" — the screenshot', async () => {
+      // Two conversational turns with no search in them. Neither is struggling, so
+      // nothing hands the buyer over; James just answers.
+      discover.mockResolvedValue({
+        ...answered,
+        messages: [{ text: "I'm James — what can I find for you?" }],
+      });
+
+      await say('who are you ?');
+      history = [
+        buyerSaid('who are you ?'),
+        botSaid("I'm James — what can I find for you?"),
+      ];
+      const replies = await say('i mean what is your name ?', {
+        context: { strugglingTurns: 0 },
+      });
+
+      expect(handover.requestHandover).not.toHaveBeenCalled();
+      expect(flagForAttention).not.toHaveBeenCalled();
+      expect(replies).toEqual(["I'm James — what can I find for you?"]);
     });
 
     it('ignores a repeated one-word reply', async () => {

@@ -33,6 +33,15 @@ class EnvironmentVariables {
   @IsString()
   DATABASE_LOGGING?: string;
 
+  @IsOptional()
+  @IsString()
+  DATABASE_SSL?: string;
+
+  /** A managed Postgres's CA certificate (PEM). Its shape is checked in configuration.ts. */
+  @IsOptional()
+  @IsString()
+  DATABASE_CA_CERT?: string;
+
   @IsString()
   JWT_SECRET!: string;
 

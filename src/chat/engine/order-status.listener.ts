@@ -113,7 +113,7 @@ export class OrderStatusListener {
 
     switch (event.to) {
       case OrderStatus.READY:
-        return isPickup ? 'Your order is ready for collection.' : null;
+        return isPickup ? readyForCollection(event) : null;
       case OrderStatus.DISPATCHED:
         return event.deliveryCode
           ? `Your order is on its way. Your delivery code is ${event.deliveryCode} — read it to the rider when they arrive.`
@@ -130,4 +130,34 @@ export class OrderStatusListener {
         return null;
     }
   }
+}
+
+/**
+ * "Ready for collection", with where and how. Before this it said only that — a buyer knew
+ * their order was waiting and not where.
+ *
+ * One sentence per thing the buyer needs: where to go (every vendor, if the basket spans
+ * several), and the code to show at the counter.
+ */
+function readyForCollection(event: CheckoutStatusChangedEvent): string {
+  const places = event.pickupPoints
+    .filter((point) => point.vendorName)
+    .map((point) =>
+      point.address
+        ? `${point.vendorName}, ${point.address}`
+        : `${point.vendorName}`,
+    );
+
+  const where =
+    places.length === 0
+      ? 'Your order is ready for collection.'
+      : places.length === 1
+        ? `Your order is ready for collection at ${places[0]}.`
+        : `Your order is ready for collection from ${places.slice(0, -1).join('; ')} and ${places[places.length - 1]}.`;
+
+  const code = event.deliveryCode
+    ? ` Show the code ${event.deliveryCode} when you collect${places.length > 1 ? ' at each' : ''}.`
+    : '';
+
+  return where + code;
 }

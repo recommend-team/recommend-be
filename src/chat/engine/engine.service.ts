@@ -59,7 +59,12 @@ export class EngineService {
   ) {
     this.historyLimit =
       this.configService.get<number>('chat.maxHistoryMessages') ?? 12;
+    this.assistantName =
+      this.configService.get<string>('chat.assistantName') ?? 'James';
   }
+
+  /** Same setting the discovery prompt reads, so the greeting and the persona agree. */
+  private readonly assistantName: string;
 
   /**
    * The full round trip: persist the buyer's message, work out a reply, persist it,
@@ -152,9 +157,9 @@ export class EngineService {
   async greet(conversation: Conversation): Promise<OutboundMessage> {
     const reply: OutboundMessage = {
       text:
-        "Hi! I'm Recommend. " +
-        "Tell me what you're looking for, anything a vendor " +
-        "might sell — and I'll find who has it near you.",
+        `Hi! I'm ${this.assistantName} from Recommend. ` +
+        'What can I find for you today? Food, gadgets, anything at all — ' +
+        "tell me, and roughly where you are, and I'll find who has it near you.",
     };
 
     const persisted = await this.conversationService.recordOutbound({
@@ -180,8 +185,10 @@ export class EngineService {
   /**
    * Discovery: the LLM answers, but only ever about what the catalogue tools returned.
    *
-   * Greetings and empty input are still handled without a model — instant, free, and
-   * impossible to get wrong. The money path (B4) will be scripted for the same reason.
+   * Greetings go to the model too, when there is one — "how far" deserves a reply from a
+   * person, not the same sentence every time. Without a model, and mid-checkout (which is
+   * scripted), a greeting gets a fixed, friendly line. The money path stays scripted:
+   * nothing that leads to a charge depends on what a model decides to say.
    */
   private async composeReply(
     conversation: Conversation,
@@ -191,13 +198,21 @@ export class EngineService {
     const trimmed = text.trim();
 
     if (!trimmed) {
-      return [{ text: "I didn't catch that — what are you looking for?" }];
+      return [
+        { text: "Sorry, I didn't catch that — what are you looking for?" },
+      ];
     }
 
-    if (isGreeting(trimmed)) {
+    const conversational =
+      conversation.state === ConversationState.DISCOVERY &&
+      this.discoveryService.hasModel();
+
+    if (isGreeting(trimmed) && !conversational) {
       return [
         {
-          text: 'Hello! What are you looking for today? Tell me the item and roughly where you are.',
+          text:
+            `Hey! ${this.assistantName} here. What are you looking for today, ` +
+            'and roughly where are you?',
         },
       ];
     }

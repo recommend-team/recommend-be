@@ -9,15 +9,54 @@ export default registerAs('app', () => ({
   vendorAppUrl: process.env.VENDOR_APP_URL || '',
 }));
 
+/**
+ * TLS settings in the URL that `pg` would apply *over* the `ssl` option below — the driver
+ * merges URL parameters on top of it, so leaving any of these in silently brings back
+ * full verification against the system CAs, and the "self-signed certificate" error.
+ */
+const URL_TLS_PARAMS = [
+  'sslmode',
+  'ssl',
+  'sslrootcert',
+  'sslcert',
+  'sslkey',
+  'uselibpqcompat',
+];
+
 const stripSslMode = (url: string): string => {
   try {
     const parsed = new URL(url);
-    parsed.searchParams.delete('sslmode');
+    for (const param of URL_TLS_PARAMS) parsed.searchParams.delete(param);
     return parsed.toString();
   } catch {
     return url;
   }
 };
+
+/**
+ * A provider's CA certificate (PEM), from `DATABASE_CA_CERT`.
+ *
+ * Accepted as real multi-line text or with literal `\n` escapes — a single-line value is
+ * what most hosting dashboards and `.env` files end up holding. Refused loudly if it is
+ * not a certificate: a typo here would otherwise surface as the very TLS error it fixes.
+ */
+export function readCaCert(raw: string | undefined): string | null {
+  const value = raw?.trim().replace(/\\n/g, '\n');
+  if (!value) return null;
+  if (!value.includes('-----BEGIN CERTIFICATE-----')) {
+    throw new Error(
+      'DATABASE_CA_CERT is set but is not a PEM certificate — paste the whole ' +
+        'certificate, from -----BEGIN CERTIFICATE----- to -----END CERTIFICATE-----.',
+    );
+  }
+  return value;
+}
+
+/** How the app trusts a managed Postgres. See DATABASE_CA_CERT in .env.example. */
+export type DatabaseTls =
+  | { ca: string; rejectUnauthorized: true }
+  | { rejectUnauthorized: false }
+  | undefined;
 
 export const databaseConfig = registerAs('database', () => {
   const entities = [__dirname + '/../**/*.entity{.ts,.js}'];
@@ -27,7 +66,15 @@ export const databaseConfig = registerAs('database', () => {
     process.env.NODE_ENV !== 'production' &&
     process.env.DATABASE_SYNCHRONIZE === 'true';
 
-  const relaxTls = process.env.DATABASE_SSL === 'true';
+  // Preferred: trust the provider's own CA, with full verification. Fallback: encrypt but
+  // skip the chain check (DATABASE_SSL=true). Neither: plain connection, for a local DB.
+  const ca = readCaCert(process.env.DATABASE_CA_CERT);
+  const relaxTls = !ca && process.env.DATABASE_SSL === 'true';
+  const ssl: DatabaseTls = ca
+    ? { ca, rejectUnauthorized: true }
+    : relaxTls
+      ? { rejectUnauthorized: false }
+      : undefined;
 
   const url =
     process.env.DATABASE_URL ||
@@ -35,8 +82,8 @@ export const databaseConfig = registerAs('database', () => {
 
   return {
     type: 'postgres' as const,
-    url: relaxTls ? stripSslMode(url) : url,
-    ssl: relaxTls ? { rejectUnauthorized: false } : undefined,
+    url: ssl ? stripSslMode(url) : url,
+    ssl,
     entities,
     migrations,
     migrationsRun: !synchronize,
@@ -104,7 +151,12 @@ export const cloudinaryConfig = registerAs('cloudinary', () => ({
 export const openaiConfig = registerAs('openai', () => ({
   apiKey: process.env.OPENAI_API_KEY,
   model: process.env.OPENAI_MODEL || 'gpt-4o-mini',
-  temperature: parseFloat(process.env.OPENAI_TEMPERATURE || '0.2'),
+  /**
+   * 0.6: enough variety to sound like a person rather than a form letter. Safe to raise —
+   * prices never come from the model's words (price-guard.ts drops any it invents), and
+   * everything that leads to a charge is scripted.
+   */
+  temperature: parseFloat(process.env.OPENAI_TEMPERATURE || '0.6'),
 }));
 
 // No `emailConfig` here. `EmailService` reads BREVO_API_KEY and BREVO_SENDER_EMAIL
@@ -126,6 +178,8 @@ export const googleConfig = registerAs('google', () => ({
 }));
 
 export const chatConfig = registerAs('chat', () => ({
+  /** What the assistant calls itself — in the greeting and in the model's persona. */
+  assistantName: process.env.ASSISTANT_NAME?.trim() || 'James',
   sessionSecret: process.env.CHAT_SESSION_SECRET,
   /**
    * How many past messages go to the model. The main lever on per-turn token cost —

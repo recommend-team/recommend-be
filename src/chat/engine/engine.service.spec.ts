@@ -29,7 +29,7 @@ describe('EngineService', () => {
     setArea: jest.Mock;
   };
   let registry: { send: jest.Mock };
-  let discovery: { discover: jest.Mock };
+  let discovery: { discover: jest.Mock; hasModel: jest.Mock };
   let checkoutFlow: { start: jest.Mock; handle: jest.Mock };
   let handover: {
     shouldStaySilent: jest.Mock;
@@ -56,6 +56,8 @@ describe('EngineService', () => {
       requestHandover: jest.fn().mockResolvedValue(true),
     };
     discovery = {
+      // No model by default — the keyword-only deployment. Tests that need one say so.
+      hasModel: jest.fn().mockReturnValue(false),
       discover: jest.fn().mockResolvedValue({
         messages: [{ text: 'Here is what I found:' }],
         resolvedAreaId: null,
@@ -73,7 +75,9 @@ describe('EngineService', () => {
         EngineService,
         {
           provide: ConfigService,
-          useValue: { get: () => 12 },
+          useValue: {
+            get: (key: string) => (key === 'chat.assistantName' ? 'James' : 12),
+          },
         },
         { provide: ConversationService, useValue: conversations },
         { provide: ChannelRegistry, useValue: registry },
@@ -154,11 +158,28 @@ describe('EngineService', () => {
     return calls[0][0].text;
   };
 
-  it('answers a greeting without spending a model call', async () => {
+  it('answers a greeting itself, by name, when there is no model', async () => {
     await service.handleInbound({ conversation, text: 'Hello' });
 
     expect(discovery.discover).not.toHaveBeenCalled();
+    expect(firstReplyText()).toContain('James here');
     expect(firstReplyText()).toContain('What are you looking for');
+  });
+
+  it('lets the model answer a greeting when there is one — a person, not a fixed line', async () => {
+    discovery.hasModel.mockReturnValue(true);
+
+    await service.handleInbound({ conversation, text: 'How far' });
+
+    expect(discovery.discover).toHaveBeenCalledWith(
+      expect.objectContaining({ text: 'How far' }),
+    );
+  });
+
+  it('introduces itself by name in the first greeting', async () => {
+    const greeting = await service.greet(conversation);
+
+    expect(greeting.text).toMatch(/^Hi! I'm James from Recommend\./);
   });
 
   it('sends anything that is not a greeting to discovery', async () => {

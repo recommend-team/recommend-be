@@ -89,6 +89,87 @@ describe('OrderStatusListener', () => {
     expect(sentText()).toMatch(/ready for collection/i);
   });
 
+  describe('where and how to collect', () => {
+    const pickup = (
+      points: { vendorName: string | null; address: string | null }[],
+      code: string | null = 'QWERTY',
+    ) =>
+      new CheckoutStatusChangedEvent(
+        'ck1',
+        'REC-AAA',
+        'Ada Obi',
+        '+2348012345678',
+        FulfillmentType.PICKUP,
+        OrderStatus.PAID,
+        OrderStatus.READY,
+        [{ name: 'Jollof Rice', quantity: 2 }],
+        points.map((p) => p.vendorName ?? ''),
+        code,
+        points,
+      );
+
+    it('says where the order is, and the code to show', async () => {
+      // Before, a pickup buyer was told their order was ready and not where.
+      await listener.onStatusChanged(
+        pickup([
+          {
+            vendorName: 'Mama Put Kitchen',
+            address: '14 Herbert Macaulay Way, Yaba',
+          },
+        ]),
+      );
+
+      expect(sentText()).toBe(
+        'Your order is ready for collection at Mama Put Kitchen, 14 Herbert Macaulay Way, Yaba. ' +
+          'Show the code QWERTY when you collect.',
+      );
+    });
+
+    it('names every vendor when the basket spans several', async () => {
+      await listener.onStatusChanged(
+        pickup([
+          {
+            vendorName: 'Mama Put Kitchen',
+            address: '14 Herbert Macaulay Way, Yaba',
+          },
+          { vendorName: 'GadgetHub Ikeja', address: '22 Otigba Street, Ikeja' },
+        ]),
+      );
+
+      expect(sentText()).toBe(
+        'Your order is ready for collection from Mama Put Kitchen, 14 Herbert Macaulay Way, Yaba ' +
+          'and GadgetHub Ikeja, 22 Otigba Street, Ikeja. Show the code QWERTY when you collect at each.',
+      );
+    });
+
+    it('still names a vendor who never gave an address', async () => {
+      await listener.onStatusChanged(
+        pickup([{ vendorName: 'Mama Put Kitchen', address: null }]),
+      );
+
+      expect(sentText()).toBe(
+        'Your order is ready for collection at Mama Put Kitchen. Show the code QWERTY when you collect.',
+      );
+    });
+
+    it('pushes the same words, so the notification alone is enough to go and collect', async () => {
+      await listener.onStatusChanged(
+        pickup([
+          {
+            vendorName: 'Mama Put Kitchen',
+            address: '14 Herbert Macaulay Way, Yaba',
+          },
+        ]),
+      );
+
+      expect(buyerPush.notify).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({ body: sentText(), type: 'ORDER_READY' }),
+        expect.anything(),
+      );
+    });
+  });
+
   it('sends the one message a delivery buyer gets', async () => {
     await listener.onStatusChanged(event(OrderStatus.DISPATCHED));
 

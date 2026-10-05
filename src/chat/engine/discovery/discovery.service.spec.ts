@@ -302,4 +302,38 @@ describe('DiscoveryService (model)', () => {
     expect(result.modelFailed).toBe(true);
     expect(result.handover).toBeNull();
   });
+
+  const replies = (content: string) => ({
+    choices: [{ message: { role: 'assistant', content } }],
+  });
+
+  it('does not count small talk as a search that found nothing', async () => {
+    // "who are you?" searches for nothing, so it finds nothing — that used to count as
+    // struggling, and two such turns handed the buyer to an admin.
+    mockCreate.mockResolvedValueOnce(
+      replies("I'm James! I help you find things from vendors near you."),
+    );
+
+    const result = await service.discover({
+      text: 'who are you?',
+      areaId: null,
+      history: [],
+    });
+
+    expect(result.foundNothing).toBe(false);
+    expect(result.handover).toBeNull();
+    expect(result.messages[0].text).toContain("I'm James");
+  });
+
+  it('gives the model its persona by name, at a conversational temperature', async () => {
+    mockCreate.mockResolvedValueOnce(replies('Hey! How far?'));
+
+    await service.discover({ text: 'how far', areaId: null, history: [] });
+
+    const [request] = mockCreate.mock.calls[0] as [
+      { temperature: number; messages: { role: string; content: string }[] },
+    ];
+    expect(request.messages[0].content).toContain('You are James');
+    expect(request.temperature).toBe(0.6);
+  });
 });

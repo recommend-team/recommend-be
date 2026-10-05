@@ -316,6 +316,23 @@ export class OrderLifecycleService {
     const from = checkout.status;
     if (from === to) return;
 
+    // A pickup order's handover code, minted the moment there is something to collect —
+    // the counterpart of a delivery's code at dispatch. Same transaction as the status, so
+    // a ready pickup never exists without one; kept if it already has one.
+    if (
+      to === OrderStatus.READY &&
+      checkout.fulfillmentType === FulfillmentType.PICKUP &&
+      !checkout.deliveryCode
+    ) {
+      const code = newDeliveryCode();
+      await manager.update(
+        Checkout,
+        { id: checkout.id },
+        { deliveryCode: code },
+      );
+      checkout.deliveryCode = code;
+    }
+
     await manager.update(Checkout, { id: checkout.id }, { status: to });
     await manager.insert(OrderStatusEvent, {
       orderId: null,
@@ -348,6 +365,14 @@ export class OrderLifecycleService {
           .map((order) => order.vendor?.businessName)
           .filter((name): name is string => !!name),
         checkout.deliveryCode ?? null,
+        checkout.fulfillmentType === FulfillmentType.PICKUP
+          ? (checkout.orders ?? [])
+              .filter((order) => order.status !== OrderStatus.CANCELLED)
+              .map((order) => ({
+                vendorName: order.vendor?.businessName ?? null,
+                address: order.vendor?.businessAddress ?? null,
+              }))
+          : [],
       ),
     });
   }

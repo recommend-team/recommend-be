@@ -122,6 +122,11 @@ export interface ToolHarvest {
   resolvedAreaId: string | null;
   /** Set when the model asked for a teammate — the reason it gave. */
   handoverReason: string | null;
+  /**
+   * Whether anything was actually searched this turn. "Found nothing" only means
+   * something when it is true — small talk searches nothing.
+   */
+  searched: boolean;
 }
 
 export function emptyHarvest(): ToolHarvest {
@@ -132,6 +137,7 @@ export function emptyHarvest(): ToolHarvest {
     prices: [],
     resolvedAreaId: null,
     handoverReason: null,
+    searched: false,
   };
 }
 
@@ -181,6 +187,7 @@ export async function executeTool(
     }
 
     case 'search_products': {
+      harvest.searched = true;
       const query = typeof args.query === 'string' ? args.query : '';
       let products = await context.catalog.searchProducts({
         text: query,
@@ -205,6 +212,7 @@ export async function executeTool(
     }
 
     case 'search_vendors': {
+      harvest.searched = true;
       const text = typeof args.query === 'string' ? args.query : undefined;
       const category =
         typeof args.category === 'string' ? args.category : undefined;
@@ -242,6 +250,7 @@ export async function executeTool(
     }
 
     case 'get_vendor_menu': {
+      harvest.searched = true;
       const vendorId = typeof args.vendorId === 'string' ? args.vendorId : '';
       const products = await context.catalog.searchProducts({
         vendorId,
