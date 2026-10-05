@@ -25,6 +25,11 @@ import {
   WITHDRAWAL_FAILED_EVENT,
   WithdrawalFailedEvent,
 } from '../../common/events/wallet.events';
+import {
+  VENDOR_ORDER_READY_EVENT,
+  VendorOrderReadyEvent,
+} from '../../common/events/vendor-order-ready.event';
+import { FulfillmentType } from '../../common/enums/fulfillment-type.enum';
 
 interface Alert {
   kind: AdminAlertKind;
@@ -122,6 +127,50 @@ export class AdminAlertsService {
       tag: `checkout:${event.reference}`,
       adminId: null,
       delivery: { ttlSeconds: 60 * 60 },
+    });
+  }
+
+  /**
+   * A vendor marked their part ready. Worded by what admin now has to do: the last vendor
+   * on a delivery means send a rider; on a pickup it is only news; part of a basket is
+   * progress. Tagged with the order, so each update replaces the last on the device.
+   */
+  @OnEvent(VENDOR_ORDER_READY_EVENT)
+  async onVendorReady(event: VendorOrderReadyEvent): Promise<void> {
+    const vendor = event.vendorName ?? 'A vendor';
+    const allReady = event.readyCount >= event.vendorCount;
+    const delivery = event.fulfillmentType === FulfillmentType.DELIVERY;
+
+    const { title, body } = !allReady
+      ? {
+          title: 'Vendor ready',
+          body: `${vendor} has their part of ${event.reference} ready — ${event.readyCount} of ${event.vendorCount} vendors ready.`,
+        }
+      : delivery
+        ? {
+            title: 'Ready to dispatch',
+            body:
+              event.vendorCount > 1
+                ? `Every vendor on ${event.reference} is ready (${vendor} was last). Send a rider.`
+                : `${vendor} has ${event.reference} ready. Send a rider.`,
+          }
+        : {
+            title: 'Ready for collection',
+            body: `${event.reference} is ready — the buyer collects it from ${event.vendorCount > 1 ? 'each vendor' : vendor}.`,
+          };
+
+    await this.send({
+      kind: 'VENDOR_ORDER_READY',
+      title,
+      body,
+      url: '/admin/transactions',
+      tag: `checkout:${event.reference}`,
+      adminId: null,
+      // A rider to send is urgent; everything else is progress.
+      delivery:
+        allReady && delivery
+          ? { urgency: 'high', ttlSeconds: 2 * 60 * 60 }
+          : { ttlSeconds: 60 * 60 },
     });
   }
 

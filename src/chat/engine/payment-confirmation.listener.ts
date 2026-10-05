@@ -75,6 +75,7 @@ export class PaymentConfirmationListener {
           payload: persisted.payload ?? undefined,
           messageId: persisted.id,
           createdAt: persisted.createdAt,
+          alert: 'PAYMENT_CONFIRMED',
         },
       );
 
@@ -86,10 +87,6 @@ export class PaymentConfirmationListener {
         pendingCart: [],
       });
 
-      // Hand the buyer back to the assistant. The thread is parked in AWAITING_PAYMENT,
-      // and without this every message after paying — "thank you", or an attempt to buy
-      // something else — is answered with "I'm still waiting for the payment to go
-      // through". The one thing left to wait for has just happened.
       await this.conversationService.setState(
         conversation.id,
         ConversationState.DISCOVERY,

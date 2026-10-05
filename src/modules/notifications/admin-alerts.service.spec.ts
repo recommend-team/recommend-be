@@ -15,6 +15,8 @@ import {
 } from '../../common/events/admin-alert.events';
 import { CheckoutPaidEvent } from '../../common/events/checkout-paid.event';
 import { WithdrawalFailedEvent } from '../../common/events/wallet.events';
+import { VendorOrderReadyEvent } from '../../common/events/vendor-order-ready.event';
+import { FulfillmentType } from '../../common/enums/fulfillment-type.enum';
 
 const admin = (id: string, over: Partial<User> = {}): User =>
   Object.assign(new User(), {
@@ -105,6 +107,68 @@ describe('AdminAlertsService', () => {
         }),
         { urgency: 'high', ttlSeconds: 900 },
       );
+    });
+  });
+
+  describe('a vendor marking ready', () => {
+    const ready = (
+      readyCount: number,
+      vendorCount: number,
+      fulfillment = FulfillmentType.DELIVERY,
+    ) =>
+      service.onVendorReady(
+        new VendorOrderReadyEvent(
+          'o1',
+          'ck1',
+          'REC-AAA',
+          'Mama Put',
+          fulfillment,
+          readyCount,
+          vendorCount,
+        ),
+      );
+
+    it('says "send a rider", urgently, when the last vendor on a delivery is ready', async () => {
+      await ready(2, 2);
+
+      expect(emitted[0]).toMatchObject({
+        kind: 'VENDOR_ORDER_READY',
+        title: 'Ready to dispatch',
+        body: 'Every vendor on REC-AAA is ready (Mama Put was last). Send a rider.',
+        url: '/admin/transactions',
+      });
+      expect(push.sendToUser).toHaveBeenCalledWith(
+        'a1',
+        expect.objectContaining({ tag: 'checkout:REC-AAA' }),
+        { urgency: 'high', ttlSeconds: 7200 },
+      );
+    });
+
+    it('words a single-vendor delivery plainly', async () => {
+      await ready(1, 1);
+
+      expect(emitted[0].body).toBe('Mama Put has REC-AAA ready. Send a rider.');
+    });
+
+    it('reports progress, without urgency, while others are still preparing', async () => {
+      await ready(1, 2);
+
+      expect(emitted[0]).toMatchObject({
+        title: 'Vendor ready',
+        body: 'Mama Put has their part of REC-AAA ready — 1 of 2 vendors ready.',
+      });
+      expect(push.sendToUser).toHaveBeenCalledWith('a1', expect.anything(), {
+        ttlSeconds: 3600,
+      });
+    });
+
+    it('treats a ready pickup as news — the buyer collects it, nobody is sent', async () => {
+      await ready(1, 1, FulfillmentType.PICKUP);
+
+      expect(emitted[0]).toMatchObject({
+        title: 'Ready for collection',
+        body: 'REC-AAA is ready — the buyer collects it from Mama Put.',
+      });
     });
   });
 

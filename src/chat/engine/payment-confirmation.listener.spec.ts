@@ -99,6 +99,16 @@ describe('PaymentConfirmationListener', () => {
     );
   });
 
+  it('marks the confirmation so an open app chimes, push or no push', async () => {
+    await listener.onCheckoutPaid(event());
+
+    expect(registry.send).toHaveBeenCalledWith(
+      ChatChannel.PWA,
+      'session-1',
+      expect.objectContaining({ alert: 'PAYMENT_CONFIRMED' }),
+    );
+  });
+
   it('posts the confirmation into the buyer’s existing thread', async () => {
     await listener.onCheckoutPaid(event());
 

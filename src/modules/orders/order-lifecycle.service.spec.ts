@@ -16,6 +16,10 @@ import {
   VENDOR_ORDER_COMPLETED_EVENT,
   VendorOrderCompletedEvent,
 } from '../../common/events/vendor-order-completed.event';
+import {
+  VENDOR_ORDER_READY_EVENT,
+  VendorOrderReadyEvent,
+} from '../../common/events/vendor-order-ready.event';
 
 /** A checkout with two vendors, which is where all the interesting cases live. */
 const checkoutWith = (
@@ -130,7 +134,52 @@ describe('OrderLifecycleService', () => {
       // The order moved...
       expect(auditRows().some((row) => row.orderId === 'o1')).toBe(true);
       // ...but the buyer heard nothing, because their order has not moved.
-      expect(emitter.emit).not.toHaveBeenCalled();
+      expect(emitter.emit).not.toHaveBeenCalledWith(
+        CHECKOUT_STATUS_CHANGED_EVENT,
+        expect.anything(),
+      );
+    });
+
+    it('tells admin who is ready, and how much of the basket that makes', async () => {
+      orders.findOne.mockResolvedValue({
+        id: 'o1',
+        vendorId: 'v1',
+        status: OrderStatus.PAID,
+        checkoutId: 'ck1',
+      });
+      refreshed = checkoutWith({}, [OrderStatus.READY, OrderStatus.PAID]);
+
+      await service.markReady('o1', 'v1');
+
+      expect(emitter.emit).toHaveBeenCalledWith(
+        VENDOR_ORDER_READY_EVENT,
+        new VendorOrderReadyEvent(
+          'o1',
+          'ck1',
+          'REC-AAA',
+          'Vendor 1',
+          FulfillmentType.DELIVERY,
+          1,
+          2,
+        ),
+      );
+    });
+
+    it('counts the basket as fully ready once the last vendor is', async () => {
+      orders.findOne.mockResolvedValue({
+        id: 'o2',
+        vendorId: 'v2',
+        status: OrderStatus.PAID,
+        checkoutId: 'ck1',
+      });
+      refreshed = checkoutWith({}, [OrderStatus.READY, OrderStatus.READY]);
+
+      await service.markReady('o2', 'v2');
+
+      expect(emitter.emit).toHaveBeenCalledWith(
+        VENDOR_ORDER_READY_EVENT,
+        expect.objectContaining({ readyCount: 2, vendorCount: 2 }),
+      );
     });
 
     it('moves the checkout once every vendor is ready', async () => {

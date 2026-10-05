@@ -170,6 +170,32 @@ describe('OrderStatusListener', () => {
     });
   });
 
+  describe('marking the message for an open app to chime', () => {
+    const sentAlert = () =>
+      (registry.send.mock.calls[0] as [unknown, unknown, { alert?: string }])[2]
+        .alert;
+
+    it('marks the dispatch — the sound no longer depends on push', async () => {
+      await listener.onStatusChanged(event(OrderStatus.DISPATCHED));
+
+      expect(sentAlert()).toBe('ORDER_DISPATCHED');
+    });
+
+    it('marks a pickup becoming ready', async () => {
+      await listener.onStatusChanged(
+        event(OrderStatus.READY, FulfillmentType.PICKUP),
+      );
+
+      expect(sentAlert()).toBe('ORDER_READY');
+    });
+
+    it('leaves the closing thank-you unmarked — the buyer caused it', async () => {
+      await listener.onStatusChanged(event(OrderStatus.COMPLETED));
+
+      expect(sentAlert()).toBeUndefined();
+    });
+  });
+
   it('sends the one message a delivery buyer gets', async () => {
     await listener.onStatusChanged(event(OrderStatus.DISPATCHED));
 

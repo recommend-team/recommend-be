@@ -25,6 +25,10 @@ import {
   VENDOR_ORDER_COMPLETED_EVENT,
   VendorOrderCompletedEvent,
 } from '../../common/events/vendor-order-completed.event';
+import {
+  VENDOR_ORDER_READY_EVENT,
+  VendorOrderReadyEvent,
+} from '../../common/events/vendor-order-ready.event';
 
 /**
  * How far along the lifecycle a status is. Only these participate in the derivation;
@@ -106,7 +110,35 @@ export class OrderLifecycleService {
         outbox,
         null,
       );
-      await this.recomputeCheckout(manager, order.checkoutId, outbox);
+      const checkout = await this.recomputeCheckout(
+        manager,
+        order.checkoutId,
+        outbox,
+      );
+
+      // For admin: who is ready, and how much of the basket that makes. The last vendor
+      // ready on a delivery is the moment someone has to send a rider.
+      if (checkout) {
+        const active = (checkout.orders ?? []).filter(
+          (candidate) => candidate.status !== OrderStatus.CANCELLED,
+        );
+        outbox.push({
+          name: VENDOR_ORDER_READY_EVENT,
+          payload: new VendorOrderReadyEvent(
+            order.id,
+            checkout.id,
+            checkout.reference,
+            checkout.orders?.find((candidate) => candidate.id === order.id)
+              ?.vendor?.businessName ?? null,
+            checkout.fulfillmentType,
+            active.filter(
+              (candidate) =>
+                rankOf(candidate.status) >= rankOf(OrderStatus.READY),
+            ).length,
+            active.length,
+          ),
+        });
+      }
     });
     this.flush(outbox);
   }
@@ -382,24 +414,28 @@ export class OrderLifecycleService {
    *
    * Never backwards, and never past a checkout-level state: once a rider has the goods,
    * a vendor editing their own order says nothing about where the parcel is.
+   *
+   * Returns the checkout as re-read, so the caller can report on it without a second read.
    */
   private async recomputeCheckout(
     manager: EntityManager,
     checkoutId: string,
     outbox: Outbox,
-  ): Promise<void> {
+  ): Promise<Checkout | null> {
     const checkout = await manager.findOne(Checkout, {
       where: { id: checkoutId },
       relations: ['orders', 'orders.items', 'orders.vendor'],
     });
-    if (!checkout) return;
+    if (!checkout) return null;
 
-    if (rankOf(checkout.status) >= rankOf(OrderStatus.DISPATCHED)) return;
+    if (rankOf(checkout.status) >= rankOf(OrderStatus.DISPATCHED)) {
+      return checkout;
+    }
 
     const active = (checkout.orders ?? []).filter(
       (order) => order.status !== OrderStatus.CANCELLED,
     );
-    if (active.length === 0) return;
+    if (active.length === 0) return checkout;
 
     const slowest = active.reduce(
       (lowest, order) => Math.min(lowest, rankOf(order.status)),
@@ -407,8 +443,8 @@ export class OrderLifecycleService {
     );
 
     const derived = statusForRank(slowest);
-    if (!derived || derived === checkout.status) return;
-    if (rankOf(derived) <= rankOf(checkout.status)) return;
+    if (!derived || derived === checkout.status) return checkout;
+    if (rankOf(derived) <= rankOf(checkout.status)) return checkout;
 
     await this.moveCheckout(
       manager,
@@ -417,6 +453,7 @@ export class OrderLifecycleService {
       { type: StatusActor.SYSTEM, id: null },
       outbox,
     );
+    return checkout;
   }
 
   /**

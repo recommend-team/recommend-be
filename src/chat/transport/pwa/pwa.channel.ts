@@ -38,6 +38,7 @@ export class PwaChannel implements ChannelAdapter {
       text: message.text,
       payload: message.payload ?? null,
       createdAt: message.createdAt ?? new Date(),
+      alert: message.alert ?? null,
     });
 
     // Socket.IO issues no durable message id of its own — the database id is the id.

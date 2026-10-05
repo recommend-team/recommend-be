@@ -1,5 +1,8 @@
 import { ChatChannel } from '../enums/chat.enums';
 import { MessagePayload } from '../conversation/entities/message.entity';
+import type { BuyerPushMessage } from '../ports/push.port';
+
+export type BuyerPushType = BuyerPushMessage['type'];
 
 /**
  * The seam that keeps the engine channel-agnostic.
@@ -11,6 +14,7 @@ export interface OutboundMessage {
   payload?: MessagePayload;
   messageId?: string;
   createdAt?: Date;
+  alert?: BuyerPushType;
 }
 
 export interface ChannelAdapter {

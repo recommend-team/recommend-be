@@ -56,6 +56,7 @@ export class OrderStatusListener {
           text,
           messageId: persisted.id,
           createdAt: persisted.createdAt,
+          alert: alertFor(event),
         },
       );
 
@@ -130,6 +131,23 @@ export class OrderStatusListener {
         return null;
     }
   }
+}
+
+/**
+ * The news this message carries, for an open app to chime on — the same two moments that
+ * are pushed. The closing thank-you is not one: the buyer caused it.
+ */
+function alertFor(
+  event: CheckoutStatusChangedEvent,
+): 'ORDER_READY' | 'ORDER_DISPATCHED' | undefined {
+  if (event.to === OrderStatus.DISPATCHED) return 'ORDER_DISPATCHED';
+  if (
+    event.to === OrderStatus.READY &&
+    event.fulfillmentType === FulfillmentType.PICKUP
+  ) {
+    return 'ORDER_READY';
+  }
+  return undefined;
 }
 
 /**
