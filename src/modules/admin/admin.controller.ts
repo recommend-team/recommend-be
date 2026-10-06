@@ -17,8 +17,18 @@ import {
   ApiBearerAuth,
   ApiParam,
   ApiQuery,
+  ApiBody,
 } from '@nestjs/swagger';
 import { AdminService } from './admin.service';
+import { ZodValidationPipe } from '../../common/pipes/zod-validation.pipes';
+import {
+  assignRiderSchema,
+  AssignRiderSwaggerDto,
+  createRiderSchema,
+  CreateRiderSwaggerDto,
+  type AssignRiderDto,
+  type CreateRiderDto,
+} from './dto/rider.dto';
 import { Roles } from '../auth/decorators/roles.decorator';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { User } from '../auth/entities/auth.entity';
@@ -227,16 +237,61 @@ export class AdminController {
     type: String,
     description: 'Reference, buyer name or phone',
   })
+  @ApiQuery({
+    name: 'riderId',
+    required: false,
+    type: String,
+    description: 'One rider’s deliveries',
+  })
+  @ApiQuery({
+    name: 'needsRider',
+    required: false,
+    type: Boolean,
+    description: 'Paid or ready deliveries with no rider yet',
+  })
   @ApiQuery({ name: 'page', required: false, type: Number })
   @ApiQuery({ name: 'limit', required: false, type: Number })
   @ApiResponse({ status: 200, description: 'Paginated transaction list' })
   getTransactions(
     @Query('status') status?: OrderStatus,
     @Query('search') search?: string,
+    @Query('riderId', new ParseUUIDPipe({ optional: true })) riderId?: string,
+    @Query('needsRider') needsRider?: string,
     @Query('page') page?: number,
     @Query('limit') limit?: number,
   ) {
-    return this.adminService.getTransactions({ status, search, page, limit });
+    return this.adminService.getTransactions({
+      status,
+      search,
+      riderId,
+      needsRider: needsRider === 'true',
+      page,
+      limit,
+    });
+  }
+
+  @Post('transactions/:reference/rider')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    summary: 'Assign a rider to a delivery, or replace the one on it',
+    description:
+      'Until riders have an app, admin chooses the rider and reaches them by phone; this ' +
+      'records who is carrying it. Allowed from payment until delivery, and required ' +
+      'before dispatch. Every assignment is written to the order’s history.',
+  })
+  @ApiParam({ name: 'reference', example: 'REC-9A3F2B7C1D4E' })
+  @ApiBody({ type: AssignRiderSwaggerDto })
+  @ApiResponse({ status: 200, description: 'The transaction, with its rider' })
+  @ApiResponse({
+    status: 400,
+    description: 'A pickup, a finished order, or a rider who is not approved',
+  })
+  assignRider(
+    @CurrentUser() admin: User,
+    @Param('reference') reference: string,
+    @Body(new ZodValidationPipe(assignRiderSchema)) body: AssignRiderDto,
+  ) {
+    return this.adminService.assignRider(reference, body.riderId, admin.id);
   }
 
   @Post('transactions/:reference/verify')
@@ -334,6 +389,60 @@ export class AdminController {
   @ApiResponse({ status: 200, description: 'Status history, oldest first' })
   getTransactionHistory(@Param('reference') reference: string) {
     return this.adminService.getStatusHistory(reference);
+  }
+
+  // ─── Riders ────────────────────────────────────────────────────────────────
+
+  @Post('riders')
+  @ApiOperation({
+    summary: 'Add a rider',
+    description:
+      'Someone admin has vetted and can reach by phone. Approved at once, with no ' +
+      'password — until riders have an app there is nothing to sign in to. Email is ' +
+      'optional; the phone is normalised and must not belong to another account.',
+  })
+  @ApiBody({ type: CreateRiderSwaggerDto })
+  @ApiResponse({ status: 201, description: 'Rider created' })
+  @ApiResponse({ status: 409, description: 'Phone or email already in use' })
+  createRider(
+    @Body(new ZodValidationPipe(createRiderSchema)) body: CreateRiderDto,
+  ) {
+    return this.adminService.createRider(body);
+  }
+
+  @Get('riders')
+  @ApiOperation({
+    summary: 'Every rider, with deliveries in progress and completed',
+    description:
+      'The roster — approved, pending, suspended and rejected alike (filter by status). ' +
+      'A rider’s deliveries are `GET /admin/transactions?riderId=`.',
+  })
+  @ApiQuery({ name: 'status', enum: SellerStatus, required: false })
+  @ApiQuery({
+    name: 'search',
+    required: false,
+    type: String,
+    description: 'Name, phone or email',
+  })
+  @ApiQuery({ name: 'page', required: false, type: Number })
+  @ApiQuery({ name: 'limit', required: false, type: Number })
+  @ApiResponse({ status: 200, description: 'Paginated rider list' })
+  getRiders(
+    @Query('status') status?: SellerStatus,
+    @Query('search') search?: string,
+    @Query('page') page?: number,
+    @Query('limit') limit?: number,
+  ) {
+    return this.adminService.getRiders({ status, search, page, limit });
+  }
+
+  @Get('riders/:id')
+  @ApiOperation({ summary: 'One rider, with their delivery counts' })
+  @ApiParam({ name: 'id', type: String, description: 'Rider user UUID' })
+  @ApiResponse({ status: 200, description: 'The rider' })
+  @ApiResponse({ status: 404, description: 'Not a rider' })
+  getRider(@Param('id', ParseUUIDPipe) id: string) {
+    return this.adminService.getRider(id);
   }
 
   // ─── General user management ───────────────────────────────────────────────

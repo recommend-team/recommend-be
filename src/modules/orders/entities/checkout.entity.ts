@@ -3,11 +3,14 @@ import {
   Column,
   PrimaryGeneratedColumn,
   OneToMany,
+  ManyToOne,
+  JoinColumn,
   Index,
   CreateDateColumn,
   UpdateDateColumn,
 } from 'typeorm';
 import { Order } from './order.entity';
+import { User } from '../../auth/entities/auth.entity';
 import { OrderStatus } from '../../../common/enums/order-status.enum';
 import { FulfillmentType } from '../../../common/enums/fulfillment-type.enum';
 
@@ -72,6 +75,23 @@ export class Checkout {
 
   @Column({ type: 'uuid', nullable: true })
   createdByAdminId!: string | null;
+
+  /**
+   * The rider carrying this delivery, assigned by an admin until riders have an app of
+   * their own. Checkout-level, like DISPATCHED: one rider carries the whole basket. Null on
+   * a pickup, and on a delivery nobody has been assigned to yet.
+   */
+  @Column({ type: 'uuid', nullable: true })
+  @Index()
+  riderId!: string | null;
+
+  @ManyToOne(() => User, { nullable: true, onDelete: 'SET NULL' })
+  @JoinColumn({ name: 'riderId' })
+  rider?: User | null;
+
+  /** When the current rider was assigned — reassigning resets it. */
+  @Column({ type: 'timestamptz', nullable: true })
+  riderAssignedAt!: Date | null;
 
   @OneToMany(() => Order, (order) => order.checkout)
   orders!: Order[];

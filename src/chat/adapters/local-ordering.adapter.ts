@@ -100,7 +100,7 @@ export class LocalOrderingAdapter implements OrderingPort {
 
     const checkouts = await this.checkouts.find({
       where: { reference: In(references) },
-      relations: ['orders', 'orders.items', 'orders.vendor'],
+      relations: ['orders', 'orders.items', 'orders.vendor', 'rider'],
       order: { createdAt: 'DESC' },
     });
 
@@ -121,6 +121,13 @@ export class LocalOrderingAdapter implements OrderingPort {
         (checkout.status === OrderStatus.READY &&
           checkout.fulfillmentType === FulfillmentType.PICKUP),
       handoverCode: liveHandoverCode(checkout),
+      rider:
+        checkout.status === OrderStatus.DISPATCHED && checkout.rider
+          ? {
+              name: `${checkout.rider.firstName} ${checkout.rider.lastName}`.trim(),
+              phone: checkout.rider.phoneNumber ?? null,
+            }
+          : null,
       vendors: (checkout.orders ?? []).map((order) => ({
         vendorName: order.vendor?.businessName ?? null,
         // Where to collect, once there is something paid for to collect. Not before:

@@ -65,13 +65,9 @@ export interface BuyerOrderSummary {
   goodsTotal: number;
   deliveryFee: number;
   totalAmount: number;
-  /** True only when confirming receipt is the buyer's next move. */
   canComplete: boolean;
-  /**
-   * The code to show — to the rider on a delivery, at the counter on a pickup. Null
-   * except while someone is waiting to check it.
-   */
   handoverCode: string | null;
+  rider: { name: string; phone: string | null } | null;
   vendors: {
     vendorName: string | null;
     /** Where to collect from. Pickup orders only, and only once paid. */
@@ -97,12 +93,5 @@ export interface OrderingPort {
   /** "I have it." The buyer's one transition. */
   completeOrder(reference: string): Promise<void>;
 
-  /**
-   * What delivery will cost, before the checkout exists.
-   *
-   * The conversation reads the order back before charging for it, so it needs the fee a
-   * moment earlier than `placeCheckout` can supply it. Asking the platform rather than
-   * reading config here keeps a single rule for what delivery costs.
-   */
   deliveryFeeFor(fulfillmentType: 'PICKUP' | 'DELIVERY'): number;
 }

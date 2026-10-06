@@ -42,6 +42,13 @@ const RANK: Partial<Record<OrderStatus, number>> = {
   [OrderStatus.COMPLETED]: 4,
 };
 
+/** Where a delivery can take a rider: paid, ready, or already on its way (a swap). */
+const ASSIGNABLE = new Set<OrderStatus>([
+  OrderStatus.PAID,
+  OrderStatus.READY,
+  OrderStatus.DISPATCHED,
+]);
+
 export interface Actor {
   type: StatusActor;
   /** Null for a buyer, who has no account, and for anything the system did alone. */
@@ -143,6 +150,66 @@ export class OrderLifecycleService {
     this.flush(outbox);
   }
 
+  // ─── Rider ──────────────────────────────────────────────────────────────────
+
+  /**
+   * Put a rider on a delivery, or swap the one on it.
+   *
+   * Admin's call until riders have an app — they choose the rider and reach them by
+   * phone; this records who it is. Allowed from payment until the parcel is delivered, so
+   * a rider who drops out mid-route can be replaced. Who the rider is (role, approval) is
+   * the caller's to check; this owns what the order allows.
+   *
+   * No status moves, so the assignment is written to the order's history as a same-status
+   * row whose note names the rider — one audit trail for everything that happened to it.
+   */
+  async assignRider(
+    reference: string,
+    rider: { id: string; name: string; phone: string | null },
+    actor: Actor,
+  ): Promise<void> {
+    const checkout = await this.checkouts.findOne({
+      where: { reference },
+      relations: ['rider'],
+    });
+    if (!checkout) throw new NotFoundException('Order not found');
+
+    if (checkout.fulfillmentType === FulfillmentType.PICKUP) {
+      throw new BadRequestException(
+        'A pickup order has no rider — the buyer collects it',
+      );
+    }
+    if (!ASSIGNABLE.has(checkout.status)) {
+      throw new BadRequestException(
+        `A rider can be assigned from payment until delivery (this order is ${checkout.status})`,
+      );
+    }
+    if (checkout.riderId === rider.id) return;
+
+    const label = (name: string, phone: string | null) =>
+      phone ? `${name} (${phone})` : name;
+    const note = checkout.rider
+      ? `Rider changed: ${label(checkout.rider.fullName, checkout.rider.phoneNumber)} → ${label(rider.name, rider.phone)}`
+      : `Rider assigned: ${label(rider.name, rider.phone)}`;
+
+    await this.dataSource.transaction(async (manager) => {
+      await manager.update(
+        Checkout,
+        { id: checkout.id },
+        { riderId: rider.id, riderAssignedAt: new Date() },
+      );
+      await manager.insert(OrderStatusEvent, {
+        orderId: null,
+        checkoutId: checkout.id,
+        fromStatus: checkout.status,
+        toStatus: checkout.status,
+        actorType: actor.type,
+        actorId: actor.id,
+        note,
+      });
+    });
+  }
+
   // ─── Dispatch and completion ────────────────────────────────────────────────
 
   /** A rider has collected everything and left. Admin's call — nobody else can know it. */
@@ -160,6 +227,14 @@ export class OrderLifecycleService {
     if (checkout.status !== OrderStatus.READY) {
       throw new BadRequestException(
         `Every vendor must be ready before dispatch (this order is ${checkout.status})`,
+      );
+    }
+
+    // Every delivery on its way has a named rider, so "who has it?" always has an answer.
+    // The admin override can still move a stranded order without one — that is its job.
+    if (!checkout.riderId) {
+      throw new BadRequestException(
+        'Assign a rider before dispatching this order',
       );
     }
 

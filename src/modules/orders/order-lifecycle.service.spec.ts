@@ -37,6 +37,8 @@ const checkoutWith = (
     deliveryFee: 1500,
     totalAmount: 8500,
     createdAt: new Date(),
+    // A delivery needs a rider before dispatch; the cases about that set it to null.
+    riderId: 'r1',
     orders: orderStatuses.map((status, index) => ({
       id: `o${index + 1}`,
       checkoutId: 'ck1',
@@ -270,6 +272,117 @@ describe('OrderLifecycleService', () => {
           buyerName: 'Ada Obi',
         }),
       );
+    });
+
+    it('refuses a delivery nobody has been assigned to carry', async () => {
+      checkouts.findOne.mockResolvedValue(
+        checkoutWith({ status: OrderStatus.READY, riderId: null }),
+      );
+
+      await expect(
+        service.markDispatched('REC-AAA', {
+          type: StatusActor.ADMIN,
+          id: 'a1',
+        }),
+      ).rejects.toThrow(/assign a rider/i);
+      expect(manager.update).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('assigning a rider', () => {
+    const musa = { id: 'r2', name: 'Musa Bello', phone: '+2348011111111' };
+    const admin = { type: StatusActor.ADMIN, id: 'a1' };
+
+    it('records the rider and writes it to the order’s history', async () => {
+      checkouts.findOne.mockResolvedValue(
+        checkoutWith({ status: OrderStatus.READY, riderId: null, rider: null }),
+      );
+
+      await service.assignRider('REC-AAA', musa, admin);
+
+      expect(manager.update).toHaveBeenCalledWith(
+        Checkout,
+        { id: 'ck1' },
+        expect.objectContaining({ riderId: 'r2' }),
+      );
+      const [, , written] = manager.update.mock.calls[0] as [
+        unknown,
+        unknown,
+        { riderAssignedAt: unknown },
+      ];
+      expect(written.riderAssignedAt).toBeInstanceOf(Date);
+      expect(auditRows()).toEqual([
+        expect.objectContaining({
+          checkoutId: 'ck1',
+          fromStatus: OrderStatus.READY,
+          toStatus: OrderStatus.READY,
+          actorType: StatusActor.ADMIN,
+          actorId: 'a1',
+          note: 'Rider assigned: Musa Bello (+2348011111111)',
+        }),
+      ]);
+      // No status moved, so nobody is told anything.
+      expect(emitter.emit).not.toHaveBeenCalled();
+    });
+
+    it('says who was replaced when the rider changes', async () => {
+      checkouts.findOne.mockResolvedValue(
+        checkoutWith({
+          status: OrderStatus.DISPATCHED,
+          riderId: 'r1',
+          rider: {
+            fullName: 'Tunde Ade',
+            phoneNumber: '+2348022222222',
+          } as never,
+        }),
+      );
+
+      await service.assignRider('REC-AAA', musa, admin);
+
+      expect(auditRows()[0].note).toBe(
+        'Rider changed: Tunde Ade (+2348022222222) → Musa Bello (+2348011111111)',
+      );
+    });
+
+    it('does nothing when it is the same rider again', async () => {
+      checkouts.findOne.mockResolvedValue(
+        checkoutWith({ status: OrderStatus.PAID, riderId: 'r2' }),
+      );
+
+      await service.assignRider('REC-AAA', musa, admin);
+
+      expect(manager.update).not.toHaveBeenCalled();
+      expect(manager.insert).not.toHaveBeenCalled();
+    });
+
+    it('refuses a pickup, which has no rider', async () => {
+      checkouts.findOne.mockResolvedValue(
+        checkoutWith({
+          status: OrderStatus.READY,
+          fulfillmentType: FulfillmentType.PICKUP,
+          riderId: null,
+        }),
+      );
+
+      await expect(service.assignRider('REC-AAA', musa, admin)).rejects.toThrow(
+        /pickup/i,
+      );
+    });
+
+    it.each([
+      OrderStatus.PENDING_PAYMENT,
+      OrderStatus.COMPLETED,
+      OrderStatus.CANCELLED,
+      OrderStatus.REFUNDED,
+    ])('refuses an order that is %s', async (status) => {
+      checkouts.findOne.mockResolvedValue(
+        checkoutWith({ status, riderId: null }),
+      );
+
+      await expect(service.assignRider('REC-AAA', musa, admin)).rejects.toThrow(
+        /from payment until delivery/i,
+      );
+      expect(manager.update).not.toHaveBeenCalled();
     });
   });
 
