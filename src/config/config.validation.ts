@@ -124,6 +124,18 @@ class EnvironmentVariables {
   @IsNumber()
   CHAT_MAX_TOOL_ROUNDS?: number;
 
+  @IsOptional()
+  @IsString()
+  CONTACT_INBOX?: string;
+
+  @IsOptional()
+  @IsNumber()
+  CONTACT_MAX_PER_SENDER_PER_HOUR?: number;
+
+  @IsOptional()
+  @IsNumber()
+  CONTACT_MAX_PER_HOUR?: number;
+
   /** Flat delivery fee in naira, charged once per checkout on DELIVERY orders. */
   @IsOptional()
   @IsNumber()

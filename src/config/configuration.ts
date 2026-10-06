@@ -214,6 +214,15 @@ export const chatConfig = registerAs('chat', () => ({
   ),
 }));
 
+export const contactConfig = registerAs('contact', () => ({
+  inbox: process.env.CONTACT_INBOX || 'contacts.recommend@gmail.com',
+  maxPerSenderPerHour: parseInt(
+    process.env.CONTACT_MAX_PER_SENDER_PER_HOUR || '5',
+    10,
+  ),
+  maxPerHour: parseInt(process.env.CONTACT_MAX_PER_HOUR || '60', 10),
+}));
+
 export const deliveryConfig = registerAs('delivery', () => ({
   feeNgn: parseInt(process.env.DELIVERY_FEE_NGN || '1500', 10),
 }));

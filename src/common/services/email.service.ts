@@ -13,6 +13,7 @@ export interface EmailOptions {
   html?: string;
   template?: string;
   context?: Record<string, any>;
+  replyTo?: { email: string; name?: string };
 }
 
 @Injectable()
@@ -79,6 +80,7 @@ export class EmailService {
 
     sendSmtpEmail.to = [{ email: options.to }];
     sendSmtpEmail.subject = options.subject;
+    if (options.replyTo) sendSmtpEmail.replyTo = options.replyTo;
 
     const htmlContent =
       options.html ||
