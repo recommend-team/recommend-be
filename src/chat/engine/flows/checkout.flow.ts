@@ -57,7 +57,7 @@ export class CheckoutFlow {
   ): Promise<OutboundMessage[]> {
     const answer = text.trim();
 
-    if (isAbandon(answer)) {
+    if (isAbandon(answer, FREE_TEXT_STATES.has(conversation.state))) {
       await this.reset(conversation.id);
       return [
         {
@@ -482,10 +482,25 @@ function isNegative(answer: string): boolean {
   return /^(no|nope|not yet|wait|hold on|n)\b/i.test(answer.trim());
 }
 
-function isAbandon(answer: string): boolean {
-  return /\b(cancel|stop|forget it|never mind|nevermind|add (more|something))\b/i.test(
-    answer,
-  );
+/**
+ * Steps whose answer is the buyer's own words, stored as given. There, a cancel word is
+ * far more often part of the answer than a request — Lagos addresses are given by bus
+ * stop ("opposite Ojuelegba bus stop") — so only a reply that is nothing *but* a cancel
+ * phrase counts.
+ */
+const FREE_TEXT_STATES = new Set<ConversationState>([
+  ConversationState.COLLECTING_NAME,
+  ConversationState.COLLECTING_ADDRESS,
+]);
+
+const ABANDON_PHRASE =
+  /\b(cancel|stop|forget it|never mind|nevermind|add (more|something))\b/i;
+
+const ABANDON_REPLY =
+  /^\s*(please\s+)?(cancel|stop|forget it|never ?mind|add (more|something))(\s+(else|it|that|this|the order|my order|please))*\s*[.!]*\s*$/i;
+
+function isAbandon(answer: string, freeText: boolean): boolean {
+  return (freeText ? ABANDON_REPLY : ABANDON_PHRASE).test(answer);
 }
 
 /** Turn a rejected cart into something a buyer can act on. */

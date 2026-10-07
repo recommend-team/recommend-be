@@ -17,6 +17,10 @@ import {
   CHAT_MESSAGE_RECORDED_EVENT,
   ChatMessageRecordedEvent,
 } from './admin-chat.events';
+import {
+  ADMIN_ALERT_EVENT,
+  AdminAlertEvent,
+} from '../../../common/events/admin-alert.events';
 
 interface AdminSocketData {
   adminId: string;
@@ -73,6 +77,10 @@ export class AdminChatGateway implements OnGatewayConnection {
       }
 
       (socket.data as AdminSocketData).adminId = payload.sub;
+
+      // Alerts: one room every admin is in, and one per admin for what is theirs alone.
+      void socket.join(ALL_ADMINS);
+      void socket.join(adminRoom(payload.sub));
     } catch {
       socket.emit('admin:error', { message: 'That token is not valid' });
       socket.disconnect(true);
@@ -131,6 +139,26 @@ export class AdminChatGateway implements OnGatewayConnection {
       createdAt: message.createdAt,
     });
   }
+
+  @OnEvent(ADMIN_ALERT_EVENT)
+  onAdminAlert(alert: AdminAlertEvent): void {
+    const target = alert.adminId ? adminRoom(alert.adminId) : ALL_ADMINS;
+
+    this.server?.to(target).emit('admin:alert', {
+      id: alert.id,
+      kind: alert.kind,
+      title: alert.title,
+      body: alert.body,
+      url: alert.url,
+      createdAt: alert.createdAt,
+    });
+  }
+}
+
+const ALL_ADMINS = 'admins';
+
+function adminRoom(adminId: string): string {
+  return `admin:${adminId}`;
 }
 
 function room(conversationId: string): string {

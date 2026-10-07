@@ -5,7 +5,7 @@ import {
   InternalServerErrorException,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { createHmac } from 'crypto';
+import { createHmac, timingSafeEqual } from 'crypto';
 
 export interface PaystackInitResult {
   authorizationUrl: string;
@@ -386,10 +386,17 @@ export class PaymentsService {
    * Paystack signs the raw request body with HMAC-SHA512 using the secret key.
    */
   verifyWebhookSignature(rawBody: Buffer, signature: string): boolean {
-    const hash = createHmac('sha512', this.secretKey)
-      .update(rawBody)
-      .digest('hex');
-    return hash === signature;
+    const expected = Buffer.from(
+      createHmac('sha512', this.secretKey).update(rawBody).digest('hex'),
+    );
+    const presented = Buffer.from(String(signature ?? ''));
+
+    // Constant-time, so response timing reveals nothing about how close a guess was.
+    // timingSafeEqual throws on unequal lengths, which is already a mismatch.
+    return (
+      presented.length === expected.length &&
+      timingSafeEqual(presented, expected)
+    );
   }
 
   /**

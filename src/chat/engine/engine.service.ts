@@ -59,7 +59,12 @@ export class EngineService {
   ) {
     this.historyLimit =
       this.configService.get<number>('chat.maxHistoryMessages') ?? 12;
+    this.assistantName =
+      this.configService.get<string>('chat.assistantName') ?? 'James';
   }
+
+  /** Same setting the discovery prompt reads, so the greeting and the persona agree. */
+  private readonly assistantName: string;
 
   /**
    * The full round trip: persist the buyer's message, work out a reply, persist it,
@@ -86,6 +91,15 @@ export class EngineService {
       this.logger.debug(
         `Conversation ${conversation.id} is held by an admin — not replying`,
       );
+      this.handover.announceBuyerWaiting(conversation, input.text);
+      return [];
+    }
+
+    const handover = await this.handover.awaitingTeammate(conversation);
+    if (handover === 'waiting') {
+      this.logger.debug(
+        `Conversation ${conversation.id} is waiting for a teammate — not replying`,
+      );
       return [];
     }
 
@@ -95,8 +109,17 @@ export class EngineService {
       });
     }
 
-    const replies = await this.composeReply(conversation, input.text);
-    return this.deliver(conversation, replies);
+    const replies = await this.composeReply(
+      conversation,
+      input.text,
+      inbound.id,
+    );
+    return this.deliver(
+      conversation,
+      handover === 'expired'
+        ? [{ text: SORRY_FOR_THE_WAIT }, ...replies]
+        : replies,
+    );
   }
 
   private async deliver(
@@ -134,9 +157,9 @@ export class EngineService {
   async greet(conversation: Conversation): Promise<OutboundMessage> {
     const reply: OutboundMessage = {
       text:
-        "Hi! I'm Recommend. " +
-        "Tell me what you're looking for, anything a vendor " +
-        "might sell — and I'll find who has it near you.",
+        `Hi! I'm ${this.assistantName} from Recommend. ` +
+        'What can I find for you today? Food, gadgets, anything at all — ' +
+        "tell me, and roughly where you are, and I'll find who has it near you.",
     };
 
     const persisted = await this.conversationService.recordOutbound({
@@ -162,29 +185,40 @@ export class EngineService {
   /**
    * Discovery: the LLM answers, but only ever about what the catalogue tools returned.
    *
-   * Greetings and empty input are still handled without a model — instant, free, and
-   * impossible to get wrong. The money path (B4) will be scripted for the same reason.
+   * Greetings go to the model too, when there is one — "how far" deserves a reply from a
+   * person, not the same sentence every time. Without a model, and mid-checkout (which is
+   * scripted), a greeting gets a fixed, friendly line. The money path stays scripted:
+   * nothing that leads to a charge depends on what a model decides to say.
    */
   private async composeReply(
     conversation: Conversation,
     text: string,
+    inboundId: string | null,
   ): Promise<OutboundMessage[]> {
     const trimmed = text.trim();
 
     if (!trimmed) {
-      return [{ text: "I didn't catch that — what are you looking for?" }];
+      return [
+        { text: "Sorry, I didn't catch that — what are you looking for?" },
+      ];
     }
 
-    if (isGreeting(trimmed)) {
+    const conversational =
+      conversation.state === ConversationState.DISCOVERY &&
+      this.discoveryService.hasModel();
+
+    if (isGreeting(trimmed) && !conversational) {
       return [
         {
-          text: 'Hello! What are you looking for today? Tell me the item and roughly where you are.',
+          text:
+            `Hello, I'm ${this.assistantName} from Recommend. What are you looking for ` +
+            'today, and which area are you in?',
         },
       ];
     }
 
     if (conversation.state === ConversationState.DISCOVERY) {
-      return this.discover(conversation, trimmed);
+      return this.discover(conversation, trimmed, inboundId);
     }
 
     // Any other state means a checkout is in progress, and that path is scripted —
@@ -245,10 +279,15 @@ export class EngineService {
   private async discover(
     conversation: Conversation,
     text: string,
+    inboundId: string | null,
   ): Promise<OutboundMessage[]> {
-    const history = await this.conversationService.getHistory(conversation.id, {
-      limit: this.historyLimit,
-    });
+    const history = (
+      await this.conversationService.getHistory(conversation.id, {
+        limit: this.historyLimit + 1,
+      })
+    )
+      .filter((message) => message.id !== inboundId)
+      .slice(-this.historyLimit);
 
     const result = await this.discoveryService.discover({
       text,
@@ -267,33 +306,68 @@ export class EngineService {
       );
     }
 
-    await this.flagIfStruggling(conversation, text, history, result);
+    const struggled = result.modelFailed || result.foundNothing;
+    const repeated = repeatedThemselves(history, text);
+
+    const previousStreak = conversation.context?.strugglingTurns ?? 0;
+    const streak = struggled ? previousStreak + 1 : 0;
+    if (streak !== previousStreak) {
+      await this.conversationService.mergeContext(conversation.id, {
+        strugglingTurns: streak,
+      });
+      conversation.context = {
+        ...conversation.context,
+        strugglingTurns: streak,
+      };
+    }
+    const handoverReason =
+      result.handover ??
+      (repeated
+        ? 'The buyer asked the same thing twice'
+        : streak >= 2
+          ? 'The assistant could not help twice in a row'
+          : null);
+
+    if (handoverReason) {
+      if (await this.handover.requestHandover(conversation, handoverReason)) {
+        return [{ text: HANDING_OVER }];
+      }
+
+      if (result.handover) {
+        await this.flagIfStruggling(conversation, struggled, repeated);
+        return [{ text: CANNOT_HAND_OVER }];
+      }
+    }
+
+    await this.flagIfStruggling(conversation, struggled, repeated);
 
     return result.messages;
   }
 
   /**
-   * Raise a hand when the assistant is not coping.
+   * Raise a hand when the assistant is not coping — the quieter signal than a handover.
+   * It sorts the conversation up the admin queue, and alerts once.
    */
   private async flagIfStruggling(
     conversation: Conversation,
-    text: string,
-    history: ChatMessage[],
-    result: { usedFallback: boolean; foundNothing: boolean },
+    struggled: boolean,
+    repeated: boolean,
   ): Promise<void> {
     if (conversation.needsAttentionAt) return;
 
-    const reason = result.usedFallback
-      ? 'The assistant fell back to keyword search'
-      : result.foundNothing
-        ? 'Nothing matched what they asked for'
-        : repeatedThemselves(history, text)
-          ? 'The buyer asked the same thing twice'
-          : null;
+    const reason = repeated
+      ? 'The buyer asked the same thing twice'
+      : struggled
+        ? 'The assistant could not find what they asked for'
+        : null;
 
     if (!reason) return;
 
-    await this.conversationService.flagForAttention(conversation.id, reason);
+    await this.conversationService.flagForAttention(
+      conversation.id,
+      reason,
+      conversation.context?.profile?.name ?? null,
+    );
     conversation.needsAttentionAt = new Date();
     conversation.attentionReason = reason;
 
@@ -302,6 +376,15 @@ export class EngineService {
     );
   }
 }
+
+/**
+ * What the buyer sees when they are handed over. Never "a person", "a teammate" or "the
+ * bot": they are talking to Recommend throughout (ADMIN_CHAT_PLAN.md §2).
+ */
+const HANDING_OVER = 'Let me check on that for you — one moment.';
+const SORRY_FOR_THE_WAIT = 'Sorry to keep you waiting.';
+const CANNOT_HAND_OVER =
+  "I'm sorry, I can't sort that out from here just now. Is there anything I can help you find?";
 
 /**
  * The buyer saying the same thing again.

@@ -20,6 +20,12 @@ import {
   WithdrawalSettledEvent,
 } from '../../common/events/wallet.events';
 
+/**
+ * An hour. A new-order alert reaching a phone that was off for longer than that is noise:
+ * the order is on the badge and in the feed, and the vendor has very likely seen it.
+ */
+const NEW_ORDER_PUSH_TTL_SECONDS = 60 * 60;
+
 @Injectable()
 export class NotificationsService {
   private readonly logger = new Logger(NotificationsService.name);
@@ -85,11 +91,20 @@ export class NotificationsService {
 
     await Promise.all([
       this.pushService
-        .sendToUser(order.vendorId, {
-          title,
-          body,
-          data: { notificationId: notification.id, orderId: order.orderId },
-        })
+        .sendToUser(
+          order.vendorId,
+          {
+            title,
+            body,
+            type: NotificationType.NEW_ORDER,
+            url: `/orders/${order.orderId}`,
+            tag: `order:${order.orderId}`,
+            data: { notificationId: notification.id, orderId: order.orderId },
+          },
+          // A buyer is waiting on this one. Wake the phone, and do not deliver it an
+          // hour late to a vendor who has since seen it in the app.
+          { urgency: 'high', ttlSeconds: NEW_ORDER_PUSH_TTL_SECONDS },
+        )
         .catch((error: unknown) => {
           this.logger.warn(`Push failed for vendor ${order.vendorId}`, error);
           return 0;
@@ -134,7 +149,13 @@ export class NotificationsService {
         },
       });
 
-      await this.push(event.userId, title, body, notification.id);
+      await this.push(event.userId, {
+        title,
+        body,
+        type: NotificationType.WITHDRAWAL_SETTLED,
+        notificationId: notification.id,
+        withdrawalId: event.withdrawalId,
+      });
     });
   }
 
@@ -168,18 +189,36 @@ export class NotificationsService {
         },
       });
 
-      await this.push(event.userId, title, body, notification.id);
+      await this.push(event.userId, {
+        title,
+        body,
+        type: NotificationType.WITHDRAWAL_FAILED,
+        notificationId: notification.id,
+        withdrawalId: event.withdrawalId,
+      });
     });
   }
 
+  /** A withdrawal's outcome, pushed. Both outcomes share the tag — the latest wins. */
   private async push(
     userId: string,
-    title: string,
-    body: string,
-    notificationId: string,
+    input: {
+      title: string;
+      body: string;
+      type: NotificationType;
+      notificationId: string;
+      withdrawalId: string;
+    },
   ): Promise<void> {
     await this.pushService
-      .sendToUser(userId, { title, body, data: { notificationId } })
+      .sendToUser(userId, {
+        title: input.title,
+        body: input.body,
+        type: input.type,
+        url: '/wallet',
+        tag: `withdrawal:${input.withdrawalId}`,
+        data: { notificationId: input.notificationId },
+      })
       .catch((error: unknown) => {
         this.logger.warn(`Push failed for user ${userId}`, error);
         return 0;

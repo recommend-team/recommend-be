@@ -6,6 +6,7 @@ import { User } from '../auth/entities/auth.entity';
 import { NotificationsService } from './notifications.service';
 import { NotificationsController } from './notifications.controller';
 import { PushService } from './push.service';
+import { AdminAlertsService } from './admin-alerts.service';
 import { CommonModule } from '../../common/common.module';
 
 @Module({
@@ -14,7 +15,7 @@ import { CommonModule } from '../../common/common.module';
     CommonModule,
   ],
   controllers: [NotificationsController],
-  providers: [NotificationsService, PushService],
+  providers: [NotificationsService, PushService, AdminAlertsService],
   exports: [NotificationsService, PushService],
 })
 export class NotificationsModule {}

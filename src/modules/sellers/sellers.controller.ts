@@ -22,6 +22,13 @@ import {
 } from '@nestjs/swagger';
 import { SellersService } from './sellers.service';
 import { OrderLifecycleService } from '../orders/order-lifecycle.service';
+import { HandoverCodeService } from '../orders/handover-code.service';
+import { z } from 'zod';
+
+/** Six letters, as issued; spaces and case are forgiven when it is checked. */
+const checkCodeSchema = z.object({
+  code: z.string().trim().min(1, 'Enter the code').max(12),
+});
 import { Roles } from '../auth/decorators/roles.decorator';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { Role } from '../../common/enums/roles.enum';
@@ -47,6 +54,7 @@ export class SellersController {
   constructor(
     private readonly sellersService: SellersService,
     private readonly lifecycle: OrderLifecycleService,
+    private readonly handoverCodes: HandoverCodeService,
   ) {}
 
   @Get('profile')
@@ -188,6 +196,41 @@ export class SellersController {
   ) {
     await this.lifecycle.markReady(id, user.id);
     return { message: 'Order marked ready for pickup' };
+  }
+
+  @Post('orders/:id/check-code')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    summary: 'Check a buyer’s collection code at the counter',
+    description:
+      'For a pickup order that is ready: does the code the buyer is showing belong to ' +
+      'this order? Answers only — it marks nothing collected. Ten wrong codes per order ' +
+      'per 15 minutes, then 429.',
+  })
+  @ApiParam({ name: 'id', description: 'Order id (this vendor’s own)' })
+  @ApiResponse({
+    status: 200,
+    description: '{ matches, buyerName, attemptsLeft }',
+  })
+  @ApiResponse({
+    status: 400,
+    description: 'Not a pickup order, or not waiting for collection',
+  })
+  @ApiResponse({
+    status: 403,
+    description: 'That order belongs to someone else',
+  })
+  @ApiResponse({ status: 429, description: 'Too many wrong codes' })
+  async checkCollectionCode(
+    @CurrentUser() user: User,
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body(new ZodValidationPipe(checkCodeSchema)) body: { code: string },
+  ) {
+    const result = await this.handoverCodes.check(id, user.id, body.code);
+    return {
+      message: result.matches ? 'Code matches' : 'Code does not match',
+      data: result,
+    };
   }
 
   @Get('sales')

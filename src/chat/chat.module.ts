@@ -33,6 +33,11 @@ import { IDENTITY_PORT } from './ports/identity.port';
 import { OrdersModule } from '../modules/orders/orders.module';
 import { Checkout } from '../modules/orders/entities/checkout.entity';
 import { Area } from '../modules/locations/entities/area.entity';
+import { NotificationsModule } from '../modules/notifications/notifications.module';
+import { BuyerPushSubscription } from './conversation/entities/buyer-push-subscription.entity';
+import { BuyerPushService } from './engine/buyer-push.service';
+import { LocalPushAdapter } from './adapters/local-push.adapter';
+import { PUSH_PORT } from './ports/push.port';
 
 /**
  * The chat bounded context. `AppModule` importing this is the only permitted crossing
@@ -45,6 +50,7 @@ import { Area } from '../modules/locations/entities/area.entity';
     TypeOrmModule.forFeature([
       Conversation,
       ChatMessage,
+      BuyerPushSubscription,
       User,
       Product,
       Area,
@@ -52,6 +58,7 @@ import { Area } from '../modules/locations/entities/area.entity';
     ]),
     JwtModule.register({}),
     OrdersModule,
+    NotificationsModule,
   ],
   controllers: [AdminChatController],
   providers: [
@@ -75,6 +82,8 @@ import { Area } from '../modules/locations/entities/area.entity';
     { provide: LOCATION_PORT, useClass: LocalLocationAdapter },
     { provide: ORDERING_PORT, useClass: LocalOrderingAdapter },
     { provide: IDENTITY_PORT, useClass: LocalIdentityAdapter },
+    { provide: PUSH_PORT, useClass: LocalPushAdapter },
+    BuyerPushService,
   ],
   exports: [ConversationService, SessionService],
 })

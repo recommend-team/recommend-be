@@ -216,7 +216,12 @@ export class SellersService {
     data: {
       /** The order, with the checkout narrowed to what a vendor may see. */
       items: (Omit<Order, 'checkout'> & {
-        checkout: { id: string; reference: string } | null;
+        checkout: {
+          id: string;
+          reference: string;
+          /** Who is collecting it, so the vendor knows who to hand it to. */
+          rider: { name: string; phone: string | null } | null;
+        } | null;
       })[];
       total: number;
       page: number;
@@ -233,7 +238,7 @@ export class SellersService {
 
     const [rows, total] = await this.ordersRepository.findAndCount({
       where,
-      relations: ['items', 'items.product', 'checkout'],
+      relations: ['items', 'items.product', 'checkout', 'checkout.rider'],
       order: { createdAt: 'DESC' },
       skip,
       take: limit,
@@ -246,13 +251,28 @@ export class SellersService {
      * a vendor on the phone about an order needs it. The rest of the checkout does not
      * belong to them: `goodsTotal` and `totalAmount` cover the *whole* basket, which on
      * a multi-vendor order would let one seller read another's share.
+     *
+     * The assigned rider's name and phone are theirs to see: that is who will come to
+     * collect. Nothing else about the rider's account.
      */
-    const items = rows.map((order) => ({
-      ...order,
-      checkout: order.checkout
-        ? { id: order.checkout.id, reference: order.checkout.reference }
-        : null,
-    }));
+    const items = rows.map((order) => {
+      const rider = order.checkout?.rider;
+      return {
+        ...order,
+        checkout: order.checkout
+          ? {
+              id: order.checkout.id,
+              reference: order.checkout.reference,
+              rider: rider
+                ? {
+                    name: `${rider.firstName} ${rider.lastName}`.trim(),
+                    phone: rider.phoneNumber ?? null,
+                  }
+                : null,
+            }
+          : null,
+      };
+    });
 
     return {
       message: 'Orders retrieved successfully',

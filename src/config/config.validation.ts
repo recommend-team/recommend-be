@@ -33,6 +33,15 @@ class EnvironmentVariables {
   @IsString()
   DATABASE_LOGGING?: string;
 
+  @IsOptional()
+  @IsString()
+  DATABASE_SSL?: string;
+
+  /** A managed Postgres's CA certificate (PEM). Its shape is checked in configuration.ts. */
+  @IsOptional()
+  @IsString()
+  DATABASE_CA_CERT?: string;
+
   @IsString()
   JWT_SECRET!: string;
 
@@ -114,6 +123,18 @@ class EnvironmentVariables {
   @IsOptional()
   @IsNumber()
   CHAT_MAX_TOOL_ROUNDS?: number;
+
+  @IsOptional()
+  @IsString()
+  CONTACT_INBOX?: string;
+
+  @IsOptional()
+  @IsNumber()
+  CONTACT_MAX_PER_SENDER_PER_HOUR?: number;
+
+  @IsOptional()
+  @IsNumber()
+  CONTACT_MAX_PER_HOUR?: number;
 
   /** Flat delivery fee in naira, charged once per checkout on DELIVERY orders. */
   @IsOptional()

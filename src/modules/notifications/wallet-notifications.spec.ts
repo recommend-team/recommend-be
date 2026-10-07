@@ -1,7 +1,7 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { getRepositoryToken } from '@nestjs/typeorm';
 import { NotificationsService } from './notifications.service';
-import { PushService } from './push.service';
+import { PushService, type PushPayload } from './push.service';
 import { Notification, NotificationType } from './entities/notification.entity';
 import { EmailService } from '../../common/services/email.service';
 import { User } from '../auth/entities/auth.entity';
@@ -14,7 +14,7 @@ import {
 describe('wallet notifications', () => {
   let service: NotificationsService;
   let feed: Partial<Notification>[];
-  let pushed: { userId: string; title: string; body: string }[];
+  let pushed: (PushPayload & { userId: string })[];
   let push: { sendToUser: jest.Mock };
 
   beforeEach(async () => {
@@ -30,12 +30,10 @@ describe('wallet notifications', () => {
     };
 
     push = {
-      sendToUser: jest.fn(
-        (userId: string, payload: { title: string; body: string }) => {
-          pushed.push({ userId, ...payload });
-          return Promise.resolve(1);
-        },
-      ),
+      sendToUser: jest.fn((userId: string, payload: PushPayload) => {
+        pushed.push({ userId, ...payload });
+        return Promise.resolve(1);
+      }),
     };
 
     const module: TestingModule = await Test.createTestingModule({
@@ -92,6 +90,16 @@ describe('wallet notifications', () => {
       expect(pushed).toHaveLength(1);
       expect(pushed[0].title).toMatch(/paid out/i);
     });
+
+    it('opens the wallet, and shares a tag with any failure for the same withdrawal', async () => {
+      await service.onWithdrawalSettled(settled);
+
+      expect(pushed[0]).toMatchObject({
+        type: NotificationType.WITHDRAWAL_SETTLED,
+        url: '/wallet',
+        tag: 'withdrawal:w1',
+      });
+    });
   });
 
   describe('a withdrawal that did not arrive', () => {
@@ -112,6 +120,11 @@ describe('wallet notifications', () => {
       });
       expect(feed[0].body).toContain('back in your wallet');
       expect(pushed).toHaveLength(1);
+      expect(pushed[0]).toMatchObject({
+        type: NotificationType.WITHDRAWAL_FAILED,
+        url: '/wallet',
+        tag: 'withdrawal:w1',
+      });
     });
 
     it('distinguishes a reversal from a refusal', async () => {

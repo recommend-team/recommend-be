@@ -21,6 +21,9 @@ import { Role } from '../../common/enums/roles.enum';
 import { OrderStatus } from '../../common/enums/order-status.enum';
 import { EmailService } from '../../common/services/email.service';
 import { CreateAdminDto } from './dto/create-admin.dto';
+import type { CreateRiderDto } from './dto/rider.dto';
+import { FulfillmentType } from '../../common/enums/fulfillment-type.enum';
+import { RiderType } from '../../common/enums/rider-type.enum';
 
 export interface PaginatedResult<T> {
   items: T[];
@@ -47,6 +50,9 @@ export interface TransactionSummary {
   createdAt: string;
   deliveryCode: string | null;
   createdByAdminId: string | null;
+  /** Who is carrying it. Null on a pickup, and on a delivery with no rider yet. */
+  rider: { id: string; name: string; phone: string | null } | null;
+  riderAssignedAt: string | null;
   vendors: {
     orderId: string;
     vendorId: string;
@@ -76,6 +82,16 @@ function toTransactionSummary(checkout: Checkout): TransactionSummary {
     createdAt: checkout.createdAt.toISOString(),
     deliveryCode: checkout.deliveryCode ?? null,
     createdByAdminId: checkout.createdByAdminId ?? null,
+    rider: checkout.rider
+      ? {
+          id: checkout.rider.id,
+          name: `${checkout.rider.firstName} ${checkout.rider.lastName}`.trim(),
+          phone: checkout.rider.phoneNumber ?? null,
+        }
+      : null,
+    riderAssignedAt: checkout.riderAssignedAt
+      ? checkout.riderAssignedAt.toISOString()
+      : null,
     vendors: (checkout.orders ?? []).map((order) => ({
       orderId: order.id,
       vendorId: order.vendorId,
@@ -91,6 +107,43 @@ function toTransactionSummary(checkout: Checkout): TransactionSummary {
     })),
   };
 }
+
+/** A rider as the admin panel lists them. */
+export interface RiderRow {
+  id: string;
+  firstName: string;
+  lastName: string;
+  /** Null when the rider gave none. */
+  email: string | null;
+  phoneNumber: string | null;
+  riderType: RiderType | null;
+  riderNote: string | null;
+  status: SellerStatus;
+  createdAt: Date;
+  /** Assigned and not yet delivered: paid, ready, or on its way. */
+  activeDeliveries: number;
+  completedDeliveries: number;
+}
+
+const RIDER_FIELDS: (keyof User)[] = [
+  'id',
+  'firstName',
+  'lastName',
+  'email',
+  'phoneNumber',
+  'riderType',
+  'riderNote',
+  'status',
+  'createdAt',
+];
+
+/**
+ * Every account needs a unique email; a rider an admin adds may have none. Non-routable,
+ * like a chat buyer's (`@buyers.recommend.ng`), and never shown as an address.
+ */
+const SYNTHETIC_RIDER_EMAIL_DOMAIN = '@riders.recommend.ng';
+const syntheticRiderEmail = (phoneE164: string) =>
+  `${phoneE164.replace('+', '')}${SYNTHETIC_RIDER_EMAIL_DOMAIN}`;
 
 /** Roles that should never appear in buyer/vendor listings for regular admins */
 const ADMIN_ROLES = [Role.ADMIN, Role.SUPER_ADMIN];
@@ -557,6 +610,10 @@ export class AdminService {
   async getTransactions(query: {
     status?: OrderStatus;
     search?: string;
+    /** One rider's deliveries — what the rider page lists. */
+    riderId?: string;
+    /** Deliveries paid for or ready with nobody assigned yet — the dispatch queue. */
+    needsRider?: boolean;
     page?: number;
     limit?: number;
   }): Promise<PaginatedResult<TransactionSummary>> {
@@ -568,12 +625,34 @@ export class AdminService {
       .leftJoinAndSelect('checkout.orders', 'order')
       .leftJoinAndSelect('order.items', 'item')
       .leftJoinAndSelect('order.vendor', 'vendor')
+      // Only what the summary shows — never the rider's account fields.
+      .leftJoin('checkout.rider', 'rider')
+      .addSelect([
+        'rider.id',
+        'rider.firstName',
+        'rider.lastName',
+        'rider.phoneNumber',
+      ])
       .orderBy('checkout.createdAt', 'DESC')
       .skip((page - 1) * limit)
       .take(limit);
 
     if (query.status) {
       qb.andWhere('checkout.status = :status', { status: query.status });
+    }
+
+    if (query.riderId) {
+      qb.andWhere('checkout.riderId = :riderId', { riderId: query.riderId });
+    }
+
+    if (query.needsRider) {
+      qb.andWhere('checkout.riderId IS NULL')
+        .andWhere('checkout.fulfillmentType = :delivery', {
+          delivery: FulfillmentType.DELIVERY,
+        })
+        .andWhere('checkout.status IN (:...waiting)', {
+          waiting: [OrderStatus.PAID, OrderStatus.READY],
+        });
     }
 
     if (query.search?.trim()) {
@@ -610,7 +689,7 @@ export class AdminService {
 
     const checkout = await this.checkoutsRepo.findOne({
       where: { reference },
-      relations: ['orders', 'orders.items', 'orders.vendor'],
+      relations: ['orders', 'orders.items', 'orders.vendor', 'rider'],
     });
     if (!checkout) throw new NotFoundException('Transaction not found');
 
@@ -681,10 +760,185 @@ export class AdminService {
   private async verifyless(reference: string): Promise<TransactionSummary> {
     const checkout = await this.checkoutsRepo.findOne({
       where: { reference },
-      relations: ['orders', 'orders.items', 'orders.vendor'],
+      relations: ['orders', 'orders.items', 'orders.vendor', 'rider'],
     });
     if (!checkout) throw new NotFoundException('Transaction not found');
     return toTransactionSummary(checkout);
+  }
+
+  // ─── Riders ────────────────────────────────────────────────────────────────
+  //
+  // Until riders have an app, admin runs delivery: adds riders they have vetted, assigns
+  // one to each delivery, and reaches them by phone. A rider's deliveries are the
+  // transactions list filtered by `riderId`.
+
+  /** A rider admin has vetted — approved at once, with no password to sign in with yet. */
+  async createRider(
+    dto: CreateRiderDto,
+  ): Promise<{ message: string; data: RiderRow }> {
+    const clash = await this.usersRepo.findOne({
+      where: [
+        { phoneNumber: dto.phoneNumber },
+        ...(dto.email ? [{ email: dto.email }] : []),
+      ],
+      select: ['id', 'email', 'phoneNumber', 'role'],
+    });
+    if (clash) {
+      throw new ConflictException(
+        clash.phoneNumber === dto.phoneNumber
+          ? `${dto.phoneNumber} already belongs to an account`
+          : `${dto.email} already belongs to an account`,
+      );
+    }
+
+    const rider = await this.usersRepo.save(
+      this.usersRepo.create({
+        firstName: dto.firstName,
+        lastName: dto.lastName,
+        phoneNumber: dto.phoneNumber,
+        email: dto.email ?? syntheticRiderEmail(dto.phoneNumber),
+        password: null,
+        role: Role.RIDER,
+        riderType: dto.riderType,
+        riderNote: dto.note ?? null,
+        status: SellerStatus.APPROVED,
+        isEmailVerified: false,
+      }),
+    );
+
+    const [row] = await this.riderRows([rider]);
+    return { message: `${rider.fullName} added as a rider`, data: row };
+  }
+
+  async getRiders(query: {
+    status?: SellerStatus;
+    search?: string;
+    page?: number;
+    limit?: number;
+  }): Promise<PaginatedResult<RiderRow>> {
+    const page = Math.max(1, query.page ?? 1);
+    const limit = Math.min(100, Math.max(1, query.limit ?? 20));
+
+    const base: Record<string, unknown> = { role: Role.RIDER };
+    if (query.status) base['status'] = query.status;
+
+    // Name, phone or email — whichever the admin has.
+    const term = query.search?.trim().replace(/[%_]/g, '');
+    const where = term
+      ? ['firstName', 'lastName', 'phoneNumber', 'email'].map((field) => ({
+          ...base,
+          [field]: ILike(`%${term}%`),
+        }))
+      : base;
+
+    const [riders, total] = await this.usersRepo.findAndCount({
+      where,
+      select: RIDER_FIELDS,
+      skip: (page - 1) * limit,
+      take: limit,
+      order: { createdAt: 'DESC' },
+    });
+
+    return {
+      items: await this.riderRows(riders),
+      total,
+      page,
+      limit,
+      totalPages: Math.ceil(total / limit),
+    };
+  }
+
+  /** One rider with their delivery counts. Their deliveries: transactions by `riderId`. */
+  async getRider(id: string): Promise<RiderRow> {
+    const rider = await this.usersRepo.findOne({
+      where: { id, role: Role.RIDER },
+      select: RIDER_FIELDS,
+    });
+    if (!rider) throw new NotFoundException('Rider not found');
+    const [row] = await this.riderRows([rider]);
+    return row;
+  }
+
+  /**
+   * Put a rider on a delivery, or replace the one on it. Only an approved rider — a
+   * suspended or rejected one is refused, as is anyone who is not a rider at all.
+   */
+  async assignRider(
+    reference: string,
+    riderId: string,
+    adminId: string,
+  ): Promise<TransactionSummary> {
+    const rider = await this.usersRepo.findOne({
+      where: { id: riderId, role: Role.RIDER },
+      select: ['id', 'firstName', 'lastName', 'phoneNumber', 'status'],
+    });
+    if (!rider) throw new NotFoundException('Rider not found');
+    if (rider.status !== SellerStatus.APPROVED) {
+      throw new BadRequestException(
+        `${rider.firstName} ${rider.lastName} is not an approved rider`,
+      );
+    }
+
+    await this.lifecycle.assignRider(
+      reference,
+      {
+        id: rider.id,
+        name: `${rider.firstName} ${rider.lastName}`.trim(),
+        phone: rider.phoneNumber,
+      },
+      { type: StatusActor.ADMIN, id: adminId },
+    );
+    return this.verifyless(reference);
+  }
+
+  /**
+   * Riders as the admin panel shows them: profile plus how many deliveries each is
+   * carrying now and has completed — counted in one grouped query, not one per rider.
+   */
+  private async riderRows(riders: User[]): Promise<RiderRow[]> {
+    if (riders.length === 0) return [];
+
+    const counts: {
+      riderId: string;
+      active: string;
+      completed: string;
+    }[] = await this.checkoutsRepo
+      .createQueryBuilder('checkout')
+      .select('checkout.riderId', 'riderId')
+      .addSelect(
+        `COUNT(*) FILTER (WHERE checkout.status IN (:...active))`,
+        'active',
+      )
+      .addSelect(
+        `COUNT(*) FILTER (WHERE checkout.status = :completed)`,
+        'completed',
+      )
+      .where('checkout.riderId IN (:...ids)', { ids: riders.map((r) => r.id) })
+      .setParameters({
+        active: [OrderStatus.PAID, OrderStatus.READY, OrderStatus.DISPATCHED],
+        completed: OrderStatus.COMPLETED,
+      })
+      .groupBy('checkout.riderId')
+      .getRawMany();
+
+    const byRider = new Map(counts.map((row) => [row.riderId, row]));
+
+    return riders.map((rider) => ({
+      id: rider.id,
+      firstName: rider.firstName,
+      lastName: rider.lastName,
+      // A placeholder made up for a rider with no email is not an address to show.
+      email: rider.email?.endsWith(SYNTHETIC_RIDER_EMAIL_DOMAIN)
+        ? null
+        : rider.email,
+      phoneNumber: rider.phoneNumber,
+      riderType: rider.riderType,
+      riderNote: rider.riderNote,
+      status: rider.status,
+      createdAt: rider.createdAt,
+      activeDeliveries: Number(byRider.get(rider.id)?.active ?? 0),
+      completedDeliveries: Number(byRider.get(rider.id)?.completed ?? 0),
+    }));
   }
 
   // ─── General user management (kept from previous version) ──────────────────

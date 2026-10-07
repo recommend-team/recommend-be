@@ -88,6 +88,10 @@ export class User extends BaseEntity {
   @Column({ type: 'enum', enum: RiderType, nullable: true })
   riderType!: RiderType | null;
 
+  /** Admin's own note on a rider — vehicle, areas covered, anything worth knowing. */
+  @Column({ type: 'text', nullable: true })
+  riderNote!: string | null;
+
   // ─── KYC: Registered vendor ────────────────────────────────────────────────
 
   @Column({ type: 'varchar', nullable: true })

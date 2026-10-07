@@ -10,6 +10,7 @@ import {
   CheckoutPaidEvent,
 } from '../../common/events/checkout-paid.event';
 import { PaymentsService } from '../payments/payments.service';
+import { liveHandoverCode } from './handover-code';
 
 export interface PaginatedOrders {
   items: Order[];
@@ -75,21 +76,19 @@ export class OrdersService {
       return;
     }
 
-    // Paystack is the authority on what was collected. Short-paying is not something
-    // the current flow can produce, but marking an order paid for less than it is worth
-    // is the kind of mistake that must be impossible rather than unlikely.
-    const owed = Number(checkout.totalAmount);
-    if (verified.amountNgn !== null && verified.amountNgn + 0.01 < owed) {
-      this.logger.error(
-        `Verify: ${reference} paid ₦${verified.amountNgn} but ₦${owed} was owed — not marking paid`,
-      );
-      return;
-    }
-
-    await this.handlePaymentSuccess(reference);
+    await this.handlePaymentSuccess(reference, verified.amountNgn);
   }
 
-  async handlePaymentSuccess(reference: string): Promise<void> {
+  /**
+   * `amountPaidNgn` is what Paystack says it collected — from the webhook payload or from
+   * a verify call. Every path that marks a checkout paid comes through here, so the
+   * shortfall check below cannot be skipped by whichever signal arrives first. Null means
+   * Paystack did not say, which is not treated as a shortfall.
+   */
+  async handlePaymentSuccess(
+    reference: string,
+    amountPaidNgn: number | null = null,
+  ): Promise<void> {
     const checkout = await this.checkoutsRepository.findOne({
       where: { reference },
       relations: ['orders'],
@@ -105,6 +104,17 @@ export class OrdersService {
     if (checkout.status !== OrderStatus.PENDING_PAYMENT) {
       this.logger.warn(
         `Webhook: checkout ${checkout.id} already processed (status=${checkout.status})`,
+      );
+      return;
+    }
+
+    // Paystack is the authority on what was collected. Short-paying is not something
+    // the current flow can produce, but marking an order paid for less than it is worth
+    // is the kind of mistake that must be impossible rather than unlikely.
+    const owed = Number(checkout.totalAmount);
+    if (amountPaidNgn !== null && amountPaidNgn + 0.01 < owed) {
+      this.logger.error(
+        `Payment for ${reference} was ₦${amountPaidNgn} but ₦${owed} was owed — not marking paid`,
       );
       return;
     }
@@ -203,7 +213,7 @@ export class OrdersService {
     totalAmount: number;
     fulfillmentType: string;
     createdAt: Date;
-    /** See below — present only while the order is out with a rider. */
+    /** The handover code — only while a rider has it, or it waits at the counter. */
     deliveryCode: string | null;
     vendors: {
       status: OrderStatus;
@@ -227,16 +237,9 @@ export class OrdersService {
       fulfillmentType: checkout.fulfillmentType,
       createdAt: checkout.createdAt,
       // This endpoint is how a buyer who never used chat gets their code at all — there
-      // is no SMS to fall back on, and they hold the reference already.
-      //
-      // Gated on the live status rather than on the column being set, so it is exposed
-      // for exactly as long as somebody is at the door with it: not before dispatch,
-      // and not once the order is delivered. The row keeps the code either way, for
-      // support looking back at what was issued.
-      deliveryCode:
-        checkout.status === OrderStatus.DISPATCHED
-          ? (checkout.deliveryCode ?? null)
-          : null,
+      // is no SMS to fall back on, and they hold the reference already. Shown only while
+      // someone is waiting to check it: a rider at the door, or a vendor at the counter.
+      deliveryCode: liveHandoverCode(checkout),
       vendors: (checkout.orders ?? []).map((order) => ({
         status: order.status,
         items: (order.items ?? []).map((item) => ({

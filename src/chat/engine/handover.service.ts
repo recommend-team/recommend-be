@@ -6,21 +6,22 @@ import {
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { ConfigService } from '@nestjs/config';
-import { Repository } from 'typeorm';
+import { IsNull, Repository } from 'typeorm';
 import { Conversation } from '../conversation/entities/conversation.entity';
 import type { MessagePayload } from '../conversation/entities/message.entity';
 import { ConversationService } from '../conversation/conversation.service';
 import { ChannelRegistry } from '../transport/channel.registry';
+import { BuyerPushService } from './buyer-push.service';
 import { OutboundMessage } from '../transport/channel.interface';
 import { ConversationState } from '../enums/chat.enums';
+import { EventEmitter2 } from '@nestjs/event-emitter';
+import {
+  CONVERSATION_HANDED_OVER_EVENT,
+  ConversationHandedOverEvent,
+  HELD_CONVERSATION_MESSAGE_EVENT,
+  HeldConversationMessageEvent,
+} from '../../common/events/admin-alert.events';
 
-/**
- * A person answering instead of the assistant.
- *
- * The buyer is never told. Their messages are recorded as always and simply go
- * unanswered by the engine; anything the admin sends reaches them by the same path and in
- * the same shape as the bot's own replies.
- */
 @Injectable()
 export class HandoverService {
   private readonly logger = new Logger(HandoverService.name);
@@ -31,7 +32,136 @@ export class HandoverService {
     private readonly conversationService: ConversationService,
     private readonly channels: ChannelRegistry,
     private readonly config: ConfigService,
+    private readonly events: EventEmitter2,
+    private readonly buyerPush: BuyerPushService,
   ) {}
+
+  /**
+   * Tell the admin holding this conversation that the buyer has written.
+   *
+   * Every message, to that admin alone — they are the one the buyer is waiting on, and
+   * nobody else should hear about a conversation that already has someone. Fire and
+   * forget: the buyer's message is recorded whatever happens here.
+   */
+  announceBuyerWaiting(conversation: Conversation, text: string): void {
+    if (!conversation.heldByAdminId) return;
+    try {
+      this.events.emit(
+        HELD_CONVERSATION_MESSAGE_EVENT,
+        new HeldConversationMessageEvent(
+          conversation.id,
+          conversation.heldByAdminId,
+          text,
+          conversation.context?.profile?.name ?? null,
+        ),
+      );
+    } catch (error) {
+      this.logger.error(
+        `Failed to tell admin ${conversation.heldByAdminId} about a message on ${conversation.id}: ${
+          error instanceof Error ? error.message : 'unknown error'
+        }`,
+      );
+    }
+  }
+
+  async requestHandover(
+    conversation: Conversation,
+    reason: string,
+  ): Promise<boolean> {
+    if (
+      conversation.heldByAdminId ||
+      conversation.handoverRequestedAt ||
+      conversation.context?.unansweredHandoverAt
+    ) {
+      return false;
+    }
+
+    const now = new Date();
+    const result = await this.conversations.update(
+      {
+        id: conversation.id,
+        heldByAdminId: IsNull(),
+        handoverRequestedAt: IsNull(),
+      },
+      { handoverRequestedAt: now, handoverReason: reason },
+    );
+    if (result.affected !== 1) return false;
+
+    conversation.handoverRequestedAt = now;
+    conversation.handoverReason = reason;
+
+    const buyerName = conversation.context?.profile?.name ?? null;
+
+    // Into the "needs a person" queue too, quietly — the handover sends its own alert. If
+    // nobody answers in time, the flag is what keeps it in front of the admins.
+    await this.conversationService.flagForAttention(
+      conversation.id,
+      reason,
+      buyerName,
+      { silent: true },
+    );
+
+    try {
+      this.events.emit(
+        CONVERSATION_HANDED_OVER_EVENT,
+        new ConversationHandedOverEvent(
+          conversation.id,
+          reason,
+          buyerName,
+          this.waitMinutes(),
+        ),
+      );
+    } catch (error) {
+      this.logger.error(
+        `Failed to announce the handover of ${conversation.id}: ${
+          error instanceof Error ? error.message : 'unknown error'
+        }`,
+      );
+    }
+
+    this.logger.log(
+      `Conversation ${conversation.id} handed over: ${reason.toLowerCase()}`,
+    );
+    return true;
+  }
+
+  async awaitingTeammate(
+    conversation: Conversation,
+  ): Promise<'waiting' | 'expired' | 'none'> {
+    if (!conversation.handoverRequestedAt || conversation.heldByAdminId) {
+      return 'none';
+    }
+
+    const waitedMinutes =
+      (Date.now() - conversation.handoverRequestedAt.getTime()) / 60_000;
+    if (waitedMinutes < this.waitMinutes()) return 'waiting';
+
+    const expiredAt = new Date().toISOString();
+    await this.conversations.update(
+      { id: conversation.id },
+      { handoverRequestedAt: null, handoverReason: null },
+    );
+    await this.conversationService.mergeContext(conversation.id, {
+      unansweredHandoverAt: expiredAt,
+    });
+
+    conversation.handoverRequestedAt = null;
+    conversation.handoverReason = null;
+    conversation.context = {
+      ...conversation.context,
+      unansweredHandoverAt: expiredAt,
+    };
+
+    this.logger.warn(
+      `Nobody took conversation ${conversation.id} within ${this.waitMinutes()} minutes — ` +
+        `the assistant is answering again`,
+    );
+    return 'expired';
+  }
+
+  private waitMinutes(): number {
+    return this.config.get<number>('chat.handoverWaitMinutes') ?? 5;
+  }
 
   /**
    * Claim a conversation.
@@ -56,10 +186,24 @@ export class HandoverService {
         heldByAdminId: adminId,
         heldAt: conversation.heldAt ?? now,
         lastAdminMessageAt: conversation.lastAdminMessageAt ?? now,
+        // Someone came. Whatever the assistant asked for has been answered.
+        handoverRequestedAt: null,
+        handoverReason: null,
       },
     );
 
     await this.conversationService.clearAttention(conversationId);
+
+    // A clean slate: once a person has dealt with it, the assistant may ask again later.
+    if (
+      conversation.context?.unansweredHandoverAt ||
+      conversation.context?.strugglingTurns
+    ) {
+      await this.conversationService.mergeContext(conversationId, {
+        unansweredHandoverAt: undefined,
+        strugglingTurns: 0,
+      });
+    }
 
     this.logger.log(`Admin ${adminId} took conversation ${conversationId}`);
     return this.load(conversationId);
@@ -133,6 +277,21 @@ export class HandoverService {
       conversation.channel,
       conversation.channelAddress,
       outbound,
+    );
+
+    // A person may answer minutes after the buyer gave up and put the phone down —
+    // unlike the assistant, which only ever replies to something just said. Titled as
+    // Recommend, like everything else the buyer sees from us.
+    await this.buyerPush.notify(
+      conversationId,
+      {
+        title: 'Recommend',
+        body: preview(text),
+        type: 'REPLY',
+        url: '/',
+        tag: `reply:${conversationId}`,
+      },
+      { ttlSeconds: 60 * 60 },
     );
 
     return outbound;
@@ -210,4 +369,10 @@ export class HandoverService {
     if (!conversation) throw new NotFoundException('Conversation not found');
     return conversation;
   }
+}
+
+/** A notification shows two or three lines; the rest is in the chat. */
+function preview(text: string): string {
+  const flat = text.replace(/\s+/g, ' ').trim();
+  return flat.length > 140 ? `${flat.slice(0, 139)}…` : flat;
 }

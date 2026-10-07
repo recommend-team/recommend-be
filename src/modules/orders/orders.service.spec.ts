@@ -35,9 +35,13 @@ const checkoutWith = (over: Partial<Checkout> = {}): Checkout =>
 describe('OrdersService', () => {
   let service: OrdersService;
   let checkouts: { findOne: jest.Mock };
+  let manager: { update: jest.Mock };
+  let payments: { verifyTransaction: jest.Mock };
 
   beforeEach(async () => {
     checkouts = { findOne: jest.fn() };
+    manager = { update: jest.fn() };
+    payments = { verifyTransaction: jest.fn() };
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -47,9 +51,16 @@ describe('OrdersService', () => {
           useValue: { findOne: jest.fn() },
         },
         { provide: getRepositoryToken(Checkout), useValue: checkouts },
-        { provide: DataSource, useValue: {} },
+        {
+          provide: DataSource,
+          useValue: {
+            transaction: jest.fn((work: (m: typeof manager) => unknown) =>
+              work(manager),
+            ),
+          },
+        },
         { provide: EventEmitter2, useValue: { emit: jest.fn() } },
-        { provide: PaymentsService, useValue: {} },
+        { provide: PaymentsService, useValue: payments },
       ],
     }).compile();
 
@@ -98,6 +109,56 @@ describe('OrdersService', () => {
       await expect(service.getCheckoutStatus('REC-NOPE')).rejects.toThrow(
         /not found/i,
       );
+    });
+  });
+
+  /**
+   * Every signal that a payment happened — the webhook, the buyer's verify, the sweep —
+   * ends in handlePaymentSuccess, so the shortfall check there covers all of them.
+   */
+  describe('marking a checkout paid', () => {
+    const pending = () =>
+      checkoutWith({ status: OrderStatus.PENDING_PAYMENT, paidAt: null });
+
+    it('marks it paid when the full amount arrived', async () => {
+      checkouts.findOne.mockResolvedValue(pending());
+
+      await service.handlePaymentSuccess('REC-AAA', 8500);
+
+      expect(manager.update).toHaveBeenCalledWith(
+        Checkout,
+        { id: 'ck1' },
+        expect.objectContaining({ status: OrderStatus.PAID }),
+      );
+    });
+
+    it('refuses a webhook reporting less than the checkout is owed', async () => {
+      checkouts.findOne.mockResolvedValue(pending());
+
+      await service.handlePaymentSuccess('REC-AAA', 1000);
+
+      expect(manager.update).not.toHaveBeenCalled();
+    });
+
+    it('treats an amount Paystack did not report as no shortfall', async () => {
+      checkouts.findOne.mockResolvedValue(pending());
+
+      await service.handlePaymentSuccess('REC-AAA');
+
+      expect(manager.update).toHaveBeenCalled();
+    });
+
+    it('refuses a verified payment for less than is owed', async () => {
+      checkouts.findOne.mockResolvedValue(pending());
+      payments.verifyTransaction.mockResolvedValue({
+        status: 'success',
+        amountNgn: 8000,
+        paidAt: new Date(),
+      });
+
+      await service.confirmByReference('REC-AAA');
+
+      expect(manager.update).not.toHaveBeenCalled();
     });
   });
 });

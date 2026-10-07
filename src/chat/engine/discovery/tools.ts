@@ -8,12 +8,30 @@ import { AreaSummary, LocationPort } from '../../ports/location.port';
 import { sanitizeUntrusted } from './sanitize';
 import { categoriesFor } from './synonyms';
 
-/**
- * The tools the model may call. All of them are READ-ONLY — nothing here can change
- * state, spend money, or create an order. That is the containment: the worst a bad
- * model turn can do is search for the wrong thing.
- */
 export const DISCOVERY_TOOLS = [
+  {
+    type: 'function' as const,
+    function: {
+      name: 'request_teammate',
+      description:
+        'Hand this conversation to a teammate. ONLY for what you cannot do with the other ' +
+        'tools: a complaint, a refund, a problem with an order already placed (where it ' +
+        'is, something wrong with it), a question about payment, or a buyer clearly ' +
+        'frustrated with you. Never for an ordinary search, even one that found nothing — ' +
+        'suggest another search instead. After calling it, say nothing more.',
+      parameters: {
+        type: 'object',
+        properties: {
+          reason: {
+            type: 'string',
+            description:
+              'One short line for the teammate, e.g. "Asking where order REC-1A2B is"',
+          },
+        },
+        required: ['reason'],
+      },
+    },
+  },
   {
     type: 'function' as const,
     function: {
@@ -102,6 +120,13 @@ export interface ToolHarvest {
   prices: number[];
   /** Set when the model resolved the buyer's area this turn. */
   resolvedAreaId: string | null;
+  /** Set when the model asked for a teammate — the reason it gave. */
+  handoverReason: string | null;
+  /**
+   * Whether anything was actually searched this turn. "Found nothing" only means
+   * something when it is true — small talk searches nothing.
+   */
+  searched: boolean;
 }
 
 export function emptyHarvest(): ToolHarvest {
@@ -111,8 +136,13 @@ export function emptyHarvest(): ToolHarvest {
     areas: [],
     prices: [],
     resolvedAreaId: null,
+    handoverReason: null,
+    searched: false,
   };
 }
+
+/** Long enough for a useful line to an admin, short enough to sit in an alert. */
+const HANDOVER_REASON_LIMIT = 160;
 
 const logger = new Logger('DiscoveryTools');
 
@@ -134,6 +164,16 @@ export async function executeTool(
   const areaId = await coerceAreaId(args.areaId, context, harvest);
 
   switch (name) {
+    case 'request_teammate': {
+      // Model-written, so treated like any untrusted text before an admin reads it.
+      const reason =
+        typeof args.reason === 'string'
+          ? sanitizeUntrusted(args.reason, HANDOVER_REASON_LIMIT)
+          : '';
+      harvest.handoverReason = reason || 'The assistant asked for a teammate';
+      return 'A teammate will take it from here. Do not reply further this turn.';
+    }
+
     case 'resolve_area': {
       const text = typeof args.text === 'string' ? args.text : '';
       const areas = await context.locations.searchAreas(text);
@@ -147,6 +187,7 @@ export async function executeTool(
     }
 
     case 'search_products': {
+      harvest.searched = true;
       const query = typeof args.query === 'string' ? args.query : '';
       let products = await context.catalog.searchProducts({
         text: query,
@@ -171,6 +212,7 @@ export async function executeTool(
     }
 
     case 'search_vendors': {
+      harvest.searched = true;
       const text = typeof args.query === 'string' ? args.query : undefined;
       const category =
         typeof args.category === 'string' ? args.category : undefined;
@@ -208,6 +250,7 @@ export async function executeTool(
     }
 
     case 'get_vendor_menu': {
+      harvest.searched = true;
       const vendorId = typeof args.vendorId === 'string' ? args.vendorId : '';
       const products = await context.catalog.searchProducts({
         vendorId,

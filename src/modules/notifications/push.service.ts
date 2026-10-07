@@ -1,14 +1,42 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { In, Repository } from 'typeorm';
 import * as webpush from 'web-push';
 import { PushSubscription } from './entities/push-subscription.entity';
 
+/**
+ * What a client's service worker receives. The shape is a contract with every app that
+ * subscribes — the vendor app's `sw.ts` reads it — so fields are added, never renamed.
+ */
 export interface PushPayload {
   title: string;
   body: string;
+  /** The `NotificationType`, so a client can decide how loudly to treat it. */
+  type?: string;
+  /** The in-app path a tap opens, e.g. `/orders/<id>`. Always a path, never a URL. */
+  url?: string;
+  /**
+   * Collapses repeats: a second push with the same tag replaces the first on the device
+   * instead of stacking beside it. `order:<id>`, `withdrawal:<id>`.
+   */
+  tag?: string;
   data?: Record<string, unknown>;
+}
+
+export interface PushDelivery {
+  /**
+   * `high` asks the push service to wake a dozing phone now rather than batch it. For
+   * what a person must act on — a new order — and nothing else, or the OS learns to
+   * ignore us.
+   */
+  urgency?: 'very-low' | 'low' | 'normal' | 'high';
+  /**
+   * How long the push service keeps trying a phone that is off. Past this the push is
+   * dropped, which is right for an alert that would be noise by the time it arrived —
+   * the feed still holds it.
+   */
+  ttlSeconds?: number;
 }
 
 /**
@@ -78,34 +106,75 @@ export class PushService {
    * swallowed — a push that cannot be delivered must never fail the transaction
    * that triggered it.
    */
-  async sendToUser(userId: string, payload: PushPayload): Promise<number> {
+  async sendToUser(
+    userId: string,
+    payload: PushPayload,
+    delivery: PushDelivery = {},
+  ): Promise<number> {
     if (!this.enabled) return 0;
 
     const devices = await this.subscriptions.find({ where: { userId } });
     if (devices.length === 0) return 0;
 
+    const { delivered, gone } = await this.deliver(devices, payload, delivery);
+
+    if (gone.length > 0) {
+      await this.subscriptions.delete({ endpoint: In(gone) });
+      this.logger.debug(`Pruned ${gone.length} expired push subscription(s)`);
+    }
+
+    return delivered;
+  }
+
+  /** Whether pushes go anywhere at all — false without VAPID keys. */
+  isEnabled(): boolean {
+    return this.enabled;
+  }
+
+  /**
+   * Send to devices the caller already holds — for subscriptions kept outside this
+   * module, such as the chat's buyer devices, which have no user row to look up by.
+   *
+   * Never throws. Returns the endpoints the push service says no longer exist, for the
+   * caller to forget: those will never accept a push again.
+   */
+  async deliver(
+    devices: { endpoint: string; keys: { p256dh: string; auth: string } }[],
+    payload: PushPayload,
+    delivery: PushDelivery = {},
+  ): Promise<{ delivered: number; gone: string[] }> {
+    if (!this.enabled || devices.length === 0) {
+      return { delivered: 0, gone: [] };
+    }
+
+    // Left unset, web-push applies its own defaults (normal urgency, four weeks).
+    const options = {
+      ...(delivery.urgency ? { urgency: delivery.urgency } : {}),
+      ...(delivery.ttlSeconds !== undefined
+        ? { TTL: delivery.ttlSeconds }
+        : {}),
+    };
+
     let delivered = 0;
+    const gone: string[] = [];
 
     await Promise.all(
       devices.map(async (device) => {
         try {
           await webpush.sendNotification(
-            {
-              endpoint: device.endpoint,
-              keys: device.keys,
-            },
+            { endpoint: device.endpoint, keys: device.keys },
             JSON.stringify(payload),
+            options,
           );
           delivered += 1;
         } catch (error) {
           const statusCode = (error as { statusCode?: number }).statusCode;
 
           if (statusCode === 404 || statusCode === 410) {
-            await this.subscriptions.delete({ id: device.id });
-            this.logger.debug(`Pruned expired push subscription ${device.id}`);
+            gone.push(device.endpoint);
           } else {
             this.logger.warn(
-              `Push to ${device.id} failed: ${
+              `Push to ${new URL(device.endpoint).host} failed: ${
                 error instanceof Error ? error.message : 'unknown error'
               }`,
             );
@@ -114,6 +183,6 @@ export class PushService {
       }),
     );
 
-    return delivered;
+    return { delivered, gone };
   }
 }

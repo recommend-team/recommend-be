@@ -8,11 +8,18 @@ import { Checkout } from './entities/checkout.entity';
 import { StatusActor } from './entities/order-status-event.entity';
 import { OrderStatus } from '../../common/enums/order-status.enum';
 import { FulfillmentType } from '../../common/enums/fulfillment-type.enum';
-import { CHECKOUT_STATUS_CHANGED_EVENT } from '../../common/events/checkout-status-changed.event';
+import {
+  CHECKOUT_STATUS_CHANGED_EVENT,
+  CheckoutStatusChangedEvent,
+} from '../../common/events/checkout-status-changed.event';
 import {
   VENDOR_ORDER_COMPLETED_EVENT,
   VendorOrderCompletedEvent,
 } from '../../common/events/vendor-order-completed.event';
+import {
+  VENDOR_ORDER_READY_EVENT,
+  VendorOrderReadyEvent,
+} from '../../common/events/vendor-order-ready.event';
 
 /** A checkout with two vendors, which is where all the interesting cases live. */
 const checkoutWith = (
@@ -30,6 +37,8 @@ const checkoutWith = (
     deliveryFee: 1500,
     totalAmount: 8500,
     createdAt: new Date(),
+    // A delivery needs a rider before dispatch; the cases about that set it to null.
+    riderId: 'r1',
     orders: orderStatuses.map((status, index) => ({
       id: `o${index + 1}`,
       checkoutId: 'ck1',
@@ -127,7 +136,52 @@ describe('OrderLifecycleService', () => {
       // The order moved...
       expect(auditRows().some((row) => row.orderId === 'o1')).toBe(true);
       // ...but the buyer heard nothing, because their order has not moved.
-      expect(emitter.emit).not.toHaveBeenCalled();
+      expect(emitter.emit).not.toHaveBeenCalledWith(
+        CHECKOUT_STATUS_CHANGED_EVENT,
+        expect.anything(),
+      );
+    });
+
+    it('tells admin who is ready, and how much of the basket that makes', async () => {
+      orders.findOne.mockResolvedValue({
+        id: 'o1',
+        vendorId: 'v1',
+        status: OrderStatus.PAID,
+        checkoutId: 'ck1',
+      });
+      refreshed = checkoutWith({}, [OrderStatus.READY, OrderStatus.PAID]);
+
+      await service.markReady('o1', 'v1');
+
+      expect(emitter.emit).toHaveBeenCalledWith(
+        VENDOR_ORDER_READY_EVENT,
+        new VendorOrderReadyEvent(
+          'o1',
+          'ck1',
+          'REC-AAA',
+          'Vendor 1',
+          FulfillmentType.DELIVERY,
+          1,
+          2,
+        ),
+      );
+    });
+
+    it('counts the basket as fully ready once the last vendor is', async () => {
+      orders.findOne.mockResolvedValue({
+        id: 'o2',
+        vendorId: 'v2',
+        status: OrderStatus.PAID,
+        checkoutId: 'ck1',
+      });
+      refreshed = checkoutWith({}, [OrderStatus.READY, OrderStatus.READY]);
+
+      await service.markReady('o2', 'v2');
+
+      expect(emitter.emit).toHaveBeenCalledWith(
+        VENDOR_ORDER_READY_EVENT,
+        expect.objectContaining({ readyCount: 2, vendorCount: 2 }),
+      );
     });
 
     it('moves the checkout once every vendor is ready', async () => {
@@ -219,6 +273,117 @@ describe('OrderLifecycleService', () => {
         }),
       );
     });
+
+    it('refuses a delivery nobody has been assigned to carry', async () => {
+      checkouts.findOne.mockResolvedValue(
+        checkoutWith({ status: OrderStatus.READY, riderId: null }),
+      );
+
+      await expect(
+        service.markDispatched('REC-AAA', {
+          type: StatusActor.ADMIN,
+          id: 'a1',
+        }),
+      ).rejects.toThrow(/assign a rider/i);
+      expect(manager.update).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('assigning a rider', () => {
+    const musa = { id: 'r2', name: 'Musa Bello', phone: '+2348011111111' };
+    const admin = { type: StatusActor.ADMIN, id: 'a1' };
+
+    it('records the rider and writes it to the order’s history', async () => {
+      checkouts.findOne.mockResolvedValue(
+        checkoutWith({ status: OrderStatus.READY, riderId: null, rider: null }),
+      );
+
+      await service.assignRider('REC-AAA', musa, admin);
+
+      expect(manager.update).toHaveBeenCalledWith(
+        Checkout,
+        { id: 'ck1' },
+        expect.objectContaining({ riderId: 'r2' }),
+      );
+      const [, , written] = manager.update.mock.calls[0] as [
+        unknown,
+        unknown,
+        { riderAssignedAt: unknown },
+      ];
+      expect(written.riderAssignedAt).toBeInstanceOf(Date);
+      expect(auditRows()).toEqual([
+        expect.objectContaining({
+          checkoutId: 'ck1',
+          fromStatus: OrderStatus.READY,
+          toStatus: OrderStatus.READY,
+          actorType: StatusActor.ADMIN,
+          actorId: 'a1',
+          note: 'Rider assigned: Musa Bello (+2348011111111)',
+        }),
+      ]);
+      // No status moved, so nobody is told anything.
+      expect(emitter.emit).not.toHaveBeenCalled();
+    });
+
+    it('says who was replaced when the rider changes', async () => {
+      checkouts.findOne.mockResolvedValue(
+        checkoutWith({
+          status: OrderStatus.DISPATCHED,
+          riderId: 'r1',
+          rider: {
+            fullName: 'Tunde Ade',
+            phoneNumber: '+2348022222222',
+          } as never,
+        }),
+      );
+
+      await service.assignRider('REC-AAA', musa, admin);
+
+      expect(auditRows()[0].note).toBe(
+        'Rider changed: Tunde Ade (+2348022222222) → Musa Bello (+2348011111111)',
+      );
+    });
+
+    it('does nothing when it is the same rider again', async () => {
+      checkouts.findOne.mockResolvedValue(
+        checkoutWith({ status: OrderStatus.PAID, riderId: 'r2' }),
+      );
+
+      await service.assignRider('REC-AAA', musa, admin);
+
+      expect(manager.update).not.toHaveBeenCalled();
+      expect(manager.insert).not.toHaveBeenCalled();
+    });
+
+    it('refuses a pickup, which has no rider', async () => {
+      checkouts.findOne.mockResolvedValue(
+        checkoutWith({
+          status: OrderStatus.READY,
+          fulfillmentType: FulfillmentType.PICKUP,
+          riderId: null,
+        }),
+      );
+
+      await expect(service.assignRider('REC-AAA', musa, admin)).rejects.toThrow(
+        /pickup/i,
+      );
+    });
+
+    it.each([
+      OrderStatus.PENDING_PAYMENT,
+      OrderStatus.COMPLETED,
+      OrderStatus.CANCELLED,
+      OrderStatus.REFUNDED,
+    ])('refuses an order that is %s', async (status) => {
+      checkouts.findOne.mockResolvedValue(
+        checkoutWith({ status, riderId: null }),
+      );
+
+      await expect(service.assignRider('REC-AAA', musa, admin)).rejects.toThrow(
+        /from payment until delivery/i,
+      );
+      expect(manager.update).not.toHaveBeenCalled();
+    });
   });
 
   describe('the delivery code', () => {
@@ -300,7 +465,7 @@ describe('OrderLifecycleService', () => {
       expect(codesWritten()).toEqual([]);
     });
 
-    it('never mints one for a pickup order', async () => {
+    it('never dispatches a pickup order, so mints nothing there', async () => {
       checkouts.findOne.mockResolvedValue(
         checkoutWith({
           status: OrderStatus.READY,
@@ -316,6 +481,82 @@ describe('OrderLifecycleService', () => {
       ).rejects.toThrow(/pickup/i);
 
       expect(codesWritten()).toEqual([]);
+    });
+  });
+
+  describe('the collection code, on a pickup', () => {
+    const codesWritten = () =>
+      manager.update.mock.calls
+        .map(([, , patch]) => (patch as { deliveryCode?: string }).deliveryCode)
+        .filter((code): code is string => code !== undefined);
+
+    const lastEvent = () =>
+      (emitter.emit.mock.calls as [string, CheckoutStatusChangedEvent][])
+        .filter(([name]) => name === CHECKOUT_STATUS_CHANGED_EVENT)
+        .pop()?.[1];
+
+    const becomeReady = async (over: Partial<Checkout>) => {
+      orders.findOne.mockResolvedValue({
+        id: 'o2',
+        vendorId: 'v2',
+        status: OrderStatus.PAID,
+        checkoutId: 'ck1',
+      });
+      refreshed = checkoutWith(over, [OrderStatus.READY, OrderStatus.READY]);
+      await service.markReady('o2', 'v2');
+    };
+
+    it('is minted when the order becomes ready to collect, and carried on the event', async () => {
+      await becomeReady({ fulfillmentType: FulfillmentType.PICKUP });
+
+      const [code] = codesWritten();
+      expect(code).toMatch(/^[A-Z]{6}$/);
+      expect(lastEvent()?.deliveryCode).toBe(code);
+    });
+
+    it('tells the buyer where to collect from — every vendor in the basket', async () => {
+      await becomeReady({
+        fulfillmentType: FulfillmentType.PICKUP,
+        orders: [
+          {
+            id: 'o1',
+            status: OrderStatus.READY,
+            items: [],
+            vendor: {
+              businessName: 'Mama Put',
+              businessAddress: '14 Herbert Macaulay Way, Yaba',
+            },
+          },
+          {
+            id: 'o2',
+            status: OrderStatus.READY,
+            items: [],
+            vendor: { businessName: 'GadgetHub', businessAddress: null },
+          },
+        ],
+      } as unknown as Partial<Checkout>);
+
+      expect(lastEvent()?.pickupPoints).toEqual([
+        { vendorName: 'Mama Put', address: '14 Herbert Macaulay Way, Yaba' },
+        { vendorName: 'GadgetHub', address: null },
+      ]);
+    });
+
+    it('keeps a code already issued rather than replacing it', async () => {
+      await becomeReady({
+        fulfillmentType: FulfillmentType.PICKUP,
+        deliveryCode: 'KEEPME',
+      });
+
+      expect(codesWritten()).toEqual([]);
+      expect(lastEvent()?.deliveryCode).toBe('KEEPME');
+    });
+
+    it('is not minted for a delivery becoming ready — that waits for dispatch', async () => {
+      await becomeReady({ fulfillmentType: FulfillmentType.DELIVERY });
+
+      expect(codesWritten()).toEqual([]);
+      expect(lastEvent()?.pickupPoints).toEqual([]);
     });
   });
 

@@ -1,0 +1,354 @@
+import { Test } from '@nestjs/testing';
+import { getRepositoryToken } from '@nestjs/typeorm';
+import { EventEmitter2 } from '@nestjs/event-emitter';
+import { AdminAlertsService } from './admin-alerts.service';
+import { PushService } from './push.service';
+import { Notification, NotificationType } from './entities/notification.entity';
+import { User } from '../auth/entities/auth.entity';
+import { Role } from '../../common/enums/roles.enum';
+import { SellerStatus } from '../../common/enums/seller-status.enum';
+import {
+  ADMIN_ALERT_EVENT,
+  AdminAlertEvent,
+  ConversationHandedOverEvent,
+  ConversationNeedsAttentionEvent,
+  HeldConversationMessageEvent,
+} from '../../common/events/admin-alert.events';
+import { CheckoutPaidEvent } from '../../common/events/checkout-paid.event';
+import { WithdrawalFailedEvent } from '../../common/events/wallet.events';
+import { VendorOrderReadyEvent } from '../../common/events/vendor-order-ready.event';
+import { FulfillmentType } from '../../common/enums/fulfillment-type.enum';
+
+const admin = (id: string, over: Partial<User> = {}): User =>
+  Object.assign(new User(), {
+    id,
+    role: Role.ADMIN,
+    status: SellerStatus.APPROVED,
+    isEmailVerified: true,
+    ...over,
+  });
+
+describe('AdminAlertsService', () => {
+  let service: AdminAlertsService;
+  let emitted: AdminAlertEvent[];
+  let push: { sendToUser: jest.Mock };
+  let users: { find: jest.Mock; findOne: jest.Mock };
+  let feed: { insert: jest.Mock };
+
+  beforeEach(async () => {
+    emitted = [];
+    push = { sendToUser: jest.fn().mockResolvedValue(1) };
+    feed = { insert: jest.fn().mockResolvedValue({}) };
+    users = {
+      find: jest
+        .fn()
+        .mockResolvedValue([
+          admin('a1'),
+          admin('a2', { role: Role.SUPER_ADMIN }),
+          admin('a3', { status: SellerStatus.SUSPENDED }),
+        ]),
+      findOne: jest
+        .fn()
+        .mockResolvedValue({ id: 'v1', businessName: 'Mama Put' }),
+    };
+
+    const module = await Test.createTestingModule({
+      providers: [
+        AdminAlertsService,
+        { provide: getRepositoryToken(User), useValue: users },
+        { provide: getRepositoryToken(Notification), useValue: feed },
+        { provide: PushService, useValue: push },
+        {
+          provide: EventEmitter2,
+          useValue: {
+            emit: jest.fn((name: string, alert: AdminAlertEvent) => {
+              if (name === ADMIN_ALERT_EVENT) emitted.push(alert);
+            }),
+          },
+        },
+      ],
+    }).compile();
+
+    service = module.get(AdminAlertsService);
+  });
+
+  const pushedTo = () =>
+    (push.sendToUser.mock.calls as [string][]).map(([adminId]) => adminId);
+
+  describe('a conversation the assistant flagged', () => {
+    beforeEach(() =>
+      service.onNeedsAttention(
+        new ConversationNeedsAttentionEvent(
+          'c1',
+          'Nothing matched what they asked for',
+          'Ada',
+        ),
+      ),
+    );
+
+    it('alerts every active admin, and not a suspended one', () => {
+      expect(emitted[0]).toMatchObject({
+        kind: 'CONVERSATION_FLAGGED',
+        adminId: null,
+        url: '/admin/conversations/c1',
+      });
+      expect(pushedTo()).toEqual(['a1', 'a2']);
+    });
+
+    it('says who and why', () => {
+      expect(emitted[0].body).toBe(
+        'Ada — nothing matched what they asked for.',
+      );
+    });
+
+    it('pushes urgently, with the same id the socket carried', () => {
+      expect(push.sendToUser).toHaveBeenCalledWith(
+        'a1',
+        expect.objectContaining({
+          type: 'CONVERSATION_FLAGGED',
+          tag: 'conversation:c1',
+          data: { alertId: emitted[0].id },
+        }),
+        { urgency: 'high', ttlSeconds: 900 },
+      );
+    });
+  });
+
+  describe('a vendor marking ready', () => {
+    const ready = (
+      readyCount: number,
+      vendorCount: number,
+      fulfillment = FulfillmentType.DELIVERY,
+    ) =>
+      service.onVendorReady(
+        new VendorOrderReadyEvent(
+          'o1',
+          'ck1',
+          'REC-AAA',
+          'Mama Put',
+          fulfillment,
+          readyCount,
+          vendorCount,
+        ),
+      );
+
+    it('says "send a rider", urgently, when the last vendor on a delivery is ready', async () => {
+      await ready(2, 2);
+
+      expect(emitted[0]).toMatchObject({
+        kind: 'VENDOR_ORDER_READY',
+        title: 'Ready to dispatch',
+        body: 'Every vendor on REC-AAA is ready (Mama Put was last). Send a rider.',
+        url: '/admin/transactions',
+      });
+      expect(push.sendToUser).toHaveBeenCalledWith(
+        'a1',
+        expect.objectContaining({ tag: 'checkout:REC-AAA' }),
+        { urgency: 'high', ttlSeconds: 7200 },
+      );
+    });
+
+    it('words a single-vendor delivery plainly', async () => {
+      await ready(1, 1);
+
+      expect(emitted[0].body).toBe('Mama Put has REC-AAA ready. Send a rider.');
+    });
+
+    it('reports progress, without urgency, while others are still preparing', async () => {
+      await ready(1, 2);
+
+      expect(emitted[0]).toMatchObject({
+        title: 'Vendor ready',
+        body: 'Mama Put has their part of REC-AAA ready — 1 of 2 vendors ready.',
+      });
+      expect(push.sendToUser).toHaveBeenCalledWith('a1', expect.anything(), {
+        ttlSeconds: 3600,
+      });
+    });
+
+    it('treats a ready pickup as news — the buyer collects it, nobody is sent', async () => {
+      await ready(1, 1, FulfillmentType.PICKUP);
+
+      expect(emitted[0]).toMatchObject({
+        title: 'Ready for collection',
+        body: 'REC-AAA is ready — the buyer collects it from Mama Put.',
+      });
+    });
+  });
+
+  describe('a buyer the assistant handed over', () => {
+    beforeEach(() =>
+      service.onHandedOver(
+        new ConversationHandedOverEvent('c1', 'Wants a refund', 'Ada', 5),
+      ),
+    );
+
+    it('alerts every active admin, saying how long they have', () => {
+      expect(emitted[0]).toMatchObject({
+        kind: 'CONVERSATION_HANDED_OVER',
+        title: 'Ada is waiting for you',
+        body: 'Wants a refund. The assistant answers again in 5 min if nobody takes it.',
+        url: '/admin/conversations/c1',
+        adminId: null,
+      });
+      expect(pushedTo()).toEqual(['a1', 'a2']);
+    });
+
+    it('expires the push with the wait — useless once the assistant has answered', () => {
+      expect(push.sendToUser).toHaveBeenCalledWith(
+        'a1',
+        expect.objectContaining({ tag: 'conversation:c1' }),
+        { urgency: 'high', ttlSeconds: 300 },
+      );
+    });
+  });
+
+  describe('a buyer writing into a held conversation', () => {
+    it('alerts only the admin holding it', async () => {
+      await service.onHeldMessage(
+        new HeldConversationMessageEvent('c1', 'a2', 'Is it coming?', null),
+      );
+
+      expect(emitted[0]).toMatchObject({
+        kind: 'HELD_CONVERSATION_MESSAGE',
+        adminId: 'a2',
+        title: 'The buyer replied',
+        body: 'Is it coming?',
+      });
+      expect(pushedTo()).toEqual(['a2']);
+      expect(users.find).not.toHaveBeenCalled();
+    });
+
+    it('trims a long message to a preview', async () => {
+      await service.onHeldMessage(
+        new HeldConversationMessageEvent('c1', 'a2', 'x'.repeat(500), 'Ada'),
+      );
+
+      expect(emitted[0].body.length).toBe(140);
+      expect(emitted[0].body.endsWith('…')).toBe(true);
+    });
+  });
+
+  it('announces a paid order with what was paid and who sold it', async () => {
+    await service.onCheckoutPaid({
+      reference: 'REC-AAA',
+      buyerName: 'Ada',
+      totalAmount: 6500,
+      fulfillmentType: 'DELIVERY',
+      orders: [{ vendorName: 'Mama Put' }, { vendorName: null }],
+    } as unknown as CheckoutPaidEvent);
+
+    expect(emitted[0]).toMatchObject({
+      kind: 'NEW_PAID_ORDER',
+      body: 'Ada paid ₦6,500 — Mama Put. Delivery.',
+      url: '/admin/transactions',
+    });
+    expect(pushedTo()).toEqual(['a1', 'a2']);
+  });
+
+  it("tells admins why a withdrawal failed, which the vendor isn't shown", async () => {
+    await service.onWithdrawalFailed(
+      new WithdrawalFailedEvent(
+        'v1',
+        'w1',
+        'WDR-AAA',
+        4800,
+        'Recipient account is frozen',
+        false,
+      ),
+    );
+
+    expect(emitted[0]).toMatchObject({
+      kind: 'WITHDRAWAL_FAILED',
+      title: 'Withdrawal failed',
+      url: '/admin/vendors/v1',
+    });
+    expect(emitted[0].body).toContain('Mama Put wallet (WDR-AAA)');
+    expect(emitted[0].body).toContain('Recipient account is frozen');
+  });
+
+  it('never throws when push is down', async () => {
+    push.sendToUser.mockRejectedValue(new Error('gateway down'));
+
+    await expect(
+      service.onNeedsAttention(
+        new ConversationNeedsAttentionEvent('c1', 'Stuck', null),
+      ),
+    ).resolves.toBeUndefined();
+    // The open panels still heard it.
+    expect(emitted).toHaveLength(1);
+  });
+
+  it('never throws when the admin list cannot be read', async () => {
+    users.find.mockRejectedValue(new Error('db down'));
+
+    await expect(
+      service.onNeedsAttention(
+        new ConversationNeedsAttentionEvent('c1', 'Stuck', null),
+      ),
+    ).resolves.toBeUndefined();
+    expect(emitted).toHaveLength(1);
+  });
+
+  describe('the bell', () => {
+    const kept = () =>
+      (feed.insert.mock.calls[0] as [Record<string, unknown>[]])[0];
+
+    it('keeps one unread row per active admin, so each has their own read state', async () => {
+      await service.onNeedsAttention(
+        new ConversationNeedsAttentionEvent('c1', 'Stuck', 'Ada'),
+      );
+
+      expect(kept().map((row) => row.userId)).toEqual(['a1', 'a2']);
+      expect(kept()[0]).toMatchObject({
+        type: NotificationType.ADMIN_CONVERSATION_FLAGGED,
+        title: 'A buyer needs help',
+        readAt: null,
+        data: {
+          alertId: emitted[0].id,
+          kind: 'CONVERSATION_FLAGGED',
+          url: '/admin/conversations/c1',
+        },
+      });
+    });
+
+    it('keeps a held-conversation reply for the holding admin only', async () => {
+      await service.onHeldMessage(
+        new HeldConversationMessageEvent('c1', 'a2', 'Hello?', null),
+      );
+
+      expect(kept().map((row) => row.userId)).toEqual(['a2']);
+    });
+
+    it('writes the row before the socket alert, so a refreshing bell finds it', async () => {
+      const order: string[] = [];
+      feed.insert.mockImplementation(() => {
+        order.push('feed');
+        return Promise.resolve({});
+      });
+      const emit = jest.spyOn(service['events'], 'emit');
+      emit.mockImplementation(() => {
+        order.push('socket');
+        return true;
+      });
+
+      await service.onNeedsAttention(
+        new ConversationNeedsAttentionEvent('c1', 'Stuck', null),
+      );
+
+      expect(order).toEqual(['feed', 'socket']);
+    });
+
+    it('still alerts and pushes when the feed cannot be written', async () => {
+      feed.insert.mockRejectedValue(new Error('db down'));
+
+      await expect(
+        service.onNeedsAttention(
+          new ConversationNeedsAttentionEvent('c1', 'Stuck', null),
+        ),
+      ).resolves.toBeUndefined();
+      expect(emitted).toHaveLength(1);
+      expect(pushedTo()).toEqual(['a1', 'a2']);
+    });
+  });
+});

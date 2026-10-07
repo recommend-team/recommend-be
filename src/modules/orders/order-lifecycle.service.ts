@@ -25,6 +25,10 @@ import {
   VENDOR_ORDER_COMPLETED_EVENT,
   VendorOrderCompletedEvent,
 } from '../../common/events/vendor-order-completed.event';
+import {
+  VENDOR_ORDER_READY_EVENT,
+  VendorOrderReadyEvent,
+} from '../../common/events/vendor-order-ready.event';
 
 /**
  * How far along the lifecycle a status is. Only these participate in the derivation;
@@ -37,6 +41,13 @@ const RANK: Partial<Record<OrderStatus, number>> = {
   [OrderStatus.DISPATCHED]: 3,
   [OrderStatus.COMPLETED]: 4,
 };
+
+/** Where a delivery can take a rider: paid, ready, or already on its way (a swap). */
+const ASSIGNABLE = new Set<OrderStatus>([
+  OrderStatus.PAID,
+  OrderStatus.READY,
+  OrderStatus.DISPATCHED,
+]);
 
 export interface Actor {
   type: StatusActor;
@@ -106,9 +117,97 @@ export class OrderLifecycleService {
         outbox,
         null,
       );
-      await this.recomputeCheckout(manager, order.checkoutId, outbox);
+      const checkout = await this.recomputeCheckout(
+        manager,
+        order.checkoutId,
+        outbox,
+      );
+
+      // For admin: who is ready, and how much of the basket that makes. The last vendor
+      // ready on a delivery is the moment someone has to send a rider.
+      if (checkout) {
+        const active = (checkout.orders ?? []).filter(
+          (candidate) => candidate.status !== OrderStatus.CANCELLED,
+        );
+        outbox.push({
+          name: VENDOR_ORDER_READY_EVENT,
+          payload: new VendorOrderReadyEvent(
+            order.id,
+            checkout.id,
+            checkout.reference,
+            checkout.orders?.find((candidate) => candidate.id === order.id)
+              ?.vendor?.businessName ?? null,
+            checkout.fulfillmentType,
+            active.filter(
+              (candidate) =>
+                rankOf(candidate.status) >= rankOf(OrderStatus.READY),
+            ).length,
+            active.length,
+          ),
+        });
+      }
     });
     this.flush(outbox);
+  }
+
+  // ─── Rider ──────────────────────────────────────────────────────────────────
+
+  /**
+   * Put a rider on a delivery, or swap the one on it.
+   *
+   * Admin's call until riders have an app — they choose the rider and reach them by
+   * phone; this records who it is. Allowed from payment until the parcel is delivered, so
+   * a rider who drops out mid-route can be replaced. Who the rider is (role, approval) is
+   * the caller's to check; this owns what the order allows.
+   *
+   * No status moves, so the assignment is written to the order's history as a same-status
+   * row whose note names the rider — one audit trail for everything that happened to it.
+   */
+  async assignRider(
+    reference: string,
+    rider: { id: string; name: string; phone: string | null },
+    actor: Actor,
+  ): Promise<void> {
+    const checkout = await this.checkouts.findOne({
+      where: { reference },
+      relations: ['rider'],
+    });
+    if (!checkout) throw new NotFoundException('Order not found');
+
+    if (checkout.fulfillmentType === FulfillmentType.PICKUP) {
+      throw new BadRequestException(
+        'A pickup order has no rider — the buyer collects it',
+      );
+    }
+    if (!ASSIGNABLE.has(checkout.status)) {
+      throw new BadRequestException(
+        `A rider can be assigned from payment until delivery (this order is ${checkout.status})`,
+      );
+    }
+    if (checkout.riderId === rider.id) return;
+
+    const label = (name: string, phone: string | null) =>
+      phone ? `${name} (${phone})` : name;
+    const note = checkout.rider
+      ? `Rider changed: ${label(checkout.rider.fullName, checkout.rider.phoneNumber)} → ${label(rider.name, rider.phone)}`
+      : `Rider assigned: ${label(rider.name, rider.phone)}`;
+
+    await this.dataSource.transaction(async (manager) => {
+      await manager.update(
+        Checkout,
+        { id: checkout.id },
+        { riderId: rider.id, riderAssignedAt: new Date() },
+      );
+      await manager.insert(OrderStatusEvent, {
+        orderId: null,
+        checkoutId: checkout.id,
+        fromStatus: checkout.status,
+        toStatus: checkout.status,
+        actorType: actor.type,
+        actorId: actor.id,
+        note,
+      });
+    });
   }
 
   // ─── Dispatch and completion ────────────────────────────────────────────────
@@ -128,6 +227,14 @@ export class OrderLifecycleService {
     if (checkout.status !== OrderStatus.READY) {
       throw new BadRequestException(
         `Every vendor must be ready before dispatch (this order is ${checkout.status})`,
+      );
+    }
+
+    // Every delivery on its way has a named rider, so "who has it?" always has an answer.
+    // The admin override can still move a stranded order without one — that is its job.
+    if (!checkout.riderId) {
+      throw new BadRequestException(
+        'Assign a rider before dispatching this order',
       );
     }
 
@@ -316,6 +423,23 @@ export class OrderLifecycleService {
     const from = checkout.status;
     if (from === to) return;
 
+    // A pickup order's handover code, minted the moment there is something to collect —
+    // the counterpart of a delivery's code at dispatch. Same transaction as the status, so
+    // a ready pickup never exists without one; kept if it already has one.
+    if (
+      to === OrderStatus.READY &&
+      checkout.fulfillmentType === FulfillmentType.PICKUP &&
+      !checkout.deliveryCode
+    ) {
+      const code = newDeliveryCode();
+      await manager.update(
+        Checkout,
+        { id: checkout.id },
+        { deliveryCode: code },
+      );
+      checkout.deliveryCode = code;
+    }
+
     await manager.update(Checkout, { id: checkout.id }, { status: to });
     await manager.insert(OrderStatusEvent, {
       orderId: null,
@@ -348,6 +472,14 @@ export class OrderLifecycleService {
           .map((order) => order.vendor?.businessName)
           .filter((name): name is string => !!name),
         checkout.deliveryCode ?? null,
+        checkout.fulfillmentType === FulfillmentType.PICKUP
+          ? (checkout.orders ?? [])
+              .filter((order) => order.status !== OrderStatus.CANCELLED)
+              .map((order) => ({
+                vendorName: order.vendor?.businessName ?? null,
+                address: order.vendor?.businessAddress ?? null,
+              }))
+          : [],
       ),
     });
   }
@@ -357,24 +489,28 @@ export class OrderLifecycleService {
    *
    * Never backwards, and never past a checkout-level state: once a rider has the goods,
    * a vendor editing their own order says nothing about where the parcel is.
+   *
+   * Returns the checkout as re-read, so the caller can report on it without a second read.
    */
   private async recomputeCheckout(
     manager: EntityManager,
     checkoutId: string,
     outbox: Outbox,
-  ): Promise<void> {
+  ): Promise<Checkout | null> {
     const checkout = await manager.findOne(Checkout, {
       where: { id: checkoutId },
       relations: ['orders', 'orders.items', 'orders.vendor'],
     });
-    if (!checkout) return;
+    if (!checkout) return null;
 
-    if (rankOf(checkout.status) >= rankOf(OrderStatus.DISPATCHED)) return;
+    if (rankOf(checkout.status) >= rankOf(OrderStatus.DISPATCHED)) {
+      return checkout;
+    }
 
     const active = (checkout.orders ?? []).filter(
       (order) => order.status !== OrderStatus.CANCELLED,
     );
-    if (active.length === 0) return;
+    if (active.length === 0) return checkout;
 
     const slowest = active.reduce(
       (lowest, order) => Math.min(lowest, rankOf(order.status)),
@@ -382,8 +518,8 @@ export class OrderLifecycleService {
     );
 
     const derived = statusForRank(slowest);
-    if (!derived || derived === checkout.status) return;
-    if (rankOf(derived) <= rankOf(checkout.status)) return;
+    if (!derived || derived === checkout.status) return checkout;
+    if (rankOf(derived) <= rankOf(checkout.status)) return checkout;
 
     await this.moveCheckout(
       manager,
@@ -392,6 +528,7 @@ export class OrderLifecycleService {
       { type: StatusActor.SYSTEM, id: null },
       outbox,
     );
+    return checkout;
   }
 
   /**

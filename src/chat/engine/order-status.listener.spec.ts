@@ -1,3 +1,4 @@
+import { BuyerPushService } from './buyer-push.service';
 import { Test, TestingModule } from '@nestjs/testing';
 import { OrderStatusListener } from './order-status.listener';
 import { AppreciationService } from './appreciation.service';
@@ -25,6 +26,9 @@ const event = (
     to === OrderStatus.DISPATCHED ? 'KDPXRM' : null,
   );
 
+const buyerPush = { notify: jest.fn() };
+beforeEach(() => buyerPush.notify.mockClear());
+
 describe('OrderStatusListener', () => {
   let listener: OrderStatusListener;
   let conversations: { findForCheckout: jest.Mock; recordOutbound: jest.Mock };
@@ -51,6 +55,7 @@ describe('OrderStatusListener', () => {
         { provide: ConversationService, useValue: conversations },
         { provide: ChannelRegistry, useValue: registry },
         { provide: AppreciationService, useValue: appreciation },
+        { provide: BuyerPushService, useValue: buyerPush },
       ],
     }).compile();
 
@@ -82,6 +87,113 @@ describe('OrderStatusListener', () => {
     );
 
     expect(sentText()).toMatch(/ready for collection/i);
+  });
+
+  describe('where and how to collect', () => {
+    const pickup = (
+      points: { vendorName: string | null; address: string | null }[],
+      code: string | null = 'QWERTY',
+    ) =>
+      new CheckoutStatusChangedEvent(
+        'ck1',
+        'REC-AAA',
+        'Ada Obi',
+        '+2348012345678',
+        FulfillmentType.PICKUP,
+        OrderStatus.PAID,
+        OrderStatus.READY,
+        [{ name: 'Jollof Rice', quantity: 2 }],
+        points.map((p) => p.vendorName ?? ''),
+        code,
+        points,
+      );
+
+    it('says where the order is, and the code to show', async () => {
+      // Before, a pickup buyer was told their order was ready and not where.
+      await listener.onStatusChanged(
+        pickup([
+          {
+            vendorName: 'Mama Put Kitchen',
+            address: '14 Herbert Macaulay Way, Yaba',
+          },
+        ]),
+      );
+
+      expect(sentText()).toBe(
+        'Your order is ready for collection at Mama Put Kitchen, 14 Herbert Macaulay Way, Yaba. ' +
+          'Show the code QWERTY when you collect.',
+      );
+    });
+
+    it('names every vendor when the basket spans several', async () => {
+      await listener.onStatusChanged(
+        pickup([
+          {
+            vendorName: 'Mama Put Kitchen',
+            address: '14 Herbert Macaulay Way, Yaba',
+          },
+          { vendorName: 'GadgetHub Ikeja', address: '22 Otigba Street, Ikeja' },
+        ]),
+      );
+
+      expect(sentText()).toBe(
+        'Your order is ready for collection from Mama Put Kitchen, 14 Herbert Macaulay Way, Yaba ' +
+          'and GadgetHub Ikeja, 22 Otigba Street, Ikeja. Show the code QWERTY when you collect at each.',
+      );
+    });
+
+    it('still names a vendor who never gave an address', async () => {
+      await listener.onStatusChanged(
+        pickup([{ vendorName: 'Mama Put Kitchen', address: null }]),
+      );
+
+      expect(sentText()).toBe(
+        'Your order is ready for collection at Mama Put Kitchen. Show the code QWERTY when you collect.',
+      );
+    });
+
+    it('pushes the same words, so the notification alone is enough to go and collect', async () => {
+      await listener.onStatusChanged(
+        pickup([
+          {
+            vendorName: 'Mama Put Kitchen',
+            address: '14 Herbert Macaulay Way, Yaba',
+          },
+        ]),
+      );
+
+      expect(buyerPush.notify).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({ body: sentText(), type: 'ORDER_READY' }),
+        expect.anything(),
+      );
+    });
+  });
+
+  describe('marking the message for an open app to chime', () => {
+    const sentAlert = () =>
+      (registry.send.mock.calls[0] as [unknown, unknown, { alert?: string }])[2]
+        .alert;
+
+    it('marks the dispatch — the sound no longer depends on push', async () => {
+      await listener.onStatusChanged(event(OrderStatus.DISPATCHED));
+
+      expect(sentAlert()).toBe('ORDER_DISPATCHED');
+    });
+
+    it('marks a pickup becoming ready', async () => {
+      await listener.onStatusChanged(
+        event(OrderStatus.READY, FulfillmentType.PICKUP),
+      );
+
+      expect(sentAlert()).toBe('ORDER_READY');
+    });
+
+    it('leaves the closing thank-you unmarked — the buyer caused it', async () => {
+      await listener.onStatusChanged(event(OrderStatus.COMPLETED));
+
+      expect(sentAlert()).toBeUndefined();
+    });
   });
 
   it('sends the one message a delivery buyer gets', async () => {
@@ -123,6 +235,49 @@ describe('OrderStatusListener', () => {
     await listener.onStatusChanged(forced);
 
     expect(sentText()).toBe('Your order is on its way.');
+  });
+
+  describe('notifying a buyer who is away', () => {
+    it('pushes "ready for collection" to a pickup buyer', async () => {
+      await listener.onStatusChanged(
+        event(OrderStatus.READY, FulfillmentType.PICKUP),
+      );
+
+      expect(buyerPush.notify).toHaveBeenCalledWith(
+        'c1',
+        expect.objectContaining({
+          type: 'ORDER_READY',
+          tag: 'order:REC-AAA',
+          url: '/',
+        }),
+        { ttlSeconds: 21600 },
+      );
+    });
+
+    it('pushes the dispatch urgently, with the delivery code in it', async () => {
+      await listener.onStatusChanged(event(OrderStatus.DISPATCHED));
+
+      expect(buyerPush.notify).toHaveBeenCalledWith(
+        'c1',
+        expect.objectContaining({
+          type: 'ORDER_DISPATCHED',
+          body: expect.stringContaining('KDPXRM') as unknown as string,
+        }),
+        { urgency: 'high', ttlSeconds: 21600 },
+      );
+    });
+
+    it('does not push the thank-you — the buyer just confirmed receipt in the app', async () => {
+      await listener.onStatusChanged(event(OrderStatus.COMPLETED));
+
+      expect(buyerPush.notify).not.toHaveBeenCalled();
+    });
+
+    it('does not push what it does not tell the buyer at all', async () => {
+      await listener.onStatusChanged(event(OrderStatus.READY));
+
+      expect(buyerPush.notify).not.toHaveBeenCalled();
+    });
   });
 
   it('has the assistant write the thank-you, and passes it the order', async () => {
