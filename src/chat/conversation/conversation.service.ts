@@ -232,11 +232,13 @@ export class ConversationService {
     const page = Math.max(1, query.page ?? 1);
     const limit = Math.min(50, Math.max(1, query.limit ?? 20));
 
+    // Newest activity first, like any inbox. Conversations waiting for a person are not
+    // pinned above it: a flag left from weeks ago buried today's chats. They stay easy to
+    // find through their badge and the needing-attention filter.
     const builder = this.conversationsRepository
       .createQueryBuilder('c')
-      .orderBy('c."handoverRequestedAt"', 'ASC', 'NULLS LAST')
-      .addOrderBy('c."needsAttentionAt"', 'ASC', 'NULLS LAST')
-      .addOrderBy('c."lastMessageAt"', 'DESC', 'NULLS LAST')
+      .orderBy('c."lastMessageAt"', 'DESC', 'NULLS LAST')
+      .addOrderBy('c."createdAt"', 'DESC')
       .skip((page - 1) * limit)
       .take(limit);
 

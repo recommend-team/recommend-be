@@ -237,4 +237,31 @@ describe('ConversationService', () => {
       await expect(service.mergeContext('missing', {})).resolves.toBeNull();
     });
   });
+
+  describe('listForAdmin', () => {
+    it('puts the most recent conversation first, whatever is waiting', async () => {
+      const builder = {
+        orderBy: jest.fn().mockReturnThis(),
+        addOrderBy: jest.fn().mockReturnThis(),
+        skip: jest.fn().mockReturnThis(),
+        take: jest.fn().mockReturnThis(),
+        andWhere: jest.fn().mockReturnThis(),
+        getManyAndCount: jest.fn().mockResolvedValue([[], 0]),
+      };
+      Object.assign(conversations, {
+        createQueryBuilder: jest.fn().mockReturnValue(builder),
+      });
+      conversations.count.mockResolvedValue(0);
+
+      await service.listForAdmin({});
+
+      expect(builder.orderBy).toHaveBeenCalledWith(
+        'c."lastMessageAt"',
+        'DESC',
+        'NULLS LAST',
+      );
+      expect(builder.addOrderBy).toHaveBeenCalledTimes(1);
+      expect(builder.addOrderBy).toHaveBeenCalledWith('c."createdAt"', 'DESC');
+    });
+  });
 });
