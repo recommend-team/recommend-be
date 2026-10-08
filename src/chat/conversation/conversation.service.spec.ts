@@ -289,4 +289,32 @@ describe('ConversationService', () => {
       expect(conversations.findOne).toHaveBeenCalledTimes(5);
     });
   });
+
+  describe('verifiedEmails', () => {
+    it('finds the email of each signed-in conversation in one query', async () => {
+      const find = jest
+        .fn()
+        .mockResolvedValue([{ id: 'account-1', email: 'ada@example.com' }]);
+      Object.assign(conversations, { manager: { find } });
+
+      const emails = await service.verifiedEmails([
+        { accountId: 'account-1' },
+        { accountId: 'account-1' },
+        { accountId: null },
+      ]);
+
+      expect(emails.get('account-1')).toBe('ada@example.com');
+      expect(find).toHaveBeenCalledTimes(1);
+    });
+
+    it('asks nothing when nobody on the page is signed in', async () => {
+      const find = jest.fn();
+      Object.assign(conversations, { manager: { find } });
+
+      const emails = await service.verifiedEmails([{ accountId: null }]);
+
+      expect(emails.size).toBe(0);
+      expect(find).not.toHaveBeenCalled();
+    });
+  });
 });

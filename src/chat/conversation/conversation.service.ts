@@ -1,7 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { EventEmitter2 } from '@nestjs/event-emitter';
-import { Brackets, IsNull, LessThan, Not, Repository } from 'typeorm';
+import { Brackets, In, IsNull, LessThan, Not, Repository } from 'typeorm';
 import {
   CHAT_MESSAGE_RECORDED_EVENT,
   ChatMessageRecordedEvent,
@@ -15,6 +15,7 @@ import {
   ConversationContext,
 } from './entities/conversation.entity';
 import { ChatMessage, MessagePayload } from './entities/message.entity';
+import { ChatAccount } from '../account/entities/chat-account.entity';
 import {
   ChatChannel,
   ConversationState,
@@ -36,6 +37,8 @@ export interface ConversationSummary {
   /** What the buyer told the assistant, which may be nothing yet. */
   buyerName: string | null;
   buyerPhone: string | null;
+  /** The email the buyer proved with a code, if they signed in. Unlike a typed one, it is theirs. */
+  verifiedEmail: string | null;
   lastMessageAt: Date | null;
   lastMessage: string | null;
   heldByAdminId: string | null;
@@ -290,6 +293,7 @@ export class ConversationService {
 
     // One query for the last message of every row on the page, rather than one per row.
     const lastMessages = await this.lastMessageFor(rows.map((row) => row.id));
+    const emails = await this.verifiedEmails(rows);
 
     return {
       items: rows.map((row) => ({
@@ -298,6 +302,9 @@ export class ConversationService {
         state: row.state,
         buyerName: row.context?.profile?.name ?? null,
         buyerPhone: row.context?.profile?.phone ?? null,
+        verifiedEmail: row.accountId
+          ? (emails.get(row.accountId) ?? null)
+          : null,
         lastMessageAt: row.lastMessageAt,
         lastMessage: lastMessages.get(row.id) ?? null,
         heldByAdminId: row.heldByAdminId,
@@ -312,6 +319,26 @@ export class ConversationService {
       page,
       limit,
     };
+  }
+
+  /** The verified email of each signed-in conversation, in one query. */
+  async verifiedEmails(
+    conversations: Pick<Conversation, 'accountId'>[],
+  ): Promise<Map<string, string>> {
+    const ids = [
+      ...new Set(
+        conversations
+          .map((conversation) => conversation.accountId)
+          .filter((id): id is string => !!id),
+      ),
+    ];
+    if (ids.length === 0) return new Map();
+
+    const accounts = await this.conversationsRepository.manager.find(
+      ChatAccount,
+      { where: { id: In(ids) } },
+    );
+    return new Map(accounts.map((account) => [account.id, account.email]));
   }
 
   private async lastMessageFor(

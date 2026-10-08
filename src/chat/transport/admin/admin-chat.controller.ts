@@ -167,6 +167,7 @@ export class AdminChatController {
     const messages = await this.conversations.getHistory(conversation.id, {
       limit: 200,
     });
+    const emails = await this.conversations.verifiedEmails([conversation]);
 
     return {
       message: 'Conversation retrieved successfully',
@@ -175,6 +176,9 @@ export class AdminChatController {
         channel: conversation.channel,
         buyerName: conversation.context?.profile?.name ?? null,
         buyerPhone: conversation.context?.profile?.phone ?? null,
+        verifiedEmail: conversation.accountId
+          ? (emails.get(conversation.accountId) ?? null)
+          : null,
         needsAttentionAt: conversation.needsAttentionAt,
         attentionReason: conversation.attentionReason,
         handoverRequestedAt: conversation.handoverRequestedAt,
