@@ -28,7 +28,9 @@ const conversation = (over: Partial<Conversation>): Conversation =>
 
 describe('AccountService', () => {
   let codes: { issue: jest.Mock; check: jest.Mock };
-  let email: { sendSignInCode: jest.Mock };
+  let email: { sendSignInCode: jest.Mock; sendWelcome: jest.Mock };
+  /** What the account insert returns: a row when it made the account, none when it existed. */
+  let execute: jest.Mock;
   let manager: {
     createQueryBuilder: jest.Mock;
     findOneOrFail: jest.Mock;
@@ -40,13 +42,17 @@ describe('AccountService', () => {
 
   beforeEach(() => {
     codes = { issue: jest.fn(), check: jest.fn() };
-    email = { sendSignInCode: jest.fn() };
+    email = {
+      sendSignInCode: jest.fn(),
+      sendWelcome: jest.fn().mockResolvedValue(undefined),
+    };
+    execute = jest.fn().mockResolvedValue({ raw: [] });
     const insert = {
       insert: jest.fn().mockReturnThis(),
       into: jest.fn().mockReturnThis(),
       values: jest.fn().mockReturnThis(),
       orIgnore: jest.fn().mockReturnThis(),
-      execute: jest.fn().mockResolvedValue(undefined),
+      execute,
     };
     manager = {
       createQueryBuilder: jest.fn().mockReturnValue(insert),
@@ -100,6 +106,36 @@ describe('AccountService', () => {
       await expect(
         service.requestCode('ada@example.com', 's1'),
       ).resolves.toEqual({ ok: false, code: 'SEND_FAILED' });
+    });
+  });
+
+  describe('the welcome email', () => {
+    const account = { id: 'account-1', email: 'ada@example.com' };
+
+    beforeEach(() => {
+      codes.check.mockResolvedValue({ ok: true });
+      manager.findOneOrFail
+        .mockResolvedValueOnce(account)
+        .mockResolvedValueOnce(
+          conversation({ id: 'mine', context: { profile: { name: 'Ada' } } }),
+        );
+      manager.findOne.mockResolvedValue(null);
+    });
+
+    it('is sent, by name, when this sign-in made the account', async () => {
+      execute.mockResolvedValue({ raw: [{ id: 'account-1' }] });
+
+      await service.verify('ada@example.com', '482916', 'mine');
+
+      expect(email.sendWelcome).toHaveBeenCalledWith('ada@example.com', 'Ada');
+    });
+
+    it('is not sent again to an account that already existed', async () => {
+      execute.mockResolvedValue({ raw: [] });
+
+      await service.verify('ada@example.com', '482916', 'mine');
+
+      expect(email.sendWelcome).not.toHaveBeenCalled();
     });
   });
 

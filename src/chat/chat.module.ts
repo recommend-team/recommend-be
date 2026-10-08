@@ -44,6 +44,7 @@ import { LoginCodeService } from './account/login-code.service';
 import { EMAIL_PORT } from './ports/email.port';
 import { LocalEmailAdapter } from './adapters/local-email.adapter';
 import { EmailService } from '../common/services/email.service';
+import { WelcomeEmailService } from '../common/services/welcome-email.service';
 
 /**
  * The chat bounded context. `AppModule` importing this is the only permitted crossing
@@ -94,6 +95,7 @@ import { EmailService } from '../common/services/email.service';
     AccountService,
     LoginCodeService,
     EmailService,
+    WelcomeEmailService,
     { provide: EMAIL_PORT, useClass: LocalEmailAdapter },
   ],
   exports: [ConversationService, SessionService],

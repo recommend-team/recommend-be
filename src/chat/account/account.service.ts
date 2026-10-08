@@ -32,6 +32,12 @@ export type RequestCodeResult =
       retryAfter?: number;
     };
 
+/** The conversation a browser is on after signing in, and whether that made the account. */
+interface SignedIn {
+  conversation: Conversation;
+  created: boolean;
+}
+
 export type VerifyResult =
   | { ok: true; email: string; conversation: Conversation }
   | {
@@ -109,7 +115,12 @@ export class AccountService {
       };
     }
 
-    const conversation = await this.signIn(email, conversationId);
+    const { conversation, created } = await this.signIn(email, conversationId);
+
+    if (created) {
+      void this.email.sendWelcome(email, conversation.context?.profile?.name);
+    }
+
     return { ok: true, email, conversation };
   }
 
@@ -134,7 +145,7 @@ export class AccountService {
   private async signIn(
     email: string,
     conversationId: string,
-  ): Promise<Conversation> {
+  ): Promise<SignedIn> {
     for (let attempt = 0; ; attempt++) {
       try {
         return await this.dataSource.transaction((manager) =>
@@ -151,14 +162,18 @@ export class AccountService {
     manager: EntityManager,
     email: string,
     conversationId: string,
-  ): Promise<Conversation> {
-    await manager
+  ): Promise<SignedIn> {
+    // Whether this insert made the account — not a read beforehand, which two browsers
+    // verifying at once would both pass. An ignored insert returns no row.
+    const inserted = await manager
       .createQueryBuilder()
       .insert()
       .into(ChatAccount)
       .values({ email })
       .orIgnore()
       .execute();
+    const created =
+      Array.isArray(inserted?.raw) && (inserted.raw as unknown[]).length > 0;
     const account = await manager.findOneOrFail(ChatAccount, {
       where: { email },
     });
@@ -190,7 +205,7 @@ export class AccountService {
         { accountId: account.id, context: current.context },
       );
       this.logger.log(`Conversation ${current.id} signed in`);
-      return current;
+      return { conversation: current, created };
     }
 
     // Another browser: fold this conversation into the account's.
@@ -245,7 +260,7 @@ export class AccountService {
     this.logger.log(
       `Conversation ${current.id} folded into ${home.id} on sign-in`,
     );
-    return Object.assign(home, merged);
+    return { conversation: Object.assign(home, merged), created };
   }
 }
 

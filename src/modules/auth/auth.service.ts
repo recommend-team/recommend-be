@@ -27,7 +27,8 @@ import { RegisterRiderDto } from './dto/register-rider.dto';
 import { ResetPasswordDto } from './dto/reset-password.dto';
 import { VerifyEmailDto } from './dto/verify-email.dto';
 import { User } from './entities/auth.entity';
-import { EmailService } from 'src/common/services/email.service';
+import { EmailService } from '../../common/services/email.service';
+import { WelcomeEmailService } from '../../common/services/welcome-email.service';
 
 /** Safe user shape returned to frontend — no passwords or secret tokens */
 export type SafeUser = Omit<
@@ -59,6 +60,7 @@ export class AuthService {
     private readonly jwtService: JwtService,
     private readonly configService: ConfigService,
     private readonly emailService: EmailService,
+    private readonly welcomeEmail: WelcomeEmailService,
   ) {}
 
   // ─── Registration ──────────────────────────────────────────────────────────
@@ -288,6 +290,16 @@ export class AuthService {
 
     const savedUser = await this.usersRepository.save(newUser);
     await this.pendingUsersRepository.remove(pendingUser);
+
+    void this.welcomeEmail.send(
+      savedUser.role === Role.SELLER
+        ? 'vendor'
+        : savedUser.role === Role.RIDER
+          ? 'rider'
+          : 'customer',
+      savedUser.email,
+      savedUser.firstName,
+    );
 
     const awaitingApproval = status === SellerStatus.PENDING;
 
