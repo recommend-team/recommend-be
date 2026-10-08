@@ -155,6 +155,157 @@ describe('CheckoutFlow', () => {
     });
   });
 
+  describe('a returning buyer', () => {
+    const returning: ConversationContext = {
+      profile: { name: 'Ada Obi', phone: '+2348012345678' },
+      lastPaidAt: '2026-10-01T10:00:00.000Z',
+      lastDeliveryAddress: '12 Admiralty Way, Lekki',
+    };
+
+    it('is asked nothing but where it goes — name, phone and email are skipped', async () => {
+      stored = { ...returning };
+
+      const replies = await flow.start(
+        conversationAt(ConversationState.DISCOVERY),
+        CART,
+      );
+
+      expect(conversations.setState).toHaveBeenCalledWith(
+        'c1',
+        ConversationState.COLLECTING_FULFILLMENT,
+      );
+      expect(replies[0].text).toBe(
+        'Should we deliver to 12 Admiralty Way, Lekki again?',
+      );
+      expect(replies[0].payload).toEqual({
+        kind: 'choices',
+        data: {
+          purpose: 'fulfillment',
+          options: [
+            { id: 'SAME', label: 'Yes, same address' },
+            { id: 'NEW', label: 'New address' },
+            { id: 'PICKUP', label: "I'll pick it up" },
+          ],
+        },
+      });
+    });
+
+    it('reuses the last address on "same", and goes to the summary', async () => {
+      stored = { ...returning };
+
+      await flow.handle(
+        conversationAt(ConversationState.COLLECTING_FULFILLMENT, returning),
+        'Yes, same address',
+      );
+
+      expect(conversations.mergeContext).toHaveBeenCalledWith('c1', {
+        profile: {
+          fulfillmentType: 'DELIVERY',
+          address: '12 Admiralty Way, Lekki',
+        },
+      });
+      expect(conversations.setState).toHaveBeenCalledWith(
+        'c1',
+        ConversationState.CONFIRMING_ORDER,
+      );
+    });
+
+    it('asks for the new address on "new", and does not keep the old one', async () => {
+      stored = { ...returning };
+
+      const replies = await flow.handle(
+        conversationAt(ConversationState.COLLECTING_FULFILLMENT, returning),
+        'New address',
+      );
+
+      expect(conversations.mergeContext).toHaveBeenCalledWith('c1', {
+        profile: { fulfillmentType: 'DELIVERY', address: undefined },
+      });
+      expect(conversations.setState).toHaveBeenCalledWith(
+        'c1',
+        ConversationState.COLLECTING_ADDRESS,
+      );
+      expect(replies[0].text).toBe("What's the new address?");
+    });
+
+    it('reads a typed "no, a different one" as a new address, not a yes', async () => {
+      await flow.handle(
+        conversationAt(ConversationState.COLLECTING_FULFILLMENT, returning),
+        'no, deliver to a different place',
+      );
+
+      expect(conversations.setState).toHaveBeenCalledWith(
+        'c1',
+        ConversationState.COLLECTING_ADDRESS,
+      );
+    });
+
+    it('takes pickup, with no address at all', async () => {
+      stored = { ...returning };
+
+      await flow.handle(
+        conversationAt(ConversationState.COLLECTING_FULFILLMENT, returning),
+        "I'll pick it up",
+      );
+
+      expect(conversations.mergeContext).toHaveBeenCalledWith('c1', {
+        profile: { fulfillmentType: 'PICKUP' },
+      });
+      expect(conversations.setState).toHaveBeenCalledWith(
+        'c1',
+        ConversationState.CONFIRMING_ORDER,
+      );
+    });
+
+    it.each(['not the same place', 'no', "don't deliver there"])(
+      'never reads "%s" as the same address',
+      async (answer) => {
+        const replies = await flow.handle(
+          conversationAt(ConversationState.COLLECTING_FULFILLMENT, returning),
+          answer,
+        );
+
+        expect(conversations.setState).not.toHaveBeenCalled();
+        expect(replies[0].text).toContain('12 Admiralty Way, Lekki');
+      },
+    );
+
+    it('asks again rather than guessing an unclear answer', async () => {
+      const replies = await flow.handle(
+        conversationAt(ConversationState.COLLECTING_FULFILLMENT, returning),
+        'hmm',
+      );
+
+      expect(conversations.setState).not.toHaveBeenCalled();
+      expect(replies[0].text).toContain('12 Admiralty Way, Lekki');
+    });
+  });
+
+  describe('an address never reused silently', () => {
+    it('asks for the address even if one was typed into an abandoned checkout', async () => {
+      // Typed last time, never paid for: no lastDeliveryAddress.
+      stored = {
+        profile: {
+          name: 'Ada',
+          phone: '+2348012345678',
+          address: 'somewhere typed once',
+        },
+        receiptEmailSkipped: true,
+      };
+
+      const replies = await flow.handle(
+        conversationAt(ConversationState.COLLECTING_FULFILLMENT, stored),
+        'Deliver to me',
+      );
+
+      expect(conversations.setState).toHaveBeenCalledWith(
+        'c1',
+        ConversationState.COLLECTING_ADDRESS,
+      );
+      expect(replies[0].text).toBe('Where should we deliver it?');
+    });
+  });
+
   describe('the receipt email', () => {
     it('is asked for after the phone number, with the card to enter it', async () => {
       stored = { profile: { name: 'Ada' } };

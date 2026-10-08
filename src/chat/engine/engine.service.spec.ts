@@ -166,6 +166,45 @@ describe('EngineService', () => {
     expect(firstReplyText()).toContain('What are you looking for');
   });
 
+  describe('a buyer who has bought before', () => {
+    const returning = () =>
+      ({
+        ...conversation,
+        context: {
+          profile: { name: 'Ada Obi', phone: '+2348012345678' },
+          lastPaidAt: '2026-10-01T10:00:00.000Z',
+        },
+      }) as typeof conversation;
+
+    it('is greeted by first name', async () => {
+      await service.handleInbound({ conversation: returning(), text: 'Hello' });
+
+      expect(firstReplyText()).toBe('Hi Ada! What can I get you today?');
+    });
+
+    it('is named to the model, so it greets them too', async () => {
+      discovery.hasModel.mockReturnValue(true);
+
+      await service.handleInbound({ conversation: returning(), text: 'Hello' });
+
+      expect(discovery.discover).toHaveBeenCalledWith(
+        expect.objectContaining({ buyerFirstName: 'Ada' }),
+      );
+    });
+
+    it('is not assumed from a name typed into a checkout never paid for', async () => {
+      await service.handleInbound({
+        conversation: {
+          ...conversation,
+          context: { profile: { name: 'Ada Obi' } },
+        } as typeof conversation,
+        text: 'Hello',
+      });
+
+      expect(firstReplyText()).toContain("I'm James from Recommend");
+    });
+  });
+
   it('lets the model answer a greeting when there is one — a person, not a fixed line', async () => {
     discovery.hasModel.mockReturnValue(true);
 

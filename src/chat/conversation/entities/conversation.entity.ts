@@ -34,6 +34,16 @@ export interface ConversationContext {
   unansweredHandoverAt?: string;
   /** The buyer skipped the receipt-email step. Remembered, so a later order does not ask again. */
   receiptEmailSkipped?: boolean;
+  /**
+   * When this buyer last paid. Set only by a confirmed payment: a returning buyer is one
+   * who has bought, not one who got as far as typing their details.
+   */
+  lastPaidAt?: string;
+  /**
+   * Where their most recent paid delivery went — offered back at the next checkout.
+   * Never an address typed for an order that was then abandoned.
+   */
+  lastDeliveryAddress?: string;
 }
 
 @Entity('conversations')

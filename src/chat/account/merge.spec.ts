@@ -116,6 +116,58 @@ describe('mergeConversations', () => {
     expect(merged.context.pendingCart).toEqual(home.context.pendingCart);
   });
 
+  it('remembers them as a returning buyer, with their most recent paid address', () => {
+    const paidHere = conversation({
+      ...home,
+      context: {
+        ...home.context,
+        lastPaidAt: '2026-09-01T10:00:00.000Z',
+        lastDeliveryAddress: 'Old place, Yaba',
+      },
+    });
+    // The newer browser paid more recently, somewhere else.
+    const paidThere = conversation({
+      lastMessageAt: at('2026-10-08T09:00:00Z'),
+      context: {
+        lastPaidAt: '2026-10-05T10:00:00.000Z',
+        lastDeliveryAddress: '12 Admiralty Way, Lekki',
+      },
+    });
+
+    const merged = mergeConversations(
+      paidHere,
+      paidThere,
+      true,
+      'ada@example.com',
+    );
+
+    expect(merged.context.lastPaidAt).toBe('2026-10-05T10:00:00.000Z');
+    expect(merged.context.lastDeliveryAddress).toBe('12 Admiralty Way, Lekki');
+  });
+
+  it('keeps the remembered address even when the thread without it leads', () => {
+    const paidHere = conversation({
+      ...home,
+      context: {
+        ...home.context,
+        lastPaidAt: '2026-09-01T10:00:00.000Z',
+        lastDeliveryAddress: 'Old place, Yaba',
+      },
+    });
+    const neverPaid = conversation({
+      lastMessageAt: at('2026-10-08T09:00:00Z'),
+    });
+
+    const merged = mergeConversations(
+      paidHere,
+      neverPaid,
+      true,
+      'ada@example.com',
+    );
+
+    expect(merged.context.lastDeliveryAddress).toBe('Old place, Yaba');
+  });
+
   it('keeps a person on the thread they were answering', () => {
     const held = conversation({
       lastMessageAt: at('2026-10-08T09:00:00Z'),

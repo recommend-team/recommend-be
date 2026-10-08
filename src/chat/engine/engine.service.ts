@@ -208,11 +208,13 @@ export class EngineService {
       this.discoveryService.hasModel();
 
     if (isGreeting(trimmed) && !conversational) {
+      const name = returningFirstName(conversation);
       return [
         {
-          text:
-            `Hello, I'm ${this.assistantName} from Recommend. What are you looking for ` +
-            'today, and which area are you in?',
+          text: name
+            ? `Hi ${name}! What can I get you today?`
+            : `Hello, I'm ${this.assistantName} from Recommend. What are you looking for ` +
+              'today, and which area are you in?',
         },
       ];
     }
@@ -304,6 +306,7 @@ export class EngineService {
     const result = await this.discoveryService.discover({
       text,
       areaId: conversation.areaId,
+      buyerFirstName: returningFirstName(conversation),
       history,
     });
 
@@ -429,6 +432,16 @@ const GREETINGS = [
   'how far',
   'abeg',
 ];
+
+/**
+ * A buyer who has paid before, by first name — greeted by it. Null for anyone else: a
+ * name typed into an abandoned checkout is not a customer yet.
+ */
+function returningFirstName(conversation: Conversation): string | null {
+  const name = conversation.context?.profile?.name?.trim();
+  if (!conversation.context?.lastPaidAt || !name) return null;
+  return name.split(/\s+/)[0];
+}
 
 function isGreeting(text: string): boolean {
   const normalised = text

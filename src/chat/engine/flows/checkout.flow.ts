@@ -176,6 +176,10 @@ export class CheckoutFlow {
     conversation: Conversation,
     answer: string,
   ): Promise<OutboundMessage[]> {
+    const lastAddress = conversation.context?.lastDeliveryAddress;
+    if (lastAddress)
+      return this.captureReturning(conversation, answer, lastAddress);
+
     const choice = readFulfillment(answer);
 
     if (!choice) {
@@ -197,6 +201,54 @@ export class CheckoutFlow {
         ? ConversationState.COLLECTING_ADDRESS
         : ConversationState.CONFIRMING_ORDER,
     );
+  }
+
+  /**
+   * A returning buyer's one question: the same address as last time, a new one, or
+   * pickup. Only their last *paid* delivery is offered — never an address typed into a
+   * checkout that was then abandoned.
+   */
+  private async captureReturning(
+    conversation: Conversation,
+    answer: string,
+    lastAddress: string,
+  ): Promise<OutboundMessage[]> {
+    const choice = readReturning(answer);
+
+    if (!choice) {
+      return [
+        promptFor(
+          ConversationState.COLLECTING_FULFILLMENT,
+          undefined,
+          lastAddress,
+        ),
+      ];
+    }
+
+    if (choice === 'PICKUP') {
+      await this.conversationService.mergeContext(conversation.id, {
+        profile: { fulfillmentType: 'PICKUP' },
+      });
+      return this.advanceFrom(conversation, ConversationState.CONFIRMING_ORDER);
+    }
+
+    if (choice === 'SAME') {
+      await this.conversationService.mergeContext(conversation.id, {
+        profile: { fulfillmentType: 'DELIVERY', address: lastAddress },
+      });
+      return this.advanceFrom(conversation, ConversationState.CONFIRMING_ORDER);
+    }
+
+    // A new address: asked for next, used for this order, and — once it is paid for —
+    // the one offered back next time.
+    await this.conversationService.mergeContext(conversation.id, {
+      profile: { fulfillmentType: 'DELIVERY', address: undefined },
+    });
+    await this.conversationService.setState(
+      conversation.id,
+      ConversationState.COLLECTING_ADDRESS,
+    );
+    return [{ text: "What's the new address?" }];
   }
 
   private async captureAddress(
@@ -352,27 +404,24 @@ export class CheckoutFlow {
     if (state === ConversationState.COLLECTING_PHONE && profile.phone) {
       state = ConversationState.COLLECTING_EMAIL;
     }
-    // Asked once: never of a signed-in buyer, whose email is verified already, nor of
-    // one who has said no.
+    // Asked once: never of a signed-in buyer, whose email is verified already, of one
+    // who has said no, or of a returning buyer — who is asked nothing but the address.
     if (
       state === ConversationState.COLLECTING_EMAIL &&
-      (fresh?.accountId || fresh?.context?.receiptEmailSkipped)
+      (fresh?.accountId ||
+        fresh?.context?.receiptEmailSkipped ||
+        fresh?.context?.lastPaidAt)
     ) {
       state = ConversationState.COLLECTING_FULFILLMENT;
     }
-    if (
-      state === ConversationState.COLLECTING_ADDRESS &&
-      profile.address &&
-      profile.fulfillmentType === 'DELIVERY'
-    ) {
-      state = ConversationState.CONFIRMING_ORDER;
-    }
+    // The address is never reused silently. A returning buyer is asked about their last
+    // paid delivery address at the fulfilment step; anyone else gives one here.
 
     await this.conversationService.setState(conversation.id, state);
 
     return state === ConversationState.CONFIRMING_ORDER
       ? this.summarise(fresh ?? conversation)
-      : [promptFor(state, profile.name)];
+      : [promptFor(state, profile.name, fresh?.context?.lastDeliveryAddress)];
   }
 
   /** Read the order back before charging for it, priced from the database. */
@@ -454,7 +503,11 @@ export class CheckoutFlow {
 
 // ─── Wording and parsing ──────────────────────────────────────────────────────
 
-function promptFor(state: ConversationState, name?: string): OutboundMessage {
+function promptFor(
+  state: ConversationState,
+  name?: string,
+  lastAddress?: string,
+): OutboundMessage {
   switch (state) {
     case ConversationState.COLLECTING_NAME:
       return { text: 'Lovely. What name should I put on the order?' };
@@ -468,10 +521,15 @@ function promptFor(state: ConversationState, name?: string): OutboundMessage {
         payload: emailCapture(),
       };
     case ConversationState.COLLECTING_FULFILLMENT:
-      return {
-        text: 'Would you like it delivered, or will you pick it up?',
-        payload: fulfillmentChoices(),
-      };
+      return lastAddress
+        ? {
+            text: `Should we deliver to ${lastAddress} again?`,
+            payload: returningChoices(),
+          }
+        : {
+            text: 'Would you like it delivered, or will you pick it up?',
+            payload: fulfillmentChoices(),
+          };
     case ConversationState.COLLECTING_ADDRESS:
       return { text: 'Where should we deliver it?' };
     default:
@@ -507,6 +565,40 @@ function isSkip(answer: string): boolean {
   return /^(skip|no|nope|not now|later|none|no email|no thanks|i don'?t have (one|an email))\b/i.test(
     answer.trim(),
   );
+}
+
+function returningChoices() {
+  return {
+    kind: 'choices' as const,
+    data: {
+      purpose: 'fulfillment',
+      options: [
+        { id: 'SAME', label: 'Yes, same address' },
+        { id: 'NEW', label: 'New address' },
+        { id: 'PICKUP', label: "I'll pick it up" },
+      ],
+    },
+  };
+}
+
+/**
+ * The returning buyer's answer, tapped or typed. A new address is checked for first —
+ * "no, a different one" must not read as a yes — then pickup, then anything that agrees.
+ * A bare "no" or "not the same" is never a yes, and could mean a new address or pickup,
+ * so it is asked again. Unclear is never guessed: guessing sends food to the wrong door.
+ */
+function readReturning(answer: string): 'SAME' | 'NEW' | 'PICKUP' | null {
+  const text = answer.toLowerCase();
+  if (/\b(new|different|another|change|other)\b/.test(text)) return 'NEW';
+  if (readFulfillment(text) === 'PICKUP') return 'PICKUP';
+  if (/\b(no|not|nope|don'?t)\b/.test(text)) return null;
+  if (
+    /\b(same|yes|yeah|yep|yup|ok|okay|sure|correct)\b/.test(text) ||
+    readFulfillment(text) === 'DELIVERY'
+  ) {
+    return 'SAME';
+  }
+  return null;
 }
 
 function confirmChoices() {

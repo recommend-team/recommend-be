@@ -205,11 +205,39 @@ describe('PaymentConfirmationListener', () => {
   it('clears the pending marker so a later checkout is not confused with this one', async () => {
     await listener.onCheckoutPaid(event());
 
-    expect(conversations.mergeContext).toHaveBeenCalledWith('c1', {
-      pendingPaymentReference: undefined,
-      pendingCheckoutId: undefined,
-      pendingCart: [],
-    });
+    expect(conversations.mergeContext).toHaveBeenCalledWith(
+      'c1',
+      expect.objectContaining({
+        pendingPaymentReference: undefined,
+        pendingCheckoutId: undefined,
+        pendingCart: [],
+      }),
+    );
+  });
+
+  it('remembers the buyer as returning, with where this delivery went', async () => {
+    const paid = event();
+
+    await listener.onCheckoutPaid(paid);
+
+    expect(conversations.mergeContext).toHaveBeenCalledWith(
+      'c1',
+      expect.objectContaining({
+        lastPaidAt: paid.paidAt.toISOString(),
+        lastDeliveryAddress: '12 Herbert Macaulay Way, Yaba',
+      }),
+    );
+  });
+
+  it('leaves the last delivery address alone when this order was a pickup', async () => {
+    await listener.onCheckoutPaid(
+      event({ fulfillmentType: 'PICKUP', deliveryAddress: null }),
+    );
+
+    const patch = (
+      conversations.mergeContext.mock.calls as [string, object][]
+    ).find(([, context]) => 'lastPaidAt' in context)?.[1];
+    expect(patch).not.toHaveProperty('lastDeliveryAddress');
   });
 
   it('hands the buyer back to the assistant instead of leaving them waiting to pay', async () => {

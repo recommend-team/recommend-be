@@ -30,6 +30,8 @@ export interface DiscoveryRequest {
   text: string;
   /** Area already established for this conversation, if any. */
   areaId: string | null;
+  /** A buyer who has paid before, by first name. Null for anyone else. */
+  buyerFirstName?: string | null;
   /** Recent turns, oldest first. Trimmed to the configured window. */
   history: ChatMessage[];
 }
@@ -134,6 +136,17 @@ export class DiscoveryService {
               content:
                 `The buyer's area is ${areaId}. Do not ask which area they are in. ` +
                 `If they name a different area, call resolve_area with it and search there instead.`,
+            },
+          ]
+        : []),
+      ...(request.buyerFirstName
+        ? [
+            {
+              role: 'system' as const,
+              content:
+                `The buyer is ${request.buyerFirstName}, who has ordered before. Greet them by name ` +
+                `("Hi ${request.buyerFirstName}!") when they say hello. Never ask for their name, phone ` +
+                'number or address — checkout already has them.',
             },
           ]
         : []),

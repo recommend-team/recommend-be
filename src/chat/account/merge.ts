@@ -54,6 +54,12 @@ export function mergeConversations(
       ? otherContext
       : null;
 
+  const paidLater =
+    (otherContext.lastPaidAt ?? '') > (leadContext.lastPaidAt ?? '')
+      ? otherContext
+      : leadContext;
+  const paidEarlier = paidLater === leadContext ? otherContext : leadContext;
+
   const context: ConversationContext = {
     ...leadContext,
     profile: {
@@ -67,6 +73,11 @@ export function mergeConversations(
     ]),
     pendingPaymentReference: pending?.pendingPaymentReference,
     pendingCheckoutId: pending?.pendingCheckoutId,
+    // What a returning buyer is remembered by survives from whichever side has it —
+    // the address from the side that paid most recently, else the other's.
+    lastPaidAt: laterOf(leadContext.lastPaidAt, otherContext.lastPaidAt),
+    lastDeliveryAddress:
+      paidLater.lastDeliveryAddress ?? paidEarlier.lastDeliveryAddress,
   };
 
   // A hold or a flag already on the account's thread wins; otherwise one on the
@@ -99,6 +110,13 @@ function latest(a: Date | null, b: Date | null): Date | null {
   if (!a) return b;
   if (!b) return a;
   return time(a) >= time(b) ? a : b;
+}
+
+/** The later of two ISO timestamps, either of which may be missing. */
+function laterOf(a?: string, b?: string): string | undefined {
+  if (!a) return b;
+  if (!b) return a;
+  return a >= b ? a : b;
 }
 
 function unique(values: string[]): string[] {
