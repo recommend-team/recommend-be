@@ -40,7 +40,7 @@ describe('PwaGateway — signing in', () => {
     tokenFor: jest.Mock;
   };
   let conversationService: Record<string, jest.Mock>;
-  let engine: { greet: jest.Mock };
+  let engine: { greet: jest.Mock; continueCheckoutAfterSignIn: jest.Mock };
   let accounts: Record<string, jest.Mock>;
   let gateway: PwaGateway;
 
@@ -93,7 +93,10 @@ describe('PwaGateway — signing in', () => {
         ]),
       ),
     };
-    engine = { greet: jest.fn(() => Promise.resolve({})) };
+    engine = {
+      greet: jest.fn(() => Promise.resolve({})),
+      continueCheckoutAfterSignIn: jest.fn(() => Promise.resolve([])),
+    };
     accounts = {
       emailFor: jest.fn(() => Promise.resolve(null)),
       requestCode: jest.fn(),
@@ -196,6 +199,8 @@ describe('PwaGateway — signing in', () => {
     expect(socket.events()).toEqual(['session', 'account', 'chat:history']);
     expect(socket.last('account')).toEqual({ email: 'ada@example.com' });
     expect(conversationService.getHistory).toHaveBeenCalledWith('home', {});
+    // Verified from the checkout's receipt card: the checkout carries on.
+    expect(engine.continueCheckoutAfterSignIn).toHaveBeenCalledWith(home);
   });
 
   it('on a wrong code, says how many tries are left and moves nothing', async () => {

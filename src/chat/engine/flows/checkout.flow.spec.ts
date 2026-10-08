@@ -117,11 +117,109 @@ describe('CheckoutFlow', () => {
 
       await flow.start(conversationAt(ConversationState.DISCOVERY), CART);
 
-      // Name and phone known → straight to fulfillment.
+      // Name and phone known → on to the receipt email.
+      expect(conversations.setState).toHaveBeenCalledWith(
+        'c1',
+        ConversationState.COLLECTING_EMAIL,
+      );
+    });
+
+    it('never asks a signed-in buyer for their email', async () => {
+      stored = { profile: { name: 'Ada', phone: '+2348012345678' } };
+      conversations.findById.mockResolvedValue({
+        id: 'c1',
+        accountId: 'account-1',
+        context: stored,
+      });
+
+      await flow.start(conversationAt(ConversationState.DISCOVERY), CART);
+
       expect(conversations.setState).toHaveBeenCalledWith(
         'c1',
         ConversationState.COLLECTING_FULFILLMENT,
       );
+    });
+
+    it('does not ask again once the buyer has skipped it', async () => {
+      stored = {
+        profile: { name: 'Ada', phone: '+2348012345678' },
+        receiptEmailSkipped: true,
+      };
+
+      await flow.start(conversationAt(ConversationState.DISCOVERY), CART);
+
+      expect(conversations.setState).toHaveBeenCalledWith(
+        'c1',
+        ConversationState.COLLECTING_FULFILLMENT,
+      );
+    });
+  });
+
+  describe('the receipt email', () => {
+    it('is asked for after the phone number, with the card to enter it', async () => {
+      stored = { profile: { name: 'Ada' } };
+
+      const replies = await flow.handle(
+        conversationAt(ConversationState.COLLECTING_PHONE),
+        '0801 234 5678',
+      );
+
+      expect(conversations.setState).toHaveBeenCalledWith(
+        'c1',
+        ConversationState.COLLECTING_EMAIL,
+      );
+      expect(replies[0].text).toContain('receipt');
+      expect(replies[0].payload).toEqual({ kind: 'email_capture', data: {} });
+    });
+
+    it('can be skipped, and the skip is remembered', async () => {
+      await flow.handle(
+        conversationAt(ConversationState.COLLECTING_EMAIL),
+        'Skip for now',
+      );
+
+      expect(conversations.mergeContext).toHaveBeenCalledWith('c1', {
+        receiptEmailSkipped: true,
+      });
+      expect(conversations.setState).toHaveBeenCalledWith(
+        'c1',
+        ConversationState.COLLECTING_FULFILLMENT,
+      );
+    });
+
+    it('puts a typed email into the card rather than trusting it unverified', async () => {
+      const replies = await flow.handle(
+        conversationAt(ConversationState.COLLECTING_EMAIL),
+        'my email is ada@example.com',
+      );
+
+      expect(replies[0].payload).toEqual({
+        kind: 'email_capture',
+        data: { email: 'ada@example.com' },
+      });
+      expect(conversations.setState).not.toHaveBeenCalled();
+      expect(stored.profile?.email).toBeUndefined();
+    });
+
+    it('moves on by itself once the email is verified in the card', async () => {
+      const replies = await flow.continueAfterSignIn(
+        conversationAt(ConversationState.COLLECTING_EMAIL),
+      );
+
+      expect(conversations.setState).toHaveBeenCalledWith(
+        'c1',
+        ConversationState.COLLECTING_FULFILLMENT,
+      );
+      expect(replies[0].text).toContain('delivered');
+    });
+
+    it('leaves a conversation that was not at the email step alone', async () => {
+      const replies = await flow.continueAfterSignIn(
+        conversationAt(ConversationState.DISCOVERY),
+      );
+
+      expect(replies).toEqual([]);
+      expect(conversations.setState).not.toHaveBeenCalled();
     });
   });
 

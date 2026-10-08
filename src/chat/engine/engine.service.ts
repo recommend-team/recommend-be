@@ -244,6 +244,18 @@ export class EngineService {
     return this.deliver(conversation, replies);
   }
 
+  /**
+   * The buyer verified their email in the checkout's receipt card. Signing in happened
+   * beside the conversation, so the checkout is moved on here — the next question
+   * arrives as if they had answered.
+   */
+  async continueCheckoutAfterSignIn(
+    conversation: Conversation,
+  ): Promise<OutboundMessage[]> {
+    const replies = await this.checkoutFlow.continueAfterSignIn(conversation);
+    return this.deliver(conversation, replies);
+  }
+
   /** Every order this device has placed, newest first. */
   async listOrders(conversationId: string): Promise<BuyerOrderSummary[]> {
     const conversation =

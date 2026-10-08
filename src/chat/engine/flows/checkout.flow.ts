@@ -71,6 +71,8 @@ export class CheckoutFlow {
         return this.captureName(conversation, answer);
       case ConversationState.COLLECTING_PHONE:
         return this.capturePhone(conversation, answer);
+      case ConversationState.COLLECTING_EMAIL:
+        return this.captureEmail(conversation, answer);
       case ConversationState.COLLECTING_FULFILLMENT:
         return this.captureFulfillment(conversation, answer);
       case ConversationState.COLLECTING_ADDRESS:
@@ -124,6 +126,46 @@ export class CheckoutFlow {
     await this.conversationService.mergeContext(conversation.id, {
       profile: { phone },
     });
+    return this.advanceFrom(conversation, ConversationState.COLLECTING_EMAIL);
+  }
+
+  /**
+   * The receipt email is entered and verified in the card, over the account events — a
+   * typed message here is either a skip, or an address to put in the card.
+   */
+  private async captureEmail(
+    conversation: Conversation,
+    answer: string,
+  ): Promise<OutboundMessage[]> {
+    if (isSkip(answer)) {
+      await this.conversationService.mergeContext(conversation.id, {
+        receiptEmailSkipped: true,
+      });
+      return this.advanceFrom(
+        conversation,
+        ConversationState.COLLECTING_FULFILLMENT,
+      );
+    }
+
+    const typed = answer.match(EMAIL)?.[0];
+    return [
+      {
+        text: typed
+          ? "Tap Send code below and I'll email you a code to confirm it — or skip it for now."
+          : 'Pop your email in below for the receipt, or skip it for now.',
+        payload: emailCapture(typed),
+      },
+    ];
+  }
+
+  /**
+   * The buyer just verified their email in the receipt card. Move the checkout on, as if
+   * they had answered — signing in happened beside the conversation, not in it.
+   */
+  async continueAfterSignIn(
+    conversation: Conversation,
+  ): Promise<OutboundMessage[]> {
+    if (conversation.state !== ConversationState.COLLECTING_EMAIL) return [];
     return this.advanceFrom(
       conversation,
       ConversationState.COLLECTING_FULFILLMENT,
@@ -308,6 +350,14 @@ export class CheckoutFlow {
       state = ConversationState.COLLECTING_PHONE;
     }
     if (state === ConversationState.COLLECTING_PHONE && profile.phone) {
+      state = ConversationState.COLLECTING_EMAIL;
+    }
+    // Asked once: never of a signed-in buyer, whose email is verified already, nor of
+    // one who has said no.
+    if (
+      state === ConversationState.COLLECTING_EMAIL &&
+      (fresh?.accountId || fresh?.context?.receiptEmailSkipped)
+    ) {
       state = ConversationState.COLLECTING_FULFILLMENT;
     }
     if (
@@ -412,6 +462,11 @@ function promptFor(state: ConversationState, name?: string): OutboundMessage {
       return {
         text: `Thanks${name ? `, ${name.split(' ')[0]}` : ''}. What number can we reach you on about the order?`,
       };
+    case ConversationState.COLLECTING_EMAIL:
+      return {
+        text: 'Where should we send your receipt? Adding your email also keeps this chat on any phone.',
+        payload: emailCapture(),
+      };
     case ConversationState.COLLECTING_FULFILLMENT:
       return {
         text: 'Would you like it delivered, or will you pick it up?',
@@ -435,6 +490,23 @@ function fulfillmentChoices() {
       ],
     },
   };
+}
+
+/** The receipt card. `email` pre-fills it when the buyer typed one into the chat. */
+function emailCapture(email?: string) {
+  return {
+    kind: 'email_capture' as const,
+    data: email ? { email } : {},
+  };
+}
+
+const EMAIL = /[^\s@]+@[^\s@]+\.[^\s@]+/;
+
+/** "Skip for now" from the card, or a typed no. */
+function isSkip(answer: string): boolean {
+  return /^(skip|no|nope|not now|later|none|no email|no thanks|i don'?t have (one|an email))\b/i.test(
+    answer.trim(),
+  );
 }
 
 function confirmChoices() {

@@ -32,6 +32,8 @@ export interface ConversationContext {
   orderReferences?: string[];
   strugglingTurns?: number;
   unansweredHandoverAt?: string;
+  /** The buyer skipped the receipt-email step. Remembered, so a later order does not ask again. */
+  receiptEmailSkipped?: boolean;
 }
 
 @Entity('conversations')

@@ -453,6 +453,9 @@ export class PwaGateway implements OnGatewayInit, OnGatewayConnection {
     await this.moveTo(socket, data, result.conversation);
     socket.emit('account', { email: result.email });
     await this.sendHistory(socket, result.conversation.id);
+
+    // Verified from the checkout's receipt card: the checkout carries on.
+    await this.engineService.continueCheckoutAfterSignIn(result.conversation);
   }
 
   /**
