@@ -38,6 +38,12 @@ import { BuyerPushSubscription } from './conversation/entities/buyer-push-subscr
 import { BuyerPushService } from './engine/buyer-push.service';
 import { LocalPushAdapter } from './adapters/local-push.adapter';
 import { PUSH_PORT } from './ports/push.port';
+import { ChatAccount } from './account/entities/chat-account.entity';
+import { AccountService } from './account/account.service';
+import { LoginCodeService } from './account/login-code.service';
+import { EMAIL_PORT } from './ports/email.port';
+import { LocalEmailAdapter } from './adapters/local-email.adapter';
+import { EmailService } from '../common/services/email.service';
 
 /**
  * The chat bounded context. `AppModule` importing this is the only permitted crossing
@@ -51,6 +57,7 @@ import { PUSH_PORT } from './ports/push.port';
       Conversation,
       ChatMessage,
       BuyerPushSubscription,
+      ChatAccount,
       User,
       Product,
       Area,
@@ -84,6 +91,10 @@ import { PUSH_PORT } from './ports/push.port';
     { provide: IDENTITY_PORT, useClass: LocalIdentityAdapter },
     { provide: PUSH_PORT, useClass: LocalPushAdapter },
     BuyerPushService,
+    AccountService,
+    LoginCodeService,
+    EmailService,
+    { provide: EMAIL_PORT, useClass: LocalEmailAdapter },
   ],
   exports: [ConversationService, SessionService],
 })

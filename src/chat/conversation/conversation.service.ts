@@ -117,6 +117,21 @@ export class ConversationService {
   }
 
   /**
+   * The conversation this one now lives in. Itself, unless it was folded into a
+   * signed-in buyer's thread — then wherever that went. Bounded, so a bad pointer
+   * cannot loop.
+   */
+  async resolveLive(conversation: Conversation): Promise<Conversation> {
+    let current = conversation;
+    for (let hop = 0; hop < 5 && current.mergedIntoId; hop++) {
+      const next = await this.findById(current.mergedIntoId);
+      if (!next) break;
+      current = next;
+    }
+    return current;
+  }
+
+  /**
    * Persist a buyer message. Returns null when `clientMessageId` has already been
    * seen, so a retry over a flaky connection does not duplicate the message or
    * trigger a second reply.
@@ -237,6 +252,8 @@ export class ConversationService {
     // find through their badge and the needing-attention filter.
     const builder = this.conversationsRepository
       .createQueryBuilder('c')
+      // One folded into a signed-in buyer's thread lives on there, not as a duplicate.
+      .where('c."mergedIntoId" IS NULL')
       .orderBy('c."lastMessageAt"', 'DESC', 'NULLS LAST')
       .addOrderBy('c."createdAt"', 'DESC')
       .skip((page - 1) * limit)
@@ -266,8 +283,8 @@ export class ConversationService {
 
     const needingAttention = await this.conversationsRepository.count({
       where: [
-        { needsAttentionAt: Not(IsNull()) },
-        { handoverRequestedAt: Not(IsNull()) },
+        { needsAttentionAt: Not(IsNull()), mergedIntoId: IsNull() },
+        { handoverRequestedAt: Not(IsNull()), mergedIntoId: IsNull() },
       ],
     });
 
@@ -360,11 +377,14 @@ export class ConversationService {
     reference: string,
     buyerPhone: string,
   ): Promise<Conversation | null> {
+    // Only live conversations: one folded into a signed-in buyer's thread handed its
+    // payment and its phone over, and the update belongs where the buyer now reads.
     const byReference = await this.conversationsRepository
       .createQueryBuilder('c')
       .where("c.context->>'pendingPaymentReference' = :reference", {
         reference,
       })
+      .andWhere('c."mergedIntoId" IS NULL')
       .orderBy('c.lastMessageAt', 'DESC', 'NULLS LAST')
       .getOne();
 
@@ -373,6 +393,7 @@ export class ConversationService {
     return this.conversationsRepository
       .createQueryBuilder('c')
       .where("c.context->'profile'->>'phone' = :phone", { phone: buyerPhone })
+      .andWhere('c."mergedIntoId" IS NULL')
       .orderBy('c.lastMessageAt', 'DESC', 'NULLS LAST')
       .getOne();
   }

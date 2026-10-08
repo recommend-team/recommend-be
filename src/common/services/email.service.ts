@@ -135,6 +135,14 @@ export class EmailService {
           <p>This code will expire in 5 minutes.</p>
           <p>If you didn't create an account, you can ignore this email.</p>
         `;
+      case 'chat-sign-in-code':
+        return `
+          <h1>Your Recommend sign-in code</h1>
+          <p>Enter this code in the Recommend chat to keep your chats and orders on any device:</p>
+          <h2 style="background-color: #f0f0f0; padding: 10px; text-align: center; font-size: 24px; letter-spacing: 5px;">${context.code}</h2>
+          <p>This code will expire in ${context.minutes} minutes.</p>
+          <p>If you didn't ask for this, you can ignore this email — nobody can sign in without the code.</p>
+        `;
       case 'password-reset':
         return `
           <h1>Reset your password</h1>

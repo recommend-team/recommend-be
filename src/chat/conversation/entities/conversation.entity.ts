@@ -57,6 +57,23 @@ export class Conversation extends BaseEntity {
   @Column({ type: 'uuid', nullable: true })
   areaId!: string | null;
 
+  /**
+   * The verified email this conversation belongs to, once the buyer has signed in. Any
+   * browser that signs in with that email joins this conversation. At most one live
+   * conversation per account — a partial unique index enforces it.
+   */
+  @Column({ type: 'uuid', nullable: true })
+  @Index()
+  accountId!: string | null;
+
+  /**
+   * Set when this conversation was folded into the account's own on sign-in. Its
+   * messages, orders and devices moved there; anything still holding this conversation
+   * (an old token, an admin link) follows the pointer.
+   */
+  @Column({ type: 'uuid', nullable: true })
+  mergedIntoId!: string | null;
+
   @Column({
     type: 'enum',
     enum: ConversationState,
