@@ -235,11 +235,20 @@ export class DiscoveryService {
   ): Promise<DiscoveryResult> {
     const harvest = emptyHarvest();
     harvest.searched = true;
-    const query = stripFiller(request.text);
 
     // Same rule as the model path: an area the buyer just named beats the one we
     // remembered, so saying "in Egbeda" moves the search to Egbeda.
     const areas = await this.locations.searchAreas(request.text);
+
+    // A place the buyer named says where, not what. Left in, every word has to match a
+    // dish, and "jollof in Lekki" finds nothing — no dish is called Lekki.
+    const placeWords = new Set(
+      areas.flatMap((area) => area.name.toLowerCase().split(/[^a-z0-9]+/)),
+    );
+    const query = stripFiller(request.text)
+      .split(' ')
+      .filter((word) => word && !placeWords.has(word))
+      .join(' ');
     let areaId = request.areaId;
 
     if (areas.length === 1) {
@@ -386,6 +395,11 @@ const FILLER = new Set([
   'would',
   'near',
   'around',
+  'in',
+  'at',
+  'by',
+  'from',
+  'inside',
 ]);
 
 /** Crude but predictable: drop filler words so "I want some jollof" searches "jollof". */

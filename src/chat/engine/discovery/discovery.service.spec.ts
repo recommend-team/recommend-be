@@ -121,6 +121,25 @@ describe('DiscoveryService (keyword fallback)', () => {
     );
   });
 
+  it('searches the dish, not the place the buyer named', async () => {
+    // Every word must match a dish, so "jollof in Lekki" found nothing: no dish is
+    // called Lekki. Two areas match "Lekki", so neither is assumed — but both words go.
+    locations.searchAreas.mockResolvedValue([
+      { id: 'a1', name: 'Lekki', stateName: 'Lagos' },
+      { id: 'a2', name: 'Ibeju-Lekki', stateName: 'Lagos' },
+    ]);
+
+    await service.discover({
+      text: 'jollof in Lekki',
+      areaId: null,
+      history: [],
+    });
+
+    expect(catalog.searchProducts).toHaveBeenCalledWith(
+      expect.objectContaining({ text: 'jollof' }),
+    );
+  });
+
   it('does not guess when the location is ambiguous', async () => {
     locations.searchAreas.mockResolvedValue([
       { id: 'a1', name: 'Ikeja', stateName: 'Lagos' },
