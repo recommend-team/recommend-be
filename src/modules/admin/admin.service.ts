@@ -514,6 +514,7 @@ export class AdminService {
         price: true,
         imageUrl: true,
         isAvailable: true,
+        isAddOn: true,
         createdAt: true,
         updatedAt: true,
         vendor: {

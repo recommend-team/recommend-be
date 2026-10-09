@@ -13,6 +13,8 @@ export enum ChatChannel {
 export enum ConversationState {
   DISCOVERY = 'DISCOVERY',
   SELECTING_ITEM = 'SELECTING_ITEM',
+  /** "Anything to go with it?" — the cart vendors' add-ons, offered once after Pay. */
+  OFFERING_ADDONS = 'OFFERING_ADDONS',
   COLLECTING_NAME = 'COLLECTING_NAME',
   COLLECTING_PHONE = 'COLLECTING_PHONE',
   /** "Where should we send your receipt?" — optional; skipped once signed in or declined. */

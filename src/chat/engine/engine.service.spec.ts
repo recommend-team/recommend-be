@@ -30,7 +30,11 @@ describe('EngineService', () => {
   };
   let registry: { send: jest.Mock };
   let discovery: { discover: jest.Mock; hasModel: jest.Mock };
-  let checkoutFlow: { start: jest.Mock; handle: jest.Mock };
+  let checkoutFlow: {
+    start: jest.Mock;
+    handle: jest.Mock;
+    addAddOns: jest.Mock;
+  };
   let handover: {
     shouldStaySilent: jest.Mock;
     announceBuyerWaiting: jest.Mock;
@@ -68,6 +72,7 @@ describe('EngineService', () => {
     checkoutFlow = {
       start: jest.fn().mockResolvedValue([{ text: 'What name should I use?' }]),
       handle: jest.fn().mockResolvedValue([{ text: 'Got it.' }]),
+      addAddOns: jest.fn(),
     };
 
     const module: TestingModule = await Test.createTestingModule({
@@ -92,6 +97,46 @@ describe('EngineService', () => {
     }).compile();
 
     service = module.get<EngineService>(EngineService);
+  });
+
+  describe('the add-on card', () => {
+    it('records what was added as the buyer’s turn, then carries on', async () => {
+      checkoutFlow.addAddOns.mockResolvedValue({
+        added: '2 × Bottled water',
+        replies: [{ text: 'What name should I use?' }],
+      });
+
+      await service.addAddOns(conversation, [{ productId: 'w1', quantity: 2 }]);
+
+      expect(conversations.recordInbound).toHaveBeenCalledWith({
+        conversationId: 'c1',
+        text: 'Add 2 × Bottled water',
+      });
+      expect(registry.send).toHaveBeenCalled();
+    });
+
+    it('records "No, thanks" when nothing was picked', async () => {
+      checkoutFlow.addAddOns.mockResolvedValue({
+        added: null,
+        replies: [{ text: 'What name should I use?' }],
+      });
+
+      await service.addAddOns(conversation, []);
+
+      expect(conversations.recordInbound).toHaveBeenCalledWith({
+        conversationId: 'c1',
+        text: 'No, thanks',
+      });
+    });
+
+    it('leaves no trace for a stale card', async () => {
+      checkoutFlow.addAddOns.mockResolvedValue({ added: null, replies: [] });
+
+      await service.addAddOns(conversation, [{ productId: 'w1', quantity: 1 }]);
+
+      expect(conversations.recordInbound).not.toHaveBeenCalled();
+      expect(registry.send).not.toHaveBeenCalled();
+    });
   });
 
   it('persists the buyer message, then the reply, then sends it', async () => {

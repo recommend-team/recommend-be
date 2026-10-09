@@ -44,6 +44,8 @@ export interface ConversationContext {
    * Never an address typed for an order that was then abandoned.
    */
   lastDeliveryAddress?: string;
+  /** Add-ons were offered for the cart now being checked out — never offered twice. */
+  addOnsOffered?: boolean;
 }
 
 @Entity('conversations')

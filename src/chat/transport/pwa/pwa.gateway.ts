@@ -339,6 +339,66 @@ export class PwaGateway implements OnGatewayInit, OnGatewayConnection {
     }
   }
 
+  /**
+   * The buyer answered the add-on card: the extras they picked, or none for "No, thanks".
+   * Which items are add-ons, and of which vendor, is decided server-side — the client's
+   * list is only a request.
+   */
+  @SubscribeMessage('checkout:addons')
+  async onCheckoutAddOns(
+    @ConnectedSocket() socket: Socket,
+    @MessageBody()
+    body: { items?: { productId?: string; quantity?: number }[] },
+  ): Promise<void> {
+    const data = await this.awaitReady(socket);
+    if (!data) return this.notReady(socket);
+
+    const verdict = await this.rateLimitService.consume(data.sessionId);
+    if (!verdict.allowed) {
+      socket.emit('chat:error', {
+        code: 'RATE_LIMITED',
+        message: "You're going a bit fast. Give it a moment and try again.",
+        retryAfter: verdict.retryAfter,
+      });
+      return;
+    }
+
+    const picked = (body?.items ?? [])
+      .filter(
+        (item) =>
+          typeof item?.productId === 'string' &&
+          Number.isInteger(item?.quantity) &&
+          (item.quantity ?? 0) > 0,
+      )
+      .slice(0, 50)
+      .map((item) => ({
+        productId: item.productId as string,
+        quantity: item.quantity as number,
+      }));
+
+    const conversation = await this.conversationService.findById(
+      data.conversationId,
+    );
+    if (!conversation) return this.notReady(socket);
+
+    this.pwaChannel.emitTyping(data.sessionId, true);
+    try {
+      await this.engineService.addAddOns(conversation, picked);
+    } catch (error) {
+      this.logger.error(
+        `Failed to add extras on ${data.conversationId}: ${
+          error instanceof Error ? error.message : 'unknown error'
+        }`,
+      );
+      socket.emit('chat:error', {
+        code: 'CHECKOUT_FAILED',
+        message: 'Something went wrong adding those. Please try again.',
+      });
+    } finally {
+      this.pwaChannel.emitTyping(data.sessionId, false);
+    }
+  }
+
   @SubscribeMessage('chat:history')
   async onHistory(
     @ConnectedSocket() socket: Socket,

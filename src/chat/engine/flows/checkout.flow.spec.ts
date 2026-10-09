@@ -27,7 +27,7 @@ describe('CheckoutFlow', () => {
   };
   let ordering: { placeCheckout: jest.Mock; deliveryFeeFor: jest.Mock };
   let identity: { upsertBuyer: jest.Mock };
-  let catalog: { getProductById: jest.Mock };
+  let catalog: { getProductById: jest.Mock; listAddOns: jest.Mock };
   /** Whatever findById should return next — the flow re-reads after every merge. */
   let stored: ConversationContext;
 
@@ -68,8 +68,12 @@ describe('CheckoutFlow', () => {
         id: 'p1',
         name: 'Jollof Rice',
         price: 3500,
+        vendorId: 'v1',
         vendorName: "Mama's Kitchen",
+        isAddOn: false,
       }),
+      // No vendor has extras unless a test says so.
+      listAddOns: jest.fn().mockResolvedValue([]),
     };
 
     const module: TestingModule = await Test.createTestingModule({
@@ -152,6 +156,184 @@ describe('CheckoutFlow', () => {
         'c1',
         ConversationState.COLLECTING_FULFILLMENT,
       );
+    });
+  });
+
+  describe('add-ons', () => {
+    const water = {
+      id: 'w1',
+      name: 'Bottled water',
+      price: 300,
+      imageUrl: null,
+      vendorId: 'v1',
+      vendorName: "Mama's Kitchen",
+      isAddOn: true,
+    };
+    const beef = { ...water, id: 'b1', name: 'Extra beef', price: 800 };
+
+    it('offers the vendor’s extras once, right after Pay', async () => {
+      catalog.listAddOns.mockResolvedValue([water, beef]);
+
+      const replies = await flow.start(
+        conversationAt(ConversationState.DISCOVERY),
+        CART,
+      );
+
+      expect(catalog.listAddOns).toHaveBeenCalledWith(['v1']);
+      expect(conversations.setState).toHaveBeenCalledWith(
+        'c1',
+        ConversationState.OFFERING_ADDONS,
+      );
+      expect(stored.addOnsOffered).toBe(true);
+      expect(replies[0].text).toBe('Anything to go with it?');
+      expect(replies[0].payload).toEqual({
+        kind: 'addon_offer',
+        data: {
+          vendors: [
+            {
+              vendorId: 'v1',
+              vendorName: "Mama's Kitchen",
+              items: [
+                {
+                  productId: 'w1',
+                  name: 'Bottled water',
+                  price: 300,
+                  imageUrl: null,
+                },
+                {
+                  productId: 'b1',
+                  name: 'Extra beef',
+                  price: 800,
+                  imageUrl: null,
+                },
+              ],
+            },
+          ],
+        },
+      });
+    });
+
+    it('skips the step when no vendor in the cart has extras', async () => {
+      await flow.start(conversationAt(ConversationState.DISCOVERY), CART);
+
+      expect(conversations.setState).toHaveBeenCalledWith(
+        'c1',
+        ConversationState.COLLECTING_NAME,
+      );
+    });
+
+    it('does not offer twice for the same order', async () => {
+      catalog.listAddOns.mockResolvedValue([water]);
+      stored = { addOnsOffered: true };
+
+      await flow.start(conversationAt(ConversationState.DISCOVERY), CART);
+
+      expect(conversations.setState).not.toHaveBeenCalledWith(
+        'c1',
+        ConversationState.OFFERING_ADDONS,
+      );
+    });
+
+    it('offers only for vendors with a main item — never for an add-on alone', async () => {
+      catalog.getProductById.mockResolvedValue({ ...water });
+      catalog.listAddOns.mockResolvedValue([]);
+
+      await flow.start(conversationAt(ConversationState.DISCOVERY), [
+        { productId: 'w1', quantity: 1 },
+      ]);
+
+      expect(catalog.listAddOns).toHaveBeenCalledWith([]);
+    });
+
+    it('adds the picked extras to the cart, at the database price, then carries on', async () => {
+      catalog.listAddOns.mockResolvedValue([water, beef]);
+      stored = { pendingCart: [...CART] };
+
+      const { added, replies } = await flow.addAddOns(
+        conversationAt(ConversationState.OFFERING_ADDONS, stored),
+        [
+          { productId: 'w1', quantity: 2 },
+          { productId: 'b1', quantity: 1 },
+        ],
+      );
+
+      expect(added).toBe('2 × Bottled water, 1 × Extra beef');
+      expect(stored.pendingCart).toEqual([
+        { productId: 'p1', quantity: 2 },
+        { productId: 'w1', quantity: 2, expectedUnitPrice: 300 },
+        { productId: 'b1', quantity: 1, expectedUnitPrice: 800 },
+      ]);
+      expect(conversations.setState).toHaveBeenCalledWith(
+        'c1',
+        ConversationState.COLLECTING_NAME,
+      );
+      expect(replies[0].text).toContain('name');
+    });
+
+    it('ignores anything that is not one of the offered extras', async () => {
+      catalog.listAddOns.mockResolvedValue([water]);
+      stored = { pendingCart: [...CART] };
+
+      const { added } = await flow.addAddOns(
+        conversationAt(ConversationState.OFFERING_ADDONS, stored),
+        [
+          { productId: 'some-main-dish', quantity: 3 },
+          { productId: 'w1', quantity: 0 },
+        ],
+      );
+
+      expect(added).toBeNull();
+      expect(stored.pendingCart).toEqual(CART);
+    });
+
+    it('caps a quantity at 50', async () => {
+      catalog.listAddOns.mockResolvedValue([water]);
+      stored = { pendingCart: [...CART] };
+
+      await flow.addAddOns(
+        conversationAt(ConversationState.OFFERING_ADDONS, stored),
+        [{ productId: 'w1', quantity: 500 }],
+      );
+
+      expect(stored.pendingCart?.[1]).toMatchObject({ quantity: 50 });
+    });
+
+    it('changes nothing when the card is answered after the checkout moved on', async () => {
+      const { replies } = await flow.addAddOns(
+        conversationAt(ConversationState.COLLECTING_PHONE),
+        [{ productId: 'w1', quantity: 1 }],
+      );
+
+      expect(replies).toEqual([]);
+      expect(catalog.listAddOns).not.toHaveBeenCalled();
+    });
+
+    it('moves on when the buyer types no', async () => {
+      await flow.handle(
+        conversationAt(ConversationState.OFFERING_ADDONS, {
+          pendingCart: CART,
+        }),
+        'No, thanks',
+      );
+
+      expect(conversations.setState).toHaveBeenCalledWith(
+        'c1',
+        ConversationState.COLLECTING_NAME,
+      );
+    });
+
+    it('points back to the card rather than guessing a typed item', async () => {
+      catalog.listAddOns.mockResolvedValue([water]);
+
+      const replies = await flow.handle(
+        conversationAt(ConversationState.OFFERING_ADDONS, {
+          pendingCart: CART,
+        }),
+        'add coke',
+      );
+
+      expect(conversations.setState).not.toHaveBeenCalled();
+      expect(replies[0].payload?.kind).toBe('addon_offer');
     });
   });
 

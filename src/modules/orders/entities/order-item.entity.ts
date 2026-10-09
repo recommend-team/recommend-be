@@ -53,6 +53,13 @@ export class OrderItem {
   @Column({ type: 'decimal', precision: 10, scale: 2 })
   lineTotal!: number;
 
+  /**
+   * Bought as an extra, at purchase time — so the kitchen packs it with the meal. Kept on
+   * the line like the name and price: changing the product later does not relabel orders.
+   */
+  @Column({ type: 'boolean', default: false })
+  isAddOn!: boolean;
+
   @CreateDateColumn({ type: 'timestamptz' })
   createdAt!: Date;
 }

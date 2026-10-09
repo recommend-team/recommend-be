@@ -1,6 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Brackets, Repository } from 'typeorm';
+import { Brackets, In, Repository } from 'typeorm';
 import { User } from '../../modules/auth/entities/auth.entity';
 import { Product } from '../../modules/products/entities/product.entity';
 import { Role } from '../../common/enums/roles.enum';
@@ -134,6 +134,9 @@ export class LocalCatalogAdapter implements CatalogPort {
       .createQueryBuilder('product')
       .innerJoinAndSelect('product.vendor', 'vendor')
       .where('product.isAvailable = true')
+      // Add-ons are offered at checkout, never found on their own: someone asking for
+      // food is not shown "extra beef".
+      .andWhere('product.isAddOn = false')
       .andWhere('vendor.status = :status', { status: SellerStatus.APPROVED });
 
     if (query.vendorId) {
@@ -188,6 +191,19 @@ export class LocalCatalogAdapter implements CatalogPort {
     });
     return product ? toProductSummary(product) : null;
   }
+
+  async listAddOns(vendorIds: string[]): Promise<ProductSummary[]> {
+    if (vendorIds.length === 0) return [];
+
+    const products = await this.productsRepository.find({
+      where: { vendorId: In(vendorIds), isAddOn: true, isAvailable: true },
+      relations: ['vendor'],
+      // Cheapest first: water before a jug of zobo is the order people scan in.
+      order: { price: 'ASC', name: 'ASC' },
+      take: 60,
+    });
+    return products.map(toProductSummary);
+  }
 }
 
 function clamp(value: number | undefined, fallback: number): number {
@@ -238,5 +254,6 @@ function toProductSummary(product: Product): ProductSummary {
     vendorName: product.vendor?.businessName ?? null,
     // Lets a product card open its vendor's menu via GET /store/:slug.
     vendorSlug: product.vendor?.slug ?? null,
+    isAddOn: product.isAddOn,
   };
 }

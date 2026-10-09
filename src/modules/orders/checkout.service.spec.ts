@@ -33,6 +33,7 @@ interface SavedItem {
   unitPrice: number;
   quantity: number;
   lineTotal: number;
+  isAddOn: boolean;
 }
 
 const product = (over: Record<string, unknown> = {}) => ({
@@ -40,6 +41,7 @@ const product = (over: Record<string, unknown> = {}) => ({
   name: 'Jollof Rice with Chicken',
   price: 3500,
   isAvailable: true,
+  isAddOn: false,
   vendorId: 'v1',
   vendor: { id: 'v1', status: SellerStatus.APPROVED, isOpen: true },
   ...over,
@@ -303,6 +305,86 @@ describe('CheckoutService', () => {
         platformFee: 1200,
         vendorAmount: 4800,
       });
+    });
+  });
+
+  describe('add-ons', () => {
+    const water = (over: Record<string, unknown> = {}) =>
+      product({
+        id: 'w1',
+        name: 'Bottled water',
+        price: 300,
+        isAddOn: true,
+        ...over,
+      });
+
+    const changesFor = async (
+      items: { productId: string; quantity: number }[],
+    ) => {
+      const error = (await service
+        .createCheckout({ ...baseDto, items } as never)
+        .catch((caught: unknown) => caught)) as ConflictException;
+      return (error.getResponse() as { changes: Record<string, unknown>[] })
+        .changes;
+    };
+
+    it('is charged with a main item from its own vendor', async () => {
+      products.find.mockResolvedValue([
+        product({ id: 'p1', price: 3500 }),
+        water(),
+      ]);
+
+      const result = await service.createCheckout({
+        ...baseDto,
+        items: [
+          { productId: 'p1', quantity: 1 },
+          { productId: 'w1', quantity: 2 },
+        ],
+      } as never);
+
+      expect(result.goodsTotal).toBe(4100);
+      expect(saved.items.map((item) => item.productName)).toEqual([
+        'Jollof Rice with Chicken',
+        'Bottled water',
+      ]);
+      // Recorded on the line, so the kitchen sees it as an extra to pack with the meal.
+      expect(saved.items.map((item) => item.isAddOn)).toEqual([false, true]);
+    });
+
+    it('is refused on its own', async () => {
+      products.find.mockResolvedValue([water()]);
+
+      const changes = await changesFor([{ productId: 'w1', quantity: 1 }]);
+
+      expect(changes).toEqual([
+        {
+          productId: 'w1',
+          productName: 'Bottled water',
+          reason: 'ADDON_WITHOUT_MAIN',
+        },
+      ]);
+    });
+
+    it('is refused with a main item from a different vendor', async () => {
+      products.find.mockResolvedValue([
+        product({ id: 'p1' }),
+        water({
+          vendorId: 'v2',
+          vendor: { id: 'v2', status: SellerStatus.APPROVED, isOpen: true },
+        }),
+      ]);
+
+      const changes = await changesFor([
+        { productId: 'p1', quantity: 1 },
+        { productId: 'w1', quantity: 1 },
+      ]);
+
+      expect(changes).toEqual([
+        expect.objectContaining({
+          productId: 'w1',
+          reason: 'ADDON_WITHOUT_MAIN',
+        }),
+      ]);
     });
   });
 

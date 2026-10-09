@@ -40,7 +40,11 @@ describe('PwaGateway — signing in', () => {
     tokenFor: jest.Mock;
   };
   let conversationService: Record<string, jest.Mock>;
-  let engine: { greet: jest.Mock; continueCheckoutAfterSignIn: jest.Mock };
+  let engine: {
+    greet: jest.Mock;
+    continueCheckoutAfterSignIn: jest.Mock;
+    addAddOns: jest.Mock;
+  };
   let accounts: Record<string, jest.Mock>;
   let gateway: PwaGateway;
 
@@ -96,6 +100,7 @@ describe('PwaGateway — signing in', () => {
     engine = {
       greet: jest.fn(() => Promise.resolve({})),
       continueCheckoutAfterSignIn: jest.fn(() => Promise.resolve([])),
+      addAddOns: jest.fn(() => Promise.resolve([])),
     };
     accounts = {
       emailFor: jest.fn(() => Promise.resolve(null)),
@@ -107,8 +112,10 @@ describe('PwaGateway — signing in', () => {
       conversationService as never,
       engine as never,
       {} as never,
-      {} as never,
-      {} as never,
+      { emitTyping: jest.fn() } as never,
+      {
+        consume: jest.fn(() => Promise.resolve({ allowed: true })),
+      } as never,
       {} as never,
       accounts as never,
     );
@@ -119,6 +126,24 @@ describe('PwaGateway — signing in', () => {
     await gateway.handleConnection(socket as never);
     return socket;
   };
+
+  it('passes only well-formed add-on picks to the engine', async () => {
+    const mine = conversation('mine', 'session-mine');
+    const socket = await connect('session-mine');
+
+    await gateway.onCheckoutAddOns(socket as never, {
+      items: [
+        { productId: 'w1', quantity: 2 },
+        { productId: 'b1', quantity: 0 },
+        { productId: 'x1', quantity: 1.5 },
+        { quantity: 1 },
+      ],
+    });
+
+    expect(engine.addAddOns).toHaveBeenCalledWith(mine, [
+      { productId: 'w1', quantity: 2 },
+    ]);
+  });
 
   it('moves a browser holding a folded conversation onto the live one as it connects', async () => {
     conversation('home', 'session-home');

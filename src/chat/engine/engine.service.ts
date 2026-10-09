@@ -247,6 +247,28 @@ export class EngineService {
   }
 
   /**
+   * The buyer answered the add-on card. Recorded as their turn — "Add 2 × Bottled water"
+   * or "No, thanks" — so the thread reads as a conversation, then the checkout carries on.
+   */
+  async addAddOns(
+    conversation: Conversation,
+    picked: { productId: string; quantity: number }[],
+  ): Promise<OutboundMessage[]> {
+    const { added, replies } = await this.checkoutFlow.addAddOns(
+      conversation,
+      picked,
+    );
+    // A stale card (the checkout already moved on) leaves no trace.
+    if (replies.length === 0) return [];
+
+    await this.conversationService.recordInbound({
+      conversationId: conversation.id,
+      text: added ? `Add ${added}` : 'No, thanks',
+    });
+    return this.deliver(conversation, replies);
+  }
+
+  /**
    * The buyer verified their email in the checkout's receipt card. Signing in happened
    * beside the conversation, so the checkout is moved on here — the next question
    * arrives as if they had answered.

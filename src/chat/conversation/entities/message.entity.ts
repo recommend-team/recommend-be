@@ -18,7 +18,9 @@ export interface MessagePayload {
     | 'order_summary'
     | 'payment_link'
     /** The receipt-email card at checkout: an email box, its code, and Skip. */
-    | 'email_capture';
+    | 'email_capture'
+    /** "Anything to go with it?" — each cart vendor's add-ons, with steppers. */
+    | 'addon_offer';
   data?: Record<string, unknown>;
 }
 
