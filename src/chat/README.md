@@ -37,9 +37,22 @@ Discovery is where the LLM runs, and its tools stay read-only.
 
 ## Identity
 
-Buyers are **not** authenticated. A conversation is owned by a signed session token held
-by the device — never by a phone number, because the number a buyer types is unverified
-and typing someone else's must never surface their history.
+A conversation is owned by a signed session token held by the device — never by a phone
+number, because the number a buyer types is unverified and typing someone else's must
+never surface their history.
+
+Signing in is optional and never needed to chat. A buyer who proves an email (a six-digit
+code, `account/`) attaches their conversation to a `chat_accounts` row. Any other browser
+that signs in with that email is moved onto the same conversation — it is given that
+conversation's session token, so delivery, live updates and push need no changes. If the
+other browser had its own thread, it is folded in (`account/merge.ts`) and left with a
+`mergedIntoId` pointer that old tokens and admin links follow. Verified emails live apart
+from `users`, whose unique emails also belong to vendors and admins.
+
+Checkout asks for a receipt email after the phone number (`COLLECTING_EMAIL`). It is
+entered and verified in the `email_capture` card over the same sign-in events, and can be
+skipped; a signed-in buyer, or one who skipped, is not asked again. A verified email is
+what Paystack receives — otherwise it gets a non-routable placeholder.
 
 Contact details accumulate in `Conversation.context.profile` as the assistant collects
 them. A `users` row with `role = BUYER` is only minted at checkout, once name and phone
