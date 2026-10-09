@@ -40,6 +40,21 @@ export class PendingUser {
   @Column({ type: 'enum', enum: RiderType, nullable: true })
   riderType!: RiderType | null;
 
+  // A vendor's business, as given at sign-up. Held here until the code is verified and
+  // carried onto the account then — without it the vendor started with no name, no
+  // category and no store link, and buyers could not find them.
+  @Column({ type: 'varchar', nullable: true })
+  businessName!: string | null;
+
+  @Column({ type: 'varchar', nullable: true })
+  businessAddress!: string | null;
+
+  @Column({ type: 'varchar', nullable: true })
+  businessCategory!: string | null;
+
+  @Column({ type: 'text', nullable: true })
+  businessDescription!: string | null;
+
   @Column({ type: 'varchar' })
   verificationCode!: string;
 

@@ -29,6 +29,7 @@ import { VerifyEmailDto } from './dto/verify-email.dto';
 import { User } from './entities/auth.entity';
 import { EmailService } from '../../common/services/email.service';
 import { WelcomeEmailService } from '../../common/services/welcome-email.service';
+import { uniqueSlug } from '../../common/utils/slug.util';
 
 /** Safe user shape returned to frontend — no passwords or secret tokens */
 export type SafeUser = Omit<
@@ -96,6 +97,11 @@ export class AuthService {
       role: Role.SELLER,
       vendorType: dto.vendorType,
       riderType: null,
+      // Carried onto the account at verification — see verifyEmail.
+      businessName: dto.businessName?.trim() || null,
+      businessAddress: dto.businessAddress?.trim() || null,
+      businessCategory: dto.businessCategory?.trim() || null,
+      businessDescription: dto.businessDescription?.trim() || null,
       verificationCode,
       verificationCodeExpiresAt: new Date(Date.now() + 5 * 60 * 1000),
       expiresAt: new Date(Date.now() + 5 * 60 * 1000),
@@ -286,6 +292,18 @@ export class AuthService {
       status,
       isEmailVerified: true,
       emailVerifiedAt: new Date(),
+      // The business as given at sign-up, with its store link, so a new vendor is
+      // findable as soon as they are approved — not after filling Store details twice.
+      businessName: pendingUser.businessName,
+      businessAddress: pendingUser.businessAddress,
+      businessCategory: pendingUser.businessCategory,
+      businessDescription: pendingUser.businessDescription,
+      slug:
+        pendingUser.role === Role.SELLER && pendingUser.businessName
+          ? await uniqueSlug(pendingUser.businessName, (slug) =>
+              this.usersRepository.exists({ where: { slug } }),
+            )
+          : null,
     });
 
     const savedUser = await this.usersRepository.save(newUser);

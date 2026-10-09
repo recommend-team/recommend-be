@@ -15,6 +15,7 @@ import {
   UpdateNonRegisteredKycDto,
 } from './dto/update-kyc.dto';
 import { LocationsService } from '../locations/locations.service';
+import { uniqueSlug } from '../../common/utils/slug.util';
 
 export interface VendorProfileResponse {
   id: string;
@@ -96,7 +97,9 @@ export class SellersService {
       vendor.businessName = dto.businessName;
       // Auto-generate slug on first businessName set only
       if (!vendor.slug) {
-        vendor.slug = await this.generateUniqueSlug(dto.businessName);
+        vendor.slug = await uniqueSlug(dto.businessName, (slug) =>
+          this.usersRepository.exists({ where: { slug } }),
+        );
       }
     }
     if (dto.businessAddress !== undefined)
@@ -409,28 +412,6 @@ export class SellersService {
       createdAt: vendor.createdAt,
       updatedAt: vendor.updatedAt,
     };
-  }
-
-  /**
-   * Generates a unique kebab-case slug from a business name.
-   * Appends -2, -3, etc. if the base slug is already taken.
-   */
-  private async generateUniqueSlug(businessName: string): Promise<string> {
-    const base = businessName
-      .toLowerCase()
-      .replace(/[^a-z0-9]+/g, '-')
-      .replace(/^-|-$/g, '')
-      .slice(0, 60);
-
-    let slug = base;
-    let counter = 2;
-
-    while (await this.usersRepository.findOne({ where: { slug } })) {
-      slug = `${base}-${counter}`;
-      counter++;
-    }
-
-    return slug;
   }
 
   /**
