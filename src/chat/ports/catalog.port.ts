@@ -28,6 +28,8 @@ export interface ProductSummary {
   vendorName: string | null;
   /** Needed so a product card can open its vendor menu via GET /store/:slug. */
   vendorSlug: string | null;
+  /** Sold only with a main item from the same vendor. Never in search results. */
+  isAddOn: boolean;
 }
 
 export interface VendorSearchQuery {
@@ -67,4 +69,6 @@ export interface CatalogPort {
   getVendorById(vendorId: string): Promise<VendorSummary | null>;
   searchProducts(query: ProductSearchQuery): Promise<ProductSummary[]>;
   getProductById(productId: string): Promise<ProductSummary | null>;
+  /** The available add-ons of these vendors, for the checkout offer. */
+  listAddOns(vendorIds: string[]): Promise<ProductSummary[]>;
 }

@@ -158,10 +158,16 @@ export class AdminChatController {
   @ApiResponse({ status: 200, description: 'Transcript' })
   @ApiResponse({ status: 404, description: 'No such conversation' })
   async transcript(@Param('id', ParseUUIDPipe) id: string) {
-    const conversation = await this.conversations.findById(id);
-    if (!conversation) throw new NotFoundException('Conversation not found');
+    const found = await this.conversations.findById(id);
+    if (!found) throw new NotFoundException('Conversation not found');
+    // An old link — an alert, a bookmark — to one folded into a signed-in buyer's
+    // thread opens that thread. `id` in the answer says which it is.
+    const conversation = await this.conversations.resolveLive(found);
 
-    const messages = await this.conversations.getHistory(id, { limit: 200 });
+    const messages = await this.conversations.getHistory(conversation.id, {
+      limit: 200,
+    });
+    const emails = await this.conversations.verifiedEmails([conversation]);
 
     return {
       message: 'Conversation retrieved successfully',
@@ -170,6 +176,9 @@ export class AdminChatController {
         channel: conversation.channel,
         buyerName: conversation.context?.profile?.name ?? null,
         buyerPhone: conversation.context?.profile?.phone ?? null,
+        verifiedEmail: conversation.accountId
+          ? (emails.get(conversation.accountId) ?? null)
+          : null,
         needsAttentionAt: conversation.needsAttentionAt,
         attentionReason: conversation.attentionReason,
         handoverRequestedAt: conversation.handoverRequestedAt,

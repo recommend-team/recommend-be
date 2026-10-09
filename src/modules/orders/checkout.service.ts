@@ -24,7 +24,9 @@ export type CartChangeReason =
   | 'REMOVED'
   | 'UNAVAILABLE'
   | 'VENDOR_CLOSED'
-  | 'PRICE_CHANGED';
+  | 'PRICE_CHANGED'
+  /** An add-on with no main item from its vendor in the cart — never sold alone. */
+  | 'ADDON_WITHOUT_MAIN';
 
 export interface CartChange {
   productId: string;
@@ -245,6 +247,26 @@ export class CheckoutService {
       }
     }
 
+    // An add-on rides with a meal from its own kitchen: one vendor cooks, packs and
+    // delivers both, and is paid for both. Without a main item from that vendor it is
+    // refused — the client hides this case, but the server is where it is enforced.
+    const vendorsWithMain = new Set(
+      dto.items
+        .map((line) => products.get(line.productId))
+        .filter((product): product is Product => !!product && !product.isAddOn)
+        .map((product) => product.vendorId),
+    );
+    for (const line of dto.items) {
+      const product = products.get(line.productId);
+      if (product?.isAddOn && !vendorsWithMain.has(product.vendorId)) {
+        changes.push({
+          productId: line.productId,
+          productName: product.name,
+          reason: 'ADDON_WITHOUT_MAIN',
+        });
+      }
+    }
+
     return changes;
   }
 
@@ -283,6 +305,7 @@ export class CheckoutService {
           unitPrice,
           quantity: line.quantity,
           lineTotal,
+          isAddOn: product.isAddOn,
         });
       }
 
@@ -378,6 +401,7 @@ interface VendorGroup {
     unitPrice: number;
     quantity: number;
     lineTotal: number;
+    isAddOn: boolean;
   }[];
 }
 

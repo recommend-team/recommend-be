@@ -30,7 +30,11 @@ describe('EngineService', () => {
   };
   let registry: { send: jest.Mock };
   let discovery: { discover: jest.Mock; hasModel: jest.Mock };
-  let checkoutFlow: { start: jest.Mock; handle: jest.Mock };
+  let checkoutFlow: {
+    start: jest.Mock;
+    handle: jest.Mock;
+    addAddOns: jest.Mock;
+  };
   let handover: {
     shouldStaySilent: jest.Mock;
     announceBuyerWaiting: jest.Mock;
@@ -68,6 +72,7 @@ describe('EngineService', () => {
     checkoutFlow = {
       start: jest.fn().mockResolvedValue([{ text: 'What name should I use?' }]),
       handle: jest.fn().mockResolvedValue([{ text: 'Got it.' }]),
+      addAddOns: jest.fn(),
     };
 
     const module: TestingModule = await Test.createTestingModule({
@@ -92,6 +97,46 @@ describe('EngineService', () => {
     }).compile();
 
     service = module.get<EngineService>(EngineService);
+  });
+
+  describe('the add-on card', () => {
+    it('records what was added as the buyer’s turn, then carries on', async () => {
+      checkoutFlow.addAddOns.mockResolvedValue({
+        added: '2 × Bottled water',
+        replies: [{ text: 'What name should I use?' }],
+      });
+
+      await service.addAddOns(conversation, [{ productId: 'w1', quantity: 2 }]);
+
+      expect(conversations.recordInbound).toHaveBeenCalledWith({
+        conversationId: 'c1',
+        text: 'Add 2 × Bottled water',
+      });
+      expect(registry.send).toHaveBeenCalled();
+    });
+
+    it('records "No, thanks" when nothing was picked', async () => {
+      checkoutFlow.addAddOns.mockResolvedValue({
+        added: null,
+        replies: [{ text: 'What name should I use?' }],
+      });
+
+      await service.addAddOns(conversation, []);
+
+      expect(conversations.recordInbound).toHaveBeenCalledWith({
+        conversationId: 'c1',
+        text: 'No, thanks',
+      });
+    });
+
+    it('leaves no trace for a stale card', async () => {
+      checkoutFlow.addAddOns.mockResolvedValue({ added: null, replies: [] });
+
+      await service.addAddOns(conversation, [{ productId: 'w1', quantity: 1 }]);
+
+      expect(conversations.recordInbound).not.toHaveBeenCalled();
+      expect(registry.send).not.toHaveBeenCalled();
+    });
   });
 
   it('persists the buyer message, then the reply, then sends it', async () => {
@@ -164,6 +209,45 @@ describe('EngineService', () => {
     expect(discovery.discover).not.toHaveBeenCalled();
     expect(firstReplyText()).toContain("I'm James from Recommend");
     expect(firstReplyText()).toContain('What are you looking for');
+  });
+
+  describe('a buyer who has bought before', () => {
+    const returning = () =>
+      ({
+        ...conversation,
+        context: {
+          profile: { name: 'Ada Obi', phone: '+2348012345678' },
+          lastPaidAt: '2026-10-01T10:00:00.000Z',
+        },
+      }) as typeof conversation;
+
+    it('is greeted by first name', async () => {
+      await service.handleInbound({ conversation: returning(), text: 'Hello' });
+
+      expect(firstReplyText()).toBe('Hi Ada! What can I get you today?');
+    });
+
+    it('is named to the model, so it greets them too', async () => {
+      discovery.hasModel.mockReturnValue(true);
+
+      await service.handleInbound({ conversation: returning(), text: 'Hello' });
+
+      expect(discovery.discover).toHaveBeenCalledWith(
+        expect.objectContaining({ buyerFirstName: 'Ada' }),
+      );
+    });
+
+    it('is not assumed from a name typed into a checkout never paid for', async () => {
+      await service.handleInbound({
+        conversation: {
+          ...conversation,
+          context: { profile: { name: 'Ada Obi' } },
+        } as typeof conversation,
+        text: 'Hello',
+      });
+
+      expect(firstReplyText()).toContain("I'm James from Recommend");
+    });
   });
 
   it('lets the model answer a greeting when there is one — a person, not a fixed line', async () => {

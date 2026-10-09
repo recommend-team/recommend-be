@@ -30,6 +30,8 @@ export interface StorefrontResponse {
     price: number;
     imageUrl: string | null;
     isAvailable: boolean;
+    /** Sold only with a main item from this vendor — shown apart, under extras. */
+    isAddOn: boolean;
   }[];
 }
 
@@ -158,6 +160,7 @@ export class StoreService {
           price: Number(p.price),
           imageUrl: p.imageUrl,
           isAvailable: p.isAvailable,
+          isAddOn: p.isAddOn,
         })),
       },
     };

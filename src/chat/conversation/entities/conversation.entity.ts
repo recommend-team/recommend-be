@@ -32,6 +32,20 @@ export interface ConversationContext {
   orderReferences?: string[];
   strugglingTurns?: number;
   unansweredHandoverAt?: string;
+  /** The buyer skipped the receipt-email step. Remembered, so a later order does not ask again. */
+  receiptEmailSkipped?: boolean;
+  /**
+   * When this buyer last paid. Set only by a confirmed payment: a returning buyer is one
+   * who has bought, not one who got as far as typing their details.
+   */
+  lastPaidAt?: string;
+  /**
+   * Where their most recent paid delivery went — offered back at the next checkout.
+   * Never an address typed for an order that was then abandoned.
+   */
+  lastDeliveryAddress?: string;
+  /** Add-ons were offered for the cart now being checked out — never offered twice. */
+  addOnsOffered?: boolean;
 }
 
 @Entity('conversations')
@@ -56,6 +70,23 @@ export class Conversation extends BaseEntity {
   /** Resolved from what the buyer says about where they are. Drives area matching. */
   @Column({ type: 'uuid', nullable: true })
   areaId!: string | null;
+
+  /**
+   * The verified email this conversation belongs to, once the buyer has signed in. Any
+   * browser that signs in with that email joins this conversation. At most one live
+   * conversation per account — a partial unique index enforces it.
+   */
+  @Column({ type: 'uuid', nullable: true })
+  @Index()
+  accountId!: string | null;
+
+  /**
+   * Set when this conversation was folded into the account's own on sign-in. Its
+   * messages, orders and devices moved there; anything still holding this conversation
+   * (an old token, an admin link) follows the pointer.
+   */
+  @Column({ type: 'uuid', nullable: true })
+  mergedIntoId!: string | null;
 
   @Column({
     type: 'enum',

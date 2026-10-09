@@ -37,6 +37,7 @@ export class ProductsService {
       price: dto.price,
       imageUrl: dto.imageUrl ?? null,
       isAvailable: dto.isAvailable ?? true,
+      isAddOn: dto.isAddOn ?? false,
     });
 
     const saved = await this.productsRepository.save(product);
@@ -86,6 +87,7 @@ export class ProductsService {
     if (dto.price !== undefined) product.price = dto.price;
     if (dto.imageUrl !== undefined) product.imageUrl = dto.imageUrl ?? null;
     if (dto.isAvailable !== undefined) product.isAvailable = dto.isAvailable;
+    if (dto.isAddOn !== undefined) product.isAddOn = dto.isAddOn;
 
     const saved = await this.productsRepository.save(product);
     return { message: 'Product updated successfully', data: saved };

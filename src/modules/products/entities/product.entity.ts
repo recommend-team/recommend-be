@@ -36,6 +36,13 @@ export class Product {
   @Column({ type: 'boolean', default: true })
   isAvailable!: boolean;
 
+  /**
+   * Sold only alongside a main item from the same vendor — drinks, extra protein. Kept out
+   * of discovery, offered at checkout, refused on its own (ADDONS_PLAN.md).
+   */
+  @Column({ type: 'boolean', default: false })
+  isAddOn!: boolean;
+
   @CreateDateColumn({ type: 'timestamptz' })
   createdAt!: Date;
 

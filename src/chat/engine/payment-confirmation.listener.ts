@@ -85,6 +85,14 @@ export class PaymentConfirmationListener {
         pendingPaymentReference: undefined,
         pendingCheckoutId: undefined,
         pendingCart: [],
+        // The next order is offered extras afresh.
+        addOnsOffered: false,
+        // A returning buyer from here on: greeted by name, and offered this address
+        // back next time. A pickup leaves the last delivery address as it was.
+        lastPaidAt: event.paidAt.toISOString(),
+        ...(event.fulfillmentType === 'DELIVERY' && event.deliveryAddress
+          ? { lastDeliveryAddress: event.deliveryAddress }
+          : {}),
       });
 
       await this.conversationService.setState(

@@ -95,13 +95,19 @@ export class AdminCatalogService {
   ): Promise<ProductSummary[]> {
     const areaId = await this.resolveArea(conversationId, query.areaId);
 
-    return this.catalog.searchProducts({
+    const products = await this.catalog.searchProducts({
       text: query.search?.trim() || undefined,
       vendorId: query.vendorId,
       areaId: areaId ?? undefined,
       categories: categoryFilter(query.category),
       limit: query.limit ?? 20,
     });
+
+    // Browsing one store, the admin sees its extras too — flagged, so the builder lists
+    // them apart and only alongside a meal. A search across stores never surfaces them,
+    // as it never does for buyers. Checkout refuses an extra on its own either way.
+    if (!query.vendorId || query.search?.trim()) return products;
+    return [...products, ...(await this.catalog.listAddOns([query.vendorId]))];
   }
 
   /** What the admin is looking at, falling back to what the conversation knows. */

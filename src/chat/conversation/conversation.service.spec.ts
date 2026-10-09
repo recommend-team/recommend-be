@@ -241,6 +241,7 @@ describe('ConversationService', () => {
   describe('listForAdmin', () => {
     it('puts the most recent conversation first, whatever is waiting', async () => {
       const builder = {
+        where: jest.fn().mockReturnThis(),
         orderBy: jest.fn().mockReturnThis(),
         addOrderBy: jest.fn().mockReturnThis(),
         skip: jest.fn().mockReturnThis(),
@@ -262,6 +263,58 @@ describe('ConversationService', () => {
       );
       expect(builder.addOrderBy).toHaveBeenCalledTimes(1);
       expect(builder.addOrderBy).toHaveBeenCalledWith('c."createdAt"', 'DESC');
+      // One folded into a signed-in buyer's thread is not listed twice.
+      expect(builder.where).toHaveBeenCalledWith('c."mergedIntoId" IS NULL');
+    });
+  });
+
+  describe('resolveLive', () => {
+    it('follows a folded conversation to the one it went into', async () => {
+      const live = { id: 'home', mergedIntoId: null };
+      conversations.findOne.mockResolvedValueOnce(live);
+
+      const result = await service.resolveLive({
+        id: 'old',
+        mergedIntoId: 'home',
+      } as never);
+
+      expect(result).toBe(live);
+    });
+
+    it('stops rather than looping on a bad pointer', async () => {
+      const loop = { id: 'a', mergedIntoId: 'a' };
+      conversations.findOne.mockResolvedValue(loop);
+
+      await expect(service.resolveLive(loop as never)).resolves.toBe(loop);
+      expect(conversations.findOne).toHaveBeenCalledTimes(5);
+    });
+  });
+
+  describe('verifiedEmails', () => {
+    it('finds the email of each signed-in conversation in one query', async () => {
+      const find = jest
+        .fn()
+        .mockResolvedValue([{ id: 'account-1', email: 'ada@example.com' }]);
+      Object.assign(conversations, { manager: { find } });
+
+      const emails = await service.verifiedEmails([
+        { accountId: 'account-1' },
+        { accountId: 'account-1' },
+        { accountId: null },
+      ]);
+
+      expect(emails.get('account-1')).toBe('ada@example.com');
+      expect(find).toHaveBeenCalledTimes(1);
+    });
+
+    it('asks nothing when nobody on the page is signed in', async () => {
+      const find = jest.fn();
+      Object.assign(conversations, { manager: { find } });
+
+      const emails = await service.verifiedEmails([{ accountId: null }]);
+
+      expect(emails.size).toBe(0);
+      expect(find).not.toHaveBeenCalled();
     });
   });
 });

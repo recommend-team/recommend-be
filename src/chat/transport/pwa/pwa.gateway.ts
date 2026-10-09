@@ -18,6 +18,19 @@ import { ChatChannel } from '../../enums/chat.enums';
 import { ChatRateLimitService } from '../../session/rate-limit.service';
 import { allowedOrigins } from '../../../config/cors';
 import { BuyerPushService } from '../../engine/buyer-push.service';
+import { AccountService } from '../../account/account.service';
+import type { Conversation } from '../../conversation/entities/conversation.entity';
+
+/** Buyer-facing wording for each sign-in failure. The sheet shows it as it is. */
+const ACCOUNT_ERRORS: Record<string, string> = {
+  INVALID_EMAIL: 'That email address does not look right.',
+  COOLDOWN: 'We just sent a code. Give it a moment before asking for another.',
+  TOO_MANY: 'Too many codes requested. Please try again in an hour.',
+  SEND_FAILED: 'We could not send the email just now. Please try again.',
+  WRONG_CODE: 'That code is not right. Check the email and try again.',
+  CODE_EXPIRED: 'That code has expired. Ask for a new one.',
+  TOO_MANY_ATTEMPTS: 'Too many wrong tries. Ask for a new code.',
+};
 
 interface SocketData {
   sessionId: string;
@@ -45,6 +58,7 @@ export class PwaGateway implements OnGatewayInit, OnGatewayConnection {
     private readonly pwaChannel: PwaChannel,
     private readonly rateLimitService: ChatRateLimitService,
     private readonly buyerPush: BuyerPushService,
+    private readonly accountService: AccountService,
   ) {}
 
   afterInit(server: Server): void {
@@ -103,12 +117,23 @@ export class PwaGateway implements OnGatewayInit, OnGatewayConnection {
         });
       }
 
-      await socket.join(sessionId);
-
-      const conversation = await this.conversationService.findOrCreate(
+      let conversation = await this.conversationService.findOrCreate(
         ChatChannel.PWA,
         sessionId,
       );
+
+      // This browser's thread was folded into a signed-in buyer's, and it missed the
+      // new token (closed mid-sign-in, or another tab). Move it across now.
+      if (conversation.mergedIntoId) {
+        conversation = await this.conversationService.resolveLive(conversation);
+        sessionId = conversation.channelAddress;
+        socket.emit('session', {
+          token: await this.sessionService.tokenFor(sessionId),
+          sessionId,
+        });
+      }
+
+      await socket.join(sessionId);
 
       (socket.data as SocketData) = {
         sessionId,
@@ -314,6 +339,66 @@ export class PwaGateway implements OnGatewayInit, OnGatewayConnection {
     }
   }
 
+  /**
+   * The buyer answered the add-on card: the extras they picked, or none for "No, thanks".
+   * Which items are add-ons, and of which vendor, is decided server-side — the client's
+   * list is only a request.
+   */
+  @SubscribeMessage('checkout:addons')
+  async onCheckoutAddOns(
+    @ConnectedSocket() socket: Socket,
+    @MessageBody()
+    body: { items?: { productId?: string; quantity?: number }[] },
+  ): Promise<void> {
+    const data = await this.awaitReady(socket);
+    if (!data) return this.notReady(socket);
+
+    const verdict = await this.rateLimitService.consume(data.sessionId);
+    if (!verdict.allowed) {
+      socket.emit('chat:error', {
+        code: 'RATE_LIMITED',
+        message: "You're going a bit fast. Give it a moment and try again.",
+        retryAfter: verdict.retryAfter,
+      });
+      return;
+    }
+
+    const picked = (body?.items ?? [])
+      .filter(
+        (item) =>
+          typeof item?.productId === 'string' &&
+          Number.isInteger(item?.quantity) &&
+          (item.quantity ?? 0) > 0,
+      )
+      .slice(0, 50)
+      .map((item) => ({
+        productId: item.productId as string,
+        quantity: item.quantity as number,
+      }));
+
+    const conversation = await this.conversationService.findById(
+      data.conversationId,
+    );
+    if (!conversation) return this.notReady(socket);
+
+    this.pwaChannel.emitTyping(data.sessionId, true);
+    try {
+      await this.engineService.addAddOns(conversation, picked);
+    } catch (error) {
+      this.logger.error(
+        `Failed to add extras on ${data.conversationId}: ${
+          error instanceof Error ? error.message : 'unknown error'
+        }`,
+      );
+      socket.emit('chat:error', {
+        code: 'CHECKOUT_FAILED',
+        message: 'Something went wrong adding those. Please try again.',
+      });
+    } finally {
+      this.pwaChannel.emitTyping(data.sessionId, false);
+    }
+  }
+
   @SubscribeMessage('chat:history')
   async onHistory(
     @ConnectedSocket() socket: Socket,
@@ -329,12 +414,20 @@ export class PwaGateway implements OnGatewayInit, OnGatewayConnection {
       return;
     }
 
+    await this.sendHistory(socket, data.conversationId, {
+      before: body?.before ? new Date(body.before) : undefined,
+      limit: body?.limit,
+    });
+  }
+
+  private async sendHistory(
+    socket: Socket,
+    conversationId: string,
+    options: { before?: Date; limit?: number } = {},
+  ): Promise<void> {
     const messages = await this.conversationService.getHistory(
-      data.conversationId,
-      {
-        before: body?.before ? new Date(body.before) : undefined,
-        limit: body?.limit,
-      },
+      conversationId,
+      options,
     );
 
     socket.emit('chat:history', {
@@ -345,6 +438,140 @@ export class PwaGateway implements OnGatewayInit, OnGatewayConnection {
         payload: message.payload,
         createdAt: message.createdAt,
       })),
+    });
+  }
+
+  // ─── Signing in by email ──────────────────────────────────────────────────────
+  //
+  // Optional, and never needed to chat. A verified email lets the conversation follow
+  // the buyer to any browser: see AccountService.
+
+  /** Who this browser is signed in as. Answered with `account`. */
+  @SubscribeMessage('account:get')
+  async onAccountGet(@ConnectedSocket() socket: Socket): Promise<void> {
+    const conversation = await this.liveConversation(socket);
+    if (!conversation) return;
+    socket.emit('account', {
+      email: await this.accountService.emailFor(conversation),
+    });
+  }
+
+  /** Email a sign-in code. Answered with `account:code-sent` or `account:error`. */
+  @SubscribeMessage('account:request-code')
+  async onRequestCode(
+    @ConnectedSocket() socket: Socket,
+    @MessageBody() body: { email?: string },
+  ): Promise<void> {
+    const data = await this.awaitReady(socket);
+    if (!data) return this.notReady(socket);
+
+    const result = await this.accountService.requestCode(
+      (body?.email ?? '').toString(),
+      data.sessionId,
+    );
+    if (result.ok) {
+      socket.emit('account:code-sent', {
+        email: result.email,
+        resendAfter: result.resendAfter,
+      });
+      return;
+    }
+    socket.emit('account:error', {
+      code: result.code,
+      message: ACCOUNT_ERRORS[result.code],
+      retryAfter: result.retryAfter,
+    });
+  }
+
+  /**
+   * Check a code and sign this browser in. On success it may be moved onto the
+   * account's conversation from another browser — a new `session` token, then
+   * `account`, then the thread as it now stands in `chat:history`.
+   */
+  @SubscribeMessage('account:verify')
+  async onVerify(
+    @ConnectedSocket() socket: Socket,
+    @MessageBody() body: { email?: string; code?: string },
+  ): Promise<void> {
+    const data = await this.awaitReady(socket);
+    if (!data) return this.notReady(socket);
+
+    const result = await this.accountService.verify(
+      (body?.email ?? '').toString(),
+      (body?.code ?? '').toString(),
+      data.conversationId,
+    );
+    if (!result.ok) {
+      socket.emit('account:error', {
+        code: result.code,
+        message: ACCOUNT_ERRORS[result.code],
+        attemptsLeft: result.attemptsLeft,
+      });
+      return;
+    }
+
+    await this.moveTo(socket, data, result.conversation);
+    socket.emit('account', { email: result.email });
+    await this.sendHistory(socket, result.conversation.id);
+
+    // Verified from the checkout's receipt card: the checkout carries on.
+    await this.engineService.continueCheckoutAfterSignIn(result.conversation);
+  }
+
+  /**
+   * Sign this browser out: it starts a fresh guest chat. The account, and its
+   * conversation on every other browser, are untouched.
+   */
+  @SubscribeMessage('account:sign-out')
+  async onSignOut(@ConnectedSocket() socket: Socket): Promise<void> {
+    const data = await this.awaitReady(socket);
+    if (!data) return this.notReady(socket);
+
+    const issued = await this.sessionService.issue();
+    const conversation = await this.conversationService.findOrCreate(
+      ChatChannel.PWA,
+      issued.sessionId,
+    );
+    await this.moveTo(socket, data, conversation);
+    socket.emit('account', { email: null });
+    await this.engineService.greet(conversation);
+    await this.sendHistory(socket, conversation.id);
+  }
+
+  /** Point this socket at another conversation, and hand the browser its token. */
+  private async moveTo(
+    socket: Socket,
+    from: SocketData,
+    conversation: Conversation,
+  ): Promise<void> {
+    const sessionId = conversation.channelAddress;
+    if (sessionId !== from.sessionId) {
+      await socket.leave(from.sessionId);
+      await socket.join(sessionId);
+    }
+    (socket.data as SocketData) = {
+      sessionId,
+      conversationId: conversation.id,
+    };
+    socket.emit('session', {
+      token: await this.sessionService.tokenFor(sessionId),
+      sessionId,
+    });
+  }
+
+  private async liveConversation(socket: Socket): Promise<Conversation | null> {
+    const data = await this.awaitReady(socket);
+    if (!data) {
+      this.notReady(socket);
+      return null;
+    }
+    return this.conversationService.findById(data.conversationId);
+  }
+
+  private notReady(socket: Socket): void {
+    socket.emit('chat:error', {
+      code: 'NO_SESSION',
+      message: 'Session not ready. Reconnect and try again.',
     });
   }
 

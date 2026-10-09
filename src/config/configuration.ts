@@ -223,6 +223,27 @@ export const contactConfig = registerAs('contact', () => ({
   maxPerHour: parseInt(process.env.CONTACT_MAX_PER_HOUR || '60', 10),
 }));
 
+/**
+ * Where the welcome email points people, and where its logo is served from.
+ *
+ * The logo is a PNG on the public website (`/email/recommend-logo.png`): email clients
+ * will not show SVG. An unset app URL falls back to the website, so a button never leads
+ * nowhere.
+ */
+export const brandConfig = registerAs('brand', () => {
+  const websiteUrl = (
+    process.env.WEBSITE_URL || 'https://recommend-fe.netlify.app'
+  ).replace(/\/$/, '');
+  return {
+    websiteUrl,
+    customerAppUrl: (process.env.CUSTOMER_APP_URL || websiteUrl).replace(
+      /\/$/,
+      '',
+    ),
+    vendorAppUrl: (process.env.VENDOR_APP_URL || websiteUrl).replace(/\/$/, ''),
+  };
+});
+
 export const deliveryConfig = registerAs('delivery', () => ({
   feeNgn: parseInt(process.env.DELIVERY_FEE_NGN || '1500', 10),
 }));

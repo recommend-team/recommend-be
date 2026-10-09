@@ -1,7 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { EventEmitter2 } from '@nestjs/event-emitter';
-import { Brackets, IsNull, LessThan, Not, Repository } from 'typeorm';
+import { Brackets, In, IsNull, LessThan, Not, Repository } from 'typeorm';
 import {
   CHAT_MESSAGE_RECORDED_EVENT,
   ChatMessageRecordedEvent,
@@ -15,6 +15,7 @@ import {
   ConversationContext,
 } from './entities/conversation.entity';
 import { ChatMessage, MessagePayload } from './entities/message.entity';
+import { ChatAccount } from '../account/entities/chat-account.entity';
 import {
   ChatChannel,
   ConversationState,
@@ -36,6 +37,8 @@ export interface ConversationSummary {
   /** What the buyer told the assistant, which may be nothing yet. */
   buyerName: string | null;
   buyerPhone: string | null;
+  /** The email the buyer proved with a code, if they signed in. Unlike a typed one, it is theirs. */
+  verifiedEmail: string | null;
   lastMessageAt: Date | null;
   lastMessage: string | null;
   heldByAdminId: string | null;
@@ -114,6 +117,21 @@ export class ConversationService {
 
   async findById(id: string): Promise<Conversation | null> {
     return this.conversationsRepository.findOne({ where: { id } });
+  }
+
+  /**
+   * The conversation this one now lives in. Itself, unless it was folded into a
+   * signed-in buyer's thread — then wherever that went. Bounded, so a bad pointer
+   * cannot loop.
+   */
+  async resolveLive(conversation: Conversation): Promise<Conversation> {
+    let current = conversation;
+    for (let hop = 0; hop < 5 && current.mergedIntoId; hop++) {
+      const next = await this.findById(current.mergedIntoId);
+      if (!next) break;
+      current = next;
+    }
+    return current;
   }
 
   /**
@@ -237,6 +255,8 @@ export class ConversationService {
     // find through their badge and the needing-attention filter.
     const builder = this.conversationsRepository
       .createQueryBuilder('c')
+      // One folded into a signed-in buyer's thread lives on there, not as a duplicate.
+      .where('c."mergedIntoId" IS NULL')
       .orderBy('c."lastMessageAt"', 'DESC', 'NULLS LAST')
       .addOrderBy('c."createdAt"', 'DESC')
       .skip((page - 1) * limit)
@@ -266,13 +286,14 @@ export class ConversationService {
 
     const needingAttention = await this.conversationsRepository.count({
       where: [
-        { needsAttentionAt: Not(IsNull()) },
-        { handoverRequestedAt: Not(IsNull()) },
+        { needsAttentionAt: Not(IsNull()), mergedIntoId: IsNull() },
+        { handoverRequestedAt: Not(IsNull()), mergedIntoId: IsNull() },
       ],
     });
 
     // One query for the last message of every row on the page, rather than one per row.
     const lastMessages = await this.lastMessageFor(rows.map((row) => row.id));
+    const emails = await this.verifiedEmails(rows);
 
     return {
       items: rows.map((row) => ({
@@ -281,6 +302,9 @@ export class ConversationService {
         state: row.state,
         buyerName: row.context?.profile?.name ?? null,
         buyerPhone: row.context?.profile?.phone ?? null,
+        verifiedEmail: row.accountId
+          ? (emails.get(row.accountId) ?? null)
+          : null,
         lastMessageAt: row.lastMessageAt,
         lastMessage: lastMessages.get(row.id) ?? null,
         heldByAdminId: row.heldByAdminId,
@@ -295,6 +319,26 @@ export class ConversationService {
       page,
       limit,
     };
+  }
+
+  /** The verified email of each signed-in conversation, in one query. */
+  async verifiedEmails(
+    conversations: Pick<Conversation, 'accountId'>[],
+  ): Promise<Map<string, string>> {
+    const ids = [
+      ...new Set(
+        conversations
+          .map((conversation) => conversation.accountId)
+          .filter((id): id is string => !!id),
+      ),
+    ];
+    if (ids.length === 0) return new Map();
+
+    const accounts = await this.conversationsRepository.manager.find(
+      ChatAccount,
+      { where: { id: In(ids) } },
+    );
+    return new Map(accounts.map((account) => [account.id, account.email]));
   }
 
   private async lastMessageFor(
@@ -360,11 +404,14 @@ export class ConversationService {
     reference: string,
     buyerPhone: string,
   ): Promise<Conversation | null> {
+    // Only live conversations: one folded into a signed-in buyer's thread handed its
+    // payment and its phone over, and the update belongs where the buyer now reads.
     const byReference = await this.conversationsRepository
       .createQueryBuilder('c')
       .where("c.context->>'pendingPaymentReference' = :reference", {
         reference,
       })
+      .andWhere('c."mergedIntoId" IS NULL')
       .orderBy('c.lastMessageAt', 'DESC', 'NULLS LAST')
       .getOne();
 
@@ -373,6 +420,7 @@ export class ConversationService {
     return this.conversationsRepository
       .createQueryBuilder('c')
       .where("c.context->'profile'->>'phone' = :phone", { phone: buyerPhone })
+      .andWhere('c."mergedIntoId" IS NULL')
       .orderBy('c.lastMessageAt', 'DESC', 'NULLS LAST')
       .getOne();
   }

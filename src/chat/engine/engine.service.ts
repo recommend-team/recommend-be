@@ -208,11 +208,13 @@ export class EngineService {
       this.discoveryService.hasModel();
 
     if (isGreeting(trimmed) && !conversational) {
+      const name = returningFirstName(conversation);
       return [
         {
-          text:
-            `Hello, I'm ${this.assistantName} from Recommend. What are you looking for ` +
-            'today, and which area are you in?',
+          text: name
+            ? `Hi ${name}! What can I get you today?`
+            : `Hello, I'm ${this.assistantName} from Recommend. What are you looking for ` +
+              'today, and which area are you in?',
         },
       ];
     }
@@ -241,6 +243,40 @@ export class EngineService {
     });
 
     const replies = await this.checkoutFlow.start(conversation, cart);
+    return this.deliver(conversation, replies);
+  }
+
+  /**
+   * The buyer answered the add-on card. Recorded as their turn — "Add 2 × Bottled water"
+   * or "No, thanks" — so the thread reads as a conversation, then the checkout carries on.
+   */
+  async addAddOns(
+    conversation: Conversation,
+    picked: { productId: string; quantity: number }[],
+  ): Promise<OutboundMessage[]> {
+    const { added, replies } = await this.checkoutFlow.addAddOns(
+      conversation,
+      picked,
+    );
+    // A stale card (the checkout already moved on) leaves no trace.
+    if (replies.length === 0) return [];
+
+    await this.conversationService.recordInbound({
+      conversationId: conversation.id,
+      text: added ? `Add ${added}` : 'No, thanks',
+    });
+    return this.deliver(conversation, replies);
+  }
+
+  /**
+   * The buyer verified their email in the checkout's receipt card. Signing in happened
+   * beside the conversation, so the checkout is moved on here — the next question
+   * arrives as if they had answered.
+   */
+  async continueCheckoutAfterSignIn(
+    conversation: Conversation,
+  ): Promise<OutboundMessage[]> {
+    const replies = await this.checkoutFlow.continueAfterSignIn(conversation);
     return this.deliver(conversation, replies);
   }
 
@@ -292,6 +328,7 @@ export class EngineService {
     const result = await this.discoveryService.discover({
       text,
       areaId: conversation.areaId,
+      buyerFirstName: returningFirstName(conversation),
       history,
     });
 
@@ -417,6 +454,16 @@ const GREETINGS = [
   'how far',
   'abeg',
 ];
+
+/**
+ * A buyer who has paid before, by first name — greeted by it. Null for anyone else: a
+ * name typed into an abandoned checkout is not a customer yet.
+ */
+function returningFirstName(conversation: Conversation): string | null {
+  const name = conversation.context?.profile?.name?.trim();
+  if (!conversation.context?.lastPaidAt || !name) return null;
+  return name.split(/\s+/)[0];
+}
 
 function isGreeting(text: string): boolean {
   const normalised = text

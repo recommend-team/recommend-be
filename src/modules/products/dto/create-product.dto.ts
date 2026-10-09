@@ -19,6 +19,7 @@ export const createProductSchema = z.object({
     .multipleOf(0.01, 'Price must have at most 2 decimal places'),
   imageUrl: z.string().url('imageUrl must be a valid URL').optional(),
   isAvailable: z.boolean().optional().default(true),
+  isAddOn: z.boolean().optional().default(false),
 });
 
 export type CreateProductDto = z.infer<typeof createProductSchema>;
@@ -44,4 +45,13 @@ export class CreateProductRequestDto {
 
   @ApiPropertyOptional({ example: true, default: true })
   isAvailable?: boolean;
+
+  @ApiPropertyOptional({
+    example: false,
+    default: false,
+    description:
+      'Sold only with a main item from this vendor — e.g. drinks, extra protein. ' +
+      'Kept out of search and offered at checkout instead.',
+  })
+  isAddOn?: boolean;
 }

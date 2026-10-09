@@ -27,7 +27,7 @@ describe('CheckoutFlow', () => {
   };
   let ordering: { placeCheckout: jest.Mock; deliveryFeeFor: jest.Mock };
   let identity: { upsertBuyer: jest.Mock };
-  let catalog: { getProductById: jest.Mock };
+  let catalog: { getProductById: jest.Mock; listAddOns: jest.Mock };
   /** Whatever findById should return next — the flow re-reads after every merge. */
   let stored: ConversationContext;
 
@@ -68,8 +68,12 @@ describe('CheckoutFlow', () => {
         id: 'p1',
         name: 'Jollof Rice',
         price: 3500,
+        vendorId: 'v1',
         vendorName: "Mama's Kitchen",
+        isAddOn: false,
       }),
+      // No vendor has extras unless a test says so.
+      listAddOns: jest.fn().mockResolvedValue([]),
     };
 
     const module: TestingModule = await Test.createTestingModule({
@@ -117,11 +121,438 @@ describe('CheckoutFlow', () => {
 
       await flow.start(conversationAt(ConversationState.DISCOVERY), CART);
 
-      // Name and phone known → straight to fulfillment.
+      // Name and phone known → on to the receipt email.
+      expect(conversations.setState).toHaveBeenCalledWith(
+        'c1',
+        ConversationState.COLLECTING_EMAIL,
+      );
+    });
+
+    it('never asks a signed-in buyer for their email', async () => {
+      stored = { profile: { name: 'Ada', phone: '+2348012345678' } };
+      conversations.findById.mockResolvedValue({
+        id: 'c1',
+        accountId: 'account-1',
+        context: stored,
+      });
+
+      await flow.start(conversationAt(ConversationState.DISCOVERY), CART);
+
       expect(conversations.setState).toHaveBeenCalledWith(
         'c1',
         ConversationState.COLLECTING_FULFILLMENT,
       );
+    });
+
+    it('does not ask again once the buyer has skipped it', async () => {
+      stored = {
+        profile: { name: 'Ada', phone: '+2348012345678' },
+        receiptEmailSkipped: true,
+      };
+
+      await flow.start(conversationAt(ConversationState.DISCOVERY), CART);
+
+      expect(conversations.setState).toHaveBeenCalledWith(
+        'c1',
+        ConversationState.COLLECTING_FULFILLMENT,
+      );
+    });
+  });
+
+  describe('add-ons', () => {
+    const water = {
+      id: 'w1',
+      name: 'Bottled water',
+      price: 300,
+      imageUrl: null,
+      vendorId: 'v1',
+      vendorName: "Mama's Kitchen",
+      isAddOn: true,
+    };
+    const beef = { ...water, id: 'b1', name: 'Extra beef', price: 800 };
+
+    it('offers the vendor’s extras once, right after Pay', async () => {
+      catalog.listAddOns.mockResolvedValue([water, beef]);
+
+      const replies = await flow.start(
+        conversationAt(ConversationState.DISCOVERY),
+        CART,
+      );
+
+      expect(catalog.listAddOns).toHaveBeenCalledWith(['v1']);
+      expect(conversations.setState).toHaveBeenCalledWith(
+        'c1',
+        ConversationState.OFFERING_ADDONS,
+      );
+      expect(stored.addOnsOffered).toBe(true);
+      expect(replies[0].text).toBe('Anything to go with it?');
+      expect(replies[0].payload).toEqual({
+        kind: 'addon_offer',
+        data: {
+          vendors: [
+            {
+              vendorId: 'v1',
+              vendorName: "Mama's Kitchen",
+              items: [
+                {
+                  productId: 'w1',
+                  name: 'Bottled water',
+                  price: 300,
+                  imageUrl: null,
+                },
+                {
+                  productId: 'b1',
+                  name: 'Extra beef',
+                  price: 800,
+                  imageUrl: null,
+                },
+              ],
+            },
+          ],
+        },
+      });
+    });
+
+    it('skips the step when no vendor in the cart has extras', async () => {
+      await flow.start(conversationAt(ConversationState.DISCOVERY), CART);
+
+      expect(conversations.setState).toHaveBeenCalledWith(
+        'c1',
+        ConversationState.COLLECTING_NAME,
+      );
+    });
+
+    it('does not offer twice for the same order', async () => {
+      catalog.listAddOns.mockResolvedValue([water]);
+      stored = { addOnsOffered: true };
+
+      await flow.start(conversationAt(ConversationState.DISCOVERY), CART);
+
+      expect(conversations.setState).not.toHaveBeenCalledWith(
+        'c1',
+        ConversationState.OFFERING_ADDONS,
+      );
+    });
+
+    it('offers only for vendors with a main item — never for an add-on alone', async () => {
+      catalog.getProductById.mockResolvedValue({ ...water });
+      catalog.listAddOns.mockResolvedValue([]);
+
+      await flow.start(conversationAt(ConversationState.DISCOVERY), [
+        { productId: 'w1', quantity: 1 },
+      ]);
+
+      expect(catalog.listAddOns).toHaveBeenCalledWith([]);
+    });
+
+    it('adds the picked extras to the cart, at the database price, then carries on', async () => {
+      catalog.listAddOns.mockResolvedValue([water, beef]);
+      stored = { pendingCart: [...CART] };
+
+      const { added, replies } = await flow.addAddOns(
+        conversationAt(ConversationState.OFFERING_ADDONS, stored),
+        [
+          { productId: 'w1', quantity: 2 },
+          { productId: 'b1', quantity: 1 },
+        ],
+      );
+
+      expect(added).toBe('2 × Bottled water, 1 × Extra beef');
+      expect(stored.pendingCart).toEqual([
+        { productId: 'p1', quantity: 2 },
+        { productId: 'w1', quantity: 2, expectedUnitPrice: 300 },
+        { productId: 'b1', quantity: 1, expectedUnitPrice: 800 },
+      ]);
+      expect(conversations.setState).toHaveBeenCalledWith(
+        'c1',
+        ConversationState.COLLECTING_NAME,
+      );
+      expect(replies[0].text).toContain('name');
+    });
+
+    it('ignores anything that is not one of the offered extras', async () => {
+      catalog.listAddOns.mockResolvedValue([water]);
+      stored = { pendingCart: [...CART] };
+
+      const { added } = await flow.addAddOns(
+        conversationAt(ConversationState.OFFERING_ADDONS, stored),
+        [
+          { productId: 'some-main-dish', quantity: 3 },
+          { productId: 'w1', quantity: 0 },
+        ],
+      );
+
+      expect(added).toBeNull();
+      expect(stored.pendingCart).toEqual(CART);
+    });
+
+    it('caps a quantity at 50', async () => {
+      catalog.listAddOns.mockResolvedValue([water]);
+      stored = { pendingCart: [...CART] };
+
+      await flow.addAddOns(
+        conversationAt(ConversationState.OFFERING_ADDONS, stored),
+        [{ productId: 'w1', quantity: 500 }],
+      );
+
+      expect(stored.pendingCart?.[1]).toMatchObject({ quantity: 50 });
+    });
+
+    it('changes nothing when the card is answered after the checkout moved on', async () => {
+      const { replies } = await flow.addAddOns(
+        conversationAt(ConversationState.COLLECTING_PHONE),
+        [{ productId: 'w1', quantity: 1 }],
+      );
+
+      expect(replies).toEqual([]);
+      expect(catalog.listAddOns).not.toHaveBeenCalled();
+    });
+
+    it('moves on when the buyer types no', async () => {
+      await flow.handle(
+        conversationAt(ConversationState.OFFERING_ADDONS, {
+          pendingCart: CART,
+        }),
+        'No, thanks',
+      );
+
+      expect(conversations.setState).toHaveBeenCalledWith(
+        'c1',
+        ConversationState.COLLECTING_NAME,
+      );
+    });
+
+    it('points back to the card rather than guessing a typed item', async () => {
+      catalog.listAddOns.mockResolvedValue([water]);
+
+      const replies = await flow.handle(
+        conversationAt(ConversationState.OFFERING_ADDONS, {
+          pendingCart: CART,
+        }),
+        'add coke',
+      );
+
+      expect(conversations.setState).not.toHaveBeenCalled();
+      expect(replies[0].payload?.kind).toBe('addon_offer');
+    });
+  });
+
+  describe('a returning buyer', () => {
+    const returning: ConversationContext = {
+      profile: { name: 'Ada Obi', phone: '+2348012345678' },
+      lastPaidAt: '2026-10-01T10:00:00.000Z',
+      lastDeliveryAddress: '12 Admiralty Way, Lekki',
+    };
+
+    it('is asked nothing but where it goes — name, phone and email are skipped', async () => {
+      stored = { ...returning };
+
+      const replies = await flow.start(
+        conversationAt(ConversationState.DISCOVERY),
+        CART,
+      );
+
+      expect(conversations.setState).toHaveBeenCalledWith(
+        'c1',
+        ConversationState.COLLECTING_FULFILLMENT,
+      );
+      expect(replies[0].text).toBe(
+        'Should we deliver to 12 Admiralty Way, Lekki again?',
+      );
+      expect(replies[0].payload).toEqual({
+        kind: 'choices',
+        data: {
+          purpose: 'fulfillment',
+          options: [
+            { id: 'SAME', label: 'Yes, same address' },
+            { id: 'NEW', label: 'New address' },
+            { id: 'PICKUP', label: "I'll pick it up" },
+          ],
+        },
+      });
+    });
+
+    it('reuses the last address on "same", and goes to the summary', async () => {
+      stored = { ...returning };
+
+      await flow.handle(
+        conversationAt(ConversationState.COLLECTING_FULFILLMENT, returning),
+        'Yes, same address',
+      );
+
+      expect(conversations.mergeContext).toHaveBeenCalledWith('c1', {
+        profile: {
+          fulfillmentType: 'DELIVERY',
+          address: '12 Admiralty Way, Lekki',
+        },
+      });
+      expect(conversations.setState).toHaveBeenCalledWith(
+        'c1',
+        ConversationState.CONFIRMING_ORDER,
+      );
+    });
+
+    it('asks for the new address on "new", and does not keep the old one', async () => {
+      stored = { ...returning };
+
+      const replies = await flow.handle(
+        conversationAt(ConversationState.COLLECTING_FULFILLMENT, returning),
+        'New address',
+      );
+
+      expect(conversations.mergeContext).toHaveBeenCalledWith('c1', {
+        profile: { fulfillmentType: 'DELIVERY', address: undefined },
+      });
+      expect(conversations.setState).toHaveBeenCalledWith(
+        'c1',
+        ConversationState.COLLECTING_ADDRESS,
+      );
+      expect(replies[0].text).toBe("What's the new address?");
+    });
+
+    it('reads a typed "no, a different one" as a new address, not a yes', async () => {
+      await flow.handle(
+        conversationAt(ConversationState.COLLECTING_FULFILLMENT, returning),
+        'no, deliver to a different place',
+      );
+
+      expect(conversations.setState).toHaveBeenCalledWith(
+        'c1',
+        ConversationState.COLLECTING_ADDRESS,
+      );
+    });
+
+    it('takes pickup, with no address at all', async () => {
+      stored = { ...returning };
+
+      await flow.handle(
+        conversationAt(ConversationState.COLLECTING_FULFILLMENT, returning),
+        "I'll pick it up",
+      );
+
+      expect(conversations.mergeContext).toHaveBeenCalledWith('c1', {
+        profile: { fulfillmentType: 'PICKUP' },
+      });
+      expect(conversations.setState).toHaveBeenCalledWith(
+        'c1',
+        ConversationState.CONFIRMING_ORDER,
+      );
+    });
+
+    it.each(['not the same place', 'no', "don't deliver there"])(
+      'never reads "%s" as the same address',
+      async (answer) => {
+        const replies = await flow.handle(
+          conversationAt(ConversationState.COLLECTING_FULFILLMENT, returning),
+          answer,
+        );
+
+        expect(conversations.setState).not.toHaveBeenCalled();
+        expect(replies[0].text).toContain('12 Admiralty Way, Lekki');
+      },
+    );
+
+    it('asks again rather than guessing an unclear answer', async () => {
+      const replies = await flow.handle(
+        conversationAt(ConversationState.COLLECTING_FULFILLMENT, returning),
+        'hmm',
+      );
+
+      expect(conversations.setState).not.toHaveBeenCalled();
+      expect(replies[0].text).toContain('12 Admiralty Way, Lekki');
+    });
+  });
+
+  describe('an address never reused silently', () => {
+    it('asks for the address even if one was typed into an abandoned checkout', async () => {
+      // Typed last time, never paid for: no lastDeliveryAddress.
+      stored = {
+        profile: {
+          name: 'Ada',
+          phone: '+2348012345678',
+          address: 'somewhere typed once',
+        },
+        receiptEmailSkipped: true,
+      };
+
+      const replies = await flow.handle(
+        conversationAt(ConversationState.COLLECTING_FULFILLMENT, stored),
+        'Deliver to me',
+      );
+
+      expect(conversations.setState).toHaveBeenCalledWith(
+        'c1',
+        ConversationState.COLLECTING_ADDRESS,
+      );
+      expect(replies[0].text).toBe('Where should we deliver it?');
+    });
+  });
+
+  describe('the receipt email', () => {
+    it('is asked for after the phone number, with the card to enter it', async () => {
+      stored = { profile: { name: 'Ada' } };
+
+      const replies = await flow.handle(
+        conversationAt(ConversationState.COLLECTING_PHONE),
+        '0801 234 5678',
+      );
+
+      expect(conversations.setState).toHaveBeenCalledWith(
+        'c1',
+        ConversationState.COLLECTING_EMAIL,
+      );
+      expect(replies[0].text).toContain('receipt');
+      expect(replies[0].payload).toEqual({ kind: 'email_capture', data: {} });
+    });
+
+    it('can be skipped, and the skip is remembered', async () => {
+      await flow.handle(
+        conversationAt(ConversationState.COLLECTING_EMAIL),
+        'Skip for now',
+      );
+
+      expect(conversations.mergeContext).toHaveBeenCalledWith('c1', {
+        receiptEmailSkipped: true,
+      });
+      expect(conversations.setState).toHaveBeenCalledWith(
+        'c1',
+        ConversationState.COLLECTING_FULFILLMENT,
+      );
+    });
+
+    it('puts a typed email into the card rather than trusting it unverified', async () => {
+      const replies = await flow.handle(
+        conversationAt(ConversationState.COLLECTING_EMAIL),
+        'my email is ada@example.com',
+      );
+
+      expect(replies[0].payload).toEqual({
+        kind: 'email_capture',
+        data: { email: 'ada@example.com' },
+      });
+      expect(conversations.setState).not.toHaveBeenCalled();
+      expect(stored.profile?.email).toBeUndefined();
+    });
+
+    it('moves on by itself once the email is verified in the card', async () => {
+      const replies = await flow.continueAfterSignIn(
+        conversationAt(ConversationState.COLLECTING_EMAIL),
+      );
+
+      expect(conversations.setState).toHaveBeenCalledWith(
+        'c1',
+        ConversationState.COLLECTING_FULFILLMENT,
+      );
+      expect(replies[0].text).toContain('delivered');
+    });
+
+    it('leaves a conversation that was not at the email step alone', async () => {
+      const replies = await flow.continueAfterSignIn(
+        conversationAt(ConversationState.DISCOVERY),
+      );
+
+      expect(replies).toEqual([]);
+      expect(conversations.setState).not.toHaveBeenCalled();
     });
   });
 

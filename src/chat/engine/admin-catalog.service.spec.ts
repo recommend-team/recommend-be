@@ -24,6 +24,7 @@ describe('AdminCatalogService', () => {
     searchVendors: jest.Mock;
     searchProducts: jest.Mock;
     listCategories: jest.Mock;
+    listAddOns: jest.Mock;
   };
   let locations: {
     listAreas: jest.Mock;
@@ -37,6 +38,7 @@ describe('AdminCatalogService', () => {
       searchVendors: jest.fn().mockResolvedValue([]),
       searchProducts: jest.fn().mockResolvedValue([]),
       listCategories: jest.fn().mockResolvedValue([]),
+      listAddOns: jest.fn().mockResolvedValue([]),
     };
     locations = {
       listAreas: jest.fn().mockResolvedValue([area(IKEJA, 'Ikeja')]),
@@ -156,6 +158,25 @@ describe('AdminCatalogService', () => {
       expect(catalog.searchVendors).toHaveBeenCalledWith(
         expect.objectContaining({ areaId: undefined }),
       );
+    });
+
+    it('shows a store’s extras, after its dishes, when browsing that store', async () => {
+      const dish = { id: 'p1', name: 'Jollof Rice', isAddOn: false };
+      const water = { id: 'w1', name: 'Bottled water', isAddOn: true };
+      catalog.searchProducts.mockResolvedValue([dish]);
+      catalog.listAddOns.mockResolvedValue([water]);
+
+      const products = await service.products('c1', { vendorId: 'v1' });
+
+      expect(catalog.listAddOns).toHaveBeenCalledWith(['v1']);
+      expect(products).toEqual([dish, water]);
+    });
+
+    it('never surfaces extras in a search, as for buyers', async () => {
+      await service.products('c1', { search: 'water' });
+      await service.products('c1', { vendorId: 'v1', search: 'water' });
+
+      expect(catalog.listAddOns).not.toHaveBeenCalled();
     });
 
     it('ignores a blank search rather than filtering on empty text', async () => {

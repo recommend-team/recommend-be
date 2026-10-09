@@ -46,8 +46,84 @@ export class CheckoutFlow {
       pendingCart: cart,
     });
 
+    // Extras first, while the buyer is still thinking about the food — once per order,
+    // and only when a vendor in the cart has any.
+    const fresh = await this.conversationService.findById(conversation.id);
+    if (!fresh?.context?.addOnsOffered) {
+      const offer = await this.addOnOffer(cart);
+      if (offer) {
+        await this.conversationService.mergeContext(conversation.id, {
+          addOnsOffered: true,
+        });
+        await this.conversationService.setState(
+          conversation.id,
+          ConversationState.OFFERING_ADDONS,
+        );
+        return [offer];
+      }
+    }
+
     // Re-order within one conversation shouldn't re-ask for what we already know.
     return this.advanceFrom(conversation, ConversationState.COLLECTING_NAME);
+  }
+
+  /**
+   * The buyer picked extras in the add-on card. Only add-ons of a vendor with a main item
+   * in the cart are taken — anything else is ignored, never trusted — and quantities are
+   * whole and capped. Then the checkout carries on.
+   *
+   * `added` describes what was added, for the buyer's side of the thread; null when
+   * nothing valid was picked, which reads as "no, thanks".
+   */
+  async addAddOns(
+    conversation: Conversation,
+    picked: { productId: string; quantity: number }[],
+  ): Promise<{ added: string | null; replies: OutboundMessage[] }> {
+    // A card answered after the checkout moved on, or was abandoned, changes nothing.
+    if (conversation.state !== ConversationState.OFFERING_ADDONS) {
+      return { added: null, replies: [] };
+    }
+
+    const cart = conversation.context?.pendingCart ?? [];
+    const offered = new Map(
+      (await this.catalog.listAddOns(await this.vendorsWithMain(cart))).map(
+        (addOn) => [addOn.id, addOn],
+      ),
+    );
+
+    const lines = [...cart];
+    const added: string[] = [];
+    for (const pick of picked) {
+      const addOn = offered.get(pick.productId);
+      const quantity = Math.min(50, Math.floor(pick.quantity));
+      if (!addOn || !(quantity > 0)) continue;
+
+      const existing = lines.find((line) => line.productId === addOn.id);
+      if (existing) {
+        existing.quantity = Math.min(50, existing.quantity + quantity);
+      } else {
+        lines.push({
+          productId: addOn.id,
+          quantity,
+          expectedUnitPrice: addOn.price,
+        });
+      }
+      added.push(`${quantity} × ${addOn.name}`);
+    }
+
+    if (added.length > 0) {
+      await this.conversationService.mergeContext(conversation.id, {
+        pendingCart: lines,
+      });
+    }
+
+    return {
+      added: added.length > 0 ? added.join(', ') : null,
+      replies: await this.advanceFrom(
+        conversation,
+        ConversationState.COLLECTING_NAME,
+      ),
+    };
   }
 
   /** Every buyer message while a checkout is in progress. */
@@ -67,10 +143,14 @@ export class CheckoutFlow {
     }
 
     switch (conversation.state) {
+      case ConversationState.OFFERING_ADDONS:
+        return this.answerAddOnOffer(conversation, answer);
       case ConversationState.COLLECTING_NAME:
         return this.captureName(conversation, answer);
       case ConversationState.COLLECTING_PHONE:
         return this.capturePhone(conversation, answer);
+      case ConversationState.COLLECTING_EMAIL:
+        return this.captureEmail(conversation, answer);
       case ConversationState.COLLECTING_FULFILLMENT:
         return this.captureFulfillment(conversation, answer);
       case ConversationState.COLLECTING_ADDRESS:
@@ -124,6 +204,46 @@ export class CheckoutFlow {
     await this.conversationService.mergeContext(conversation.id, {
       profile: { phone },
     });
+    return this.advanceFrom(conversation, ConversationState.COLLECTING_EMAIL);
+  }
+
+  /**
+   * The receipt email is entered and verified in the card, over the account events — a
+   * typed message here is either a skip, or an address to put in the card.
+   */
+  private async captureEmail(
+    conversation: Conversation,
+    answer: string,
+  ): Promise<OutboundMessage[]> {
+    if (isSkip(answer)) {
+      await this.conversationService.mergeContext(conversation.id, {
+        receiptEmailSkipped: true,
+      });
+      return this.advanceFrom(
+        conversation,
+        ConversationState.COLLECTING_FULFILLMENT,
+      );
+    }
+
+    const typed = answer.match(EMAIL)?.[0];
+    return [
+      {
+        text: typed
+          ? "Tap Send code below and I'll email you a code to confirm it — or skip it for now."
+          : 'Pop your email in below for the receipt, or skip it for now.',
+        payload: emailCapture(typed),
+      },
+    ];
+  }
+
+  /**
+   * The buyer just verified their email in the receipt card. Move the checkout on, as if
+   * they had answered — signing in happened beside the conversation, not in it.
+   */
+  async continueAfterSignIn(
+    conversation: Conversation,
+  ): Promise<OutboundMessage[]> {
+    if (conversation.state !== ConversationState.COLLECTING_EMAIL) return [];
     return this.advanceFrom(
       conversation,
       ConversationState.COLLECTING_FULFILLMENT,
@@ -134,6 +254,10 @@ export class CheckoutFlow {
     conversation: Conversation,
     answer: string,
   ): Promise<OutboundMessage[]> {
+    const lastAddress = conversation.context?.lastDeliveryAddress;
+    if (lastAddress)
+      return this.captureReturning(conversation, answer, lastAddress);
+
     const choice = readFulfillment(answer);
 
     if (!choice) {
@@ -155,6 +279,54 @@ export class CheckoutFlow {
         ? ConversationState.COLLECTING_ADDRESS
         : ConversationState.CONFIRMING_ORDER,
     );
+  }
+
+  /**
+   * A returning buyer's one question: the same address as last time, a new one, or
+   * pickup. Only their last *paid* delivery is offered — never an address typed into a
+   * checkout that was then abandoned.
+   */
+  private async captureReturning(
+    conversation: Conversation,
+    answer: string,
+    lastAddress: string,
+  ): Promise<OutboundMessage[]> {
+    const choice = readReturning(answer);
+
+    if (!choice) {
+      return [
+        promptFor(
+          ConversationState.COLLECTING_FULFILLMENT,
+          undefined,
+          lastAddress,
+        ),
+      ];
+    }
+
+    if (choice === 'PICKUP') {
+      await this.conversationService.mergeContext(conversation.id, {
+        profile: { fulfillmentType: 'PICKUP' },
+      });
+      return this.advanceFrom(conversation, ConversationState.CONFIRMING_ORDER);
+    }
+
+    if (choice === 'SAME') {
+      await this.conversationService.mergeContext(conversation.id, {
+        profile: { fulfillmentType: 'DELIVERY', address: lastAddress },
+      });
+      return this.advanceFrom(conversation, ConversationState.CONFIRMING_ORDER);
+    }
+
+    // A new address: asked for next, used for this order, and — once it is paid for —
+    // the one offered back next time.
+    await this.conversationService.mergeContext(conversation.id, {
+      profile: { fulfillmentType: 'DELIVERY', address: undefined },
+    });
+    await this.conversationService.setState(
+      conversation.id,
+      ConversationState.COLLECTING_ADDRESS,
+    );
+    return [{ text: "What's the new address?" }];
   }
 
   private async captureAddress(
@@ -308,21 +480,26 @@ export class CheckoutFlow {
       state = ConversationState.COLLECTING_PHONE;
     }
     if (state === ConversationState.COLLECTING_PHONE && profile.phone) {
+      state = ConversationState.COLLECTING_EMAIL;
+    }
+    // Asked once: never of a signed-in buyer, whose email is verified already, of one
+    // who has said no, or of a returning buyer — who is asked nothing but the address.
+    if (
+      state === ConversationState.COLLECTING_EMAIL &&
+      (fresh?.accountId ||
+        fresh?.context?.receiptEmailSkipped ||
+        fresh?.context?.lastPaidAt)
+    ) {
       state = ConversationState.COLLECTING_FULFILLMENT;
     }
-    if (
-      state === ConversationState.COLLECTING_ADDRESS &&
-      profile.address &&
-      profile.fulfillmentType === 'DELIVERY'
-    ) {
-      state = ConversationState.CONFIRMING_ORDER;
-    }
+    // The address is never reused silently. A returning buyer is asked about their last
+    // paid delivery address at the fulfilment step; anyone else gives one here.
 
     await this.conversationService.setState(conversation.id, state);
 
     return state === ConversationState.CONFIRMING_ORDER
       ? this.summarise(fresh ?? conversation)
-      : [promptFor(state, profile.name)];
+      : [promptFor(state, profile.name, fresh?.context?.lastDeliveryAddress)];
   }
 
   /** Read the order back before charging for it, priced from the database. */
@@ -391,9 +568,100 @@ export class CheckoutFlow {
   }
 
   /** Clear the flow without losing the profile — a second order shouldn't re-ask. */
+  /**
+   * A typed answer to the add-on offer. Extras are picked in the card; in words, a no
+   * moves on, and anything else points back to the card rather than guessing an item.
+   */
+  private async answerAddOnOffer(
+    conversation: Conversation,
+    answer: string,
+  ): Promise<OutboundMessage[]> {
+    if (isNoThanks(answer)) {
+      return this.advanceFrom(conversation, ConversationState.COLLECTING_NAME);
+    }
+
+    const offer = await this.addOnOffer(
+      conversation.context?.pendingCart ?? [],
+    );
+    if (!offer) {
+      return this.advanceFrom(conversation, ConversationState.COLLECTING_NAME);
+    }
+    return [
+      {
+        ...offer,
+        text: 'Pick any extras in the card below, or tap "No, thanks" to carry on.',
+      },
+    ];
+  }
+
+  /** The add-on card for this cart, or null when no vendor in it has any. */
+  private async addOnOffer(
+    cart: PendingCartLine[],
+  ): Promise<OutboundMessage | null> {
+    const addOns = await this.catalog.listAddOns(
+      await this.vendorsWithMain(cart),
+    );
+    if (addOns.length === 0) return null;
+
+    const byVendor = new Map<
+      string,
+      {
+        vendorId: string;
+        vendorName: string | null;
+        items: {
+          productId: string;
+          name: string;
+          price: number;
+          imageUrl: string | null;
+        }[];
+      }
+    >();
+    for (const addOn of addOns) {
+      const group = byVendor.get(addOn.vendorId) ?? {
+        vendorId: addOn.vendorId,
+        vendorName: addOn.vendorName,
+        items: [],
+      };
+      group.items.push({
+        productId: addOn.id,
+        name: addOn.name,
+        price: addOn.price,
+        imageUrl: addOn.imageUrl,
+      });
+      byVendor.set(addOn.vendorId, group);
+    }
+
+    return {
+      text: 'Anything to go with it?',
+      payload: {
+        kind: 'addon_offer',
+        data: { vendors: [...byVendor.values()] },
+      },
+    };
+  }
+
+  /**
+   * Vendors with a main (non-add-on) item in the cart. Only their add-ons are offered:
+   * an extra always rides with a meal from its own kitchen.
+   */
+  private async vendorsWithMain(cart: PendingCartLine[]): Promise<string[]> {
+    const products = await Promise.all(
+      cart.map((line) => this.catalog.getProductById(line.productId)),
+    );
+    return [
+      ...new Set(
+        products
+          .filter((product) => product && !product.isAddOn)
+          .map((product) => product!.vendorId),
+      ),
+    ];
+  }
+
   private async reset(conversationId: string): Promise<void> {
     await this.conversationService.mergeContext(conversationId, {
       pendingCart: [],
+      // A new order is offered extras again.
+      addOnsOffered: false,
     });
     await this.conversationService.setState(
       conversationId,
@@ -404,7 +672,11 @@ export class CheckoutFlow {
 
 // ─── Wording and parsing ──────────────────────────────────────────────────────
 
-function promptFor(state: ConversationState, name?: string): OutboundMessage {
+function promptFor(
+  state: ConversationState,
+  name?: string,
+  lastAddress?: string,
+): OutboundMessage {
   switch (state) {
     case ConversationState.COLLECTING_NAME:
       return { text: 'Lovely. What name should I put on the order?' };
@@ -412,11 +684,21 @@ function promptFor(state: ConversationState, name?: string): OutboundMessage {
       return {
         text: `Thanks${name ? `, ${name.split(' ')[0]}` : ''}. What number can we reach you on about the order?`,
       };
-    case ConversationState.COLLECTING_FULFILLMENT:
+    case ConversationState.COLLECTING_EMAIL:
       return {
-        text: 'Would you like it delivered, or will you pick it up?',
-        payload: fulfillmentChoices(),
+        text: 'Where should we send your receipt? Adding your email also keeps this chat on any phone.',
+        payload: emailCapture(),
       };
+    case ConversationState.COLLECTING_FULFILLMENT:
+      return lastAddress
+        ? {
+            text: `Should we deliver to ${lastAddress} again?`,
+            payload: returningChoices(),
+          }
+        : {
+            text: 'Would you like it delivered, or will you pick it up?',
+            payload: fulfillmentChoices(),
+          };
     case ConversationState.COLLECTING_ADDRESS:
       return { text: 'Where should we deliver it?' };
     default:
@@ -435,6 +717,64 @@ function fulfillmentChoices() {
       ],
     },
   };
+}
+
+/** The receipt card. `email` pre-fills it when the buyer typed one into the chat. */
+function emailCapture(email?: string) {
+  return {
+    kind: 'email_capture' as const,
+    data: email ? { email } : {},
+  };
+}
+
+const EMAIL = /[^\s@]+@[^\s@]+\.[^\s@]+/;
+
+/** "No, thanks" from the add-on card, or a typed no or "just that". */
+function isNoThanks(answer: string): boolean {
+  return /^(no|nope|nah|no,? thanks?|no thank you|skip|none|nothing|that'?s all|just that|continue|i'?m good|i'?m fine)\b/i.test(
+    answer.trim(),
+  );
+}
+
+/** "Skip for now" from the card, or a typed no. */
+function isSkip(answer: string): boolean {
+  return /^(skip|no|nope|not now|later|none|no email|no thanks|i don'?t have (one|an email))\b/i.test(
+    answer.trim(),
+  );
+}
+
+function returningChoices() {
+  return {
+    kind: 'choices' as const,
+    data: {
+      purpose: 'fulfillment',
+      options: [
+        { id: 'SAME', label: 'Yes, same address' },
+        { id: 'NEW', label: 'New address' },
+        { id: 'PICKUP', label: "I'll pick it up" },
+      ],
+    },
+  };
+}
+
+/**
+ * The returning buyer's answer, tapped or typed. A new address is checked for first —
+ * "no, a different one" must not read as a yes — then pickup, then anything that agrees.
+ * A bare "no" or "not the same" is never a yes, and could mean a new address or pickup,
+ * so it is asked again. Unclear is never guessed: guessing sends food to the wrong door.
+ */
+function readReturning(answer: string): 'SAME' | 'NEW' | 'PICKUP' | null {
+  const text = answer.toLowerCase();
+  if (/\b(new|different|another|change|other)\b/.test(text)) return 'NEW';
+  if (readFulfillment(text) === 'PICKUP') return 'PICKUP';
+  if (/\b(no|not|nope|don'?t)\b/.test(text)) return null;
+  if (
+    /\b(same|yes|yeah|yep|yup|ok|okay|sure|correct)\b/.test(text) ||
+    readFulfillment(text) === 'DELIVERY'
+  ) {
+    return 'SAME';
+  }
+  return null;
 }
 
 function confirmChoices() {
@@ -514,6 +854,8 @@ function describeCartChanges(error: CartChangedError): string {
         return `${name} — that vendor has closed`;
       case 'UNAVAILABLE':
         return `${name} has sold out`;
+      case 'ADDON_WITHOUT_MAIN':
+        return `${name} is an extra, so it needs a meal from the same vendor`;
       default:
         return `${name} is no longer available`;
     }

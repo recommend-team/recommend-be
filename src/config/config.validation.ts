@@ -129,6 +129,14 @@ class EnvironmentVariables {
   CONTACT_INBOX?: string;
 
   @IsOptional()
+  @IsString()
+  WEBSITE_URL?: string;
+
+  @IsOptional()
+  @IsString()
+  CUSTOMER_APP_URL?: string;
+
+  @IsOptional()
   @IsNumber()
   CONTACT_MAX_PER_SENDER_PER_HOUR?: number;
 
