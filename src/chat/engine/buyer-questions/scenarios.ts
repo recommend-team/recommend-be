@@ -40,6 +40,8 @@ const NEVER = [
   /\b(full refund|refund within|refunded within|we will refund|you will be refunded|guarantee)/i,
   // Standard English, never Pidgin.
   /\b(abeg|wahala|i dey|sharp sharp|how far)\b/i,
+  // Pickup is switched off (PICKUP_ENABLED) — never offered.
+  /pickup is free|pick it up for free|choose pickup/i,
 ];
 
 const asksAboutPerson =
@@ -97,9 +99,14 @@ export const SCENARIOS: Scenario[] = [
     expect: { says: [/card|transfer/i], handsOver: false },
   },
   {
-    name: 'pickup',
+    name: 'pickup, while it is switched off',
     buyer: ['can I pick it up myself?'],
-    expect: { says: [/pick|collect/i], handsOver: false },
+    expect: {
+      says: [
+        /(not available|isn't available|coming soon|every order is delivered)/i,
+      ],
+      handsOver: false,
+    },
   },
   {
     name: 'their order, on its way',

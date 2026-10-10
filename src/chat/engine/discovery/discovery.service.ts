@@ -271,6 +271,7 @@ export class DiscoveryService {
     const facts = {
       deliveryFee: this.ordering.deliveryFeeFor('DELIVERY'),
       servedAreas,
+      pickupEnabled: this.ordering.pickupEnabled(),
     };
     this.cachedFacts = { facts, at: Date.now() };
     return facts;

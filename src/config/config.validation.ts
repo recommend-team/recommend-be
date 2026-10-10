@@ -1,6 +1,7 @@
 import { plainToInstance } from 'class-transformer';
 import {
   IsEnum,
+  IsIn,
   IsNumber,
   IsString,
   IsOptional,
@@ -148,6 +149,11 @@ class EnvironmentVariables {
   @IsOptional()
   @IsNumber()
   DELIVERY_FEE_NGN?: number;
+
+  /** "true" lets buyers choose pickup. Anything but "true" or "false" is a typo. */
+  @IsOptional()
+  @IsIn(['true', 'false'])
+  PICKUP_ENABLED?: string;
 
   @IsOptional()
   @IsNumber()

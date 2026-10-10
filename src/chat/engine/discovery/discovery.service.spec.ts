@@ -38,7 +38,11 @@ describe('DiscoveryService (keyword fallback)', () => {
   let service: DiscoveryService;
   let catalog: { searchProducts: jest.Mock; searchVendors: jest.Mock };
   let locations: { searchAreas: jest.Mock; listServedAreas: jest.Mock };
-  let ordering: { listOrders: jest.Mock; deliveryFeeFor: jest.Mock };
+  let ordering: {
+    listOrders: jest.Mock;
+    deliveryFeeFor: jest.Mock;
+    pickupEnabled: jest.Mock;
+  };
 
   beforeEach(async () => {
     catalog = {
@@ -52,6 +56,7 @@ describe('DiscoveryService (keyword fallback)', () => {
     ordering = {
       listOrders: jest.fn().mockResolvedValue([]),
       deliveryFeeFor: jest.fn().mockReturnValue(1500),
+      pickupEnabled: jest.fn().mockReturnValue(false),
     };
 
     const module: TestingModule = await Test.createTestingModule({
@@ -377,6 +382,7 @@ describe('DiscoveryService (model)', () => {
   const modelOrdering = {
     listOrders: jest.fn(),
     deliveryFeeFor: jest.fn(),
+    pickupEnabled: jest.fn().mockReturnValue(false),
   };
 
   beforeEach(async () => {

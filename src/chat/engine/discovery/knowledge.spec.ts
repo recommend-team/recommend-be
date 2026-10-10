@@ -15,7 +15,11 @@ const area = (id: string, name: string, stateName = 'Lagos') => ({
 const facts: RecommendFacts = {
   deliveryFee: 1500,
   servedAreas: [area('a1', 'Yaba'), area('a2', 'Ikeja')],
+  pickupEnabled: true,
 };
+
+/** As production ships until pickup is ready. */
+const noPickup: RecommendFacts = { ...facts, pickupEnabled: false };
 
 const textOf = (said: string) => {
   const answer = answerFromKnowledge(said, facts);
@@ -73,6 +77,43 @@ describe('what the assistant knows', () => {
 
   it('writes naira with thousands separators', () => {
     expect(naira(1500)).toBe('₦1,500');
+  });
+
+  describe('while pickup is switched off', () => {
+    it('tells the model pickup is coming soon, and never to offer it', () => {
+      const knowledge = buildKnowledge(noPickup);
+
+      expect(knowledge).toContain(
+        'Pickup: not available yet — it is coming soon',
+      );
+      expect(knowledge).toMatch(/Never\s+offer pickup/);
+      expect(knowledge).not.toContain('Pickup: free');
+      expect(knowledge).toContain('their delivery address');
+    });
+
+    it('says pickup is coming soon when asked', () => {
+      expect(answerFromKnowledge('can I pick it up myself?', noPickup)).toEqual(
+        {
+          kind: 'text',
+          text: "Pickup isn't available just yet — it's coming soon. For now, every order is delivered.",
+        },
+      );
+    });
+
+    it('quotes the delivery fee without promising free pickup', () => {
+      const answer = answerFromKnowledge('how much is delivery?', noPickup);
+      const text = answer?.kind === 'text' ? answer.text : '';
+
+      expect(text).toContain('₦1,500');
+      expect(text).not.toMatch(/pickup/i);
+    });
+
+    it('explains how it works as delivery only', () => {
+      const answer = answerFromKnowledge('how does this work?', noPickup);
+      const text = answer?.kind === 'text' ? answer.text : '';
+
+      expect(text).not.toMatch(/pick it up/i);
+    });
   });
 
   describe('answering without a model', () => {

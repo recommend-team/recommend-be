@@ -250,6 +250,12 @@ export const brandConfig = registerAs('brand', () => {
 
 export const deliveryConfig = registerAs('delivery', () => ({
   feeNgn: parseInt(process.env.DELIVERY_FEE_NGN || '1500', 10),
+  /**
+   * Whether buyers may collect orders themselves. Off until pickup is ready: checkout
+   * refuses it, and the chat goes straight to the delivery address. Orders already
+   * placed for pickup are unaffected.
+   */
+  pickupEnabled: process.env.PICKUP_ENABLED === 'true',
 }));
 
 export const platformConfig = registerAs('platform', () => {

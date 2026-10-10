@@ -185,6 +185,8 @@ const ordering = {
     Promise.resolve(
       references.includes(ORDER_ON_ITS_WAY.reference) ? [ORDER_ON_ITS_WAY] : [],
     ),
+  // As in production until pickup is ready.
+  pickupEnabled: () => false,
   deliveryFeeFor: (type: 'PICKUP' | 'DELIVERY') =>
     type === 'DELIVERY' ? DELIVERY_FEE : 0,
   placeCheckout: () => Promise.reject(new Error('not in this harness')),

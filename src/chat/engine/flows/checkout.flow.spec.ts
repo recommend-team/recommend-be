@@ -25,7 +25,11 @@ describe('CheckoutFlow', () => {
     setState: jest.Mock;
     findById: jest.Mock;
   };
-  let ordering: { placeCheckout: jest.Mock; deliveryFeeFor: jest.Mock };
+  let ordering: {
+    placeCheckout: jest.Mock;
+    deliveryFeeFor: jest.Mock;
+    pickupEnabled: jest.Mock;
+  };
   let identity: { upsertBuyer: jest.Mock };
   let catalog: { getProductById: jest.Mock; listAddOns: jest.Mock };
   /** Whatever findById should return next — the flow re-reads after every merge. */
@@ -61,6 +65,9 @@ describe('CheckoutFlow', () => {
       deliveryFeeFor: jest.fn((type: string) =>
         type === 'DELIVERY' ? 1500 : 0,
       ),
+      // On here, so the pickup path stays tested for the day it is switched back on.
+      // "while pickup is switched off" covers the setting production ships with.
+      pickupEnabled: jest.fn().mockReturnValue(true),
     };
     identity = { upsertBuyer: jest.fn().mockResolvedValue({ buyerId: 'b1' }) };
     catalog = {
@@ -334,6 +341,98 @@ describe('CheckoutFlow', () => {
 
       expect(conversations.setState).not.toHaveBeenCalled();
       expect(replies[0].payload?.kind).toBe('addon_offer');
+    });
+  });
+
+  describe('while pickup is switched off', () => {
+    const returning: ConversationContext = {
+      profile: { name: 'Ada Obi', phone: '+2348012345678' },
+      lastPaidAt: '2026-10-01T10:00:00.000Z',
+      lastDeliveryAddress: '12 Admiralty Way, Lekki',
+    };
+
+    beforeEach(() => ordering.pickupEnabled.mockReturnValue(false));
+
+    it('never asks a new buyer to choose — straight to the address, as a delivery', async () => {
+      stored = {
+        profile: { name: 'Ada', phone: '+2348012345678' },
+        receiptEmailSkipped: true,
+      };
+
+      const replies = await flow.start(
+        conversationAt(ConversationState.DISCOVERY),
+        CART,
+      );
+
+      expect(conversations.setState).toHaveBeenCalledWith(
+        'c1',
+        ConversationState.COLLECTING_ADDRESS,
+      );
+      expect(replies[0].text).toBe('Where should we deliver it?');
+      // Recorded: an unset fulfilment would be read as pickup at the summary.
+      expect(stored.profile?.fulfillmentType).toBe('DELIVERY');
+    });
+
+    it('offers a returning buyer their address, without a pickup button', async () => {
+      stored = { ...returning };
+
+      const replies = await flow.start(
+        conversationAt(ConversationState.DISCOVERY),
+        CART,
+      );
+
+      expect(replies[0].payload).toEqual({
+        kind: 'choices',
+        data: {
+          purpose: 'fulfillment',
+          options: [
+            { id: 'SAME', label: 'Yes, same address' },
+            { id: 'NEW', label: 'New address' },
+          ],
+        },
+      });
+    });
+
+    it('turns down a returning buyer who types pickup, and asks again', async () => {
+      stored = { ...returning };
+
+      const replies = await flow.handle(
+        conversationAt(ConversationState.COLLECTING_FULFILLMENT, returning),
+        "I'll pick it up",
+      );
+
+      expect(replies[0].text).toBe(
+        "Pickup isn't available just yet — we'll deliver it to you. Should we deliver to 12 Admiralty Way, Lekki again?",
+      );
+      expect(stored.profile?.fulfillmentType).toBeUndefined();
+      expect(conversations.setState).not.toHaveBeenCalled();
+    });
+
+    it('does not take "I’ll pick it up" as an address', async () => {
+      const replies = await flow.handle(
+        conversationAt(ConversationState.COLLECTING_ADDRESS),
+        "I'll pick it up myself",
+      );
+
+      expect(replies[0].text).toBe(
+        "Pickup isn't available just yet — we'll deliver it to you. Where should we deliver it?",
+      );
+      expect(stored.profile?.address).toBeUndefined();
+    });
+
+    it('moves a checkout already waiting on the question on to the address', async () => {
+      // Asked "delivered or picked up?" before pickup was switched off.
+      const replies = await flow.handle(
+        conversationAt(ConversationState.COLLECTING_FULFILLMENT),
+        'pickup',
+      );
+
+      expect(stored.profile?.fulfillmentType).toBe('DELIVERY');
+      expect(conversations.setState).toHaveBeenCalledWith(
+        'c1',
+        ConversationState.COLLECTING_ADDRESS,
+      );
+      expect(replies[0].text).toMatch(/^Pickup isn't available just yet/);
     });
   });
 

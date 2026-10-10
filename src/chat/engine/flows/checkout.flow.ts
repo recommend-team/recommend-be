@@ -258,6 +258,26 @@ export class CheckoutFlow {
     if (lastAddress)
       return this.captureReturning(conversation, answer, lastAddress);
 
+    // Pickup switched off: there is nothing to choose. Only reached by a checkout that
+    // was already waiting on this question when pickup was turned off.
+    if (!this.ordering.pickupEnabled()) {
+      await this.conversationService.mergeContext(conversation.id, {
+        profile: { fulfillmentType: 'DELIVERY' },
+      });
+      await this.conversationService.setState(
+        conversation.id,
+        ConversationState.COLLECTING_ADDRESS,
+      );
+      return [
+        {
+          text:
+            readFulfillment(answer) === 'PICKUP'
+              ? `${PICKUP_UNAVAILABLE} Where should we deliver it?`
+              : 'Where should we deliver it?',
+        },
+      ];
+    }
+
     const choice = readFulfillment(answer);
 
     if (!choice) {
@@ -292,6 +312,7 @@ export class CheckoutFlow {
     lastAddress: string,
   ): Promise<OutboundMessage[]> {
     const choice = readReturning(answer);
+    const pickup = this.ordering.pickupEnabled();
 
     if (!choice) {
       return [
@@ -299,7 +320,17 @@ export class CheckoutFlow {
           ConversationState.COLLECTING_FULFILLMENT,
           undefined,
           lastAddress,
+          pickup,
         ),
+      ];
+    }
+
+    if (choice === 'PICKUP' && !pickup) {
+      return [
+        {
+          text: `${PICKUP_UNAVAILABLE} Should we deliver to ${lastAddress} again?`,
+          payload: returningChoices(false),
+        },
       ];
     }
 
@@ -339,6 +370,14 @@ export class CheckoutFlow {
           text: 'I need a bit more of the address than that — street and area?',
         },
       ];
+    }
+
+    // "I'll pick it up" is not an address — and while pickup is off, not an option.
+    if (
+      !this.ordering.pickupEnabled() &&
+      readFulfillment(answer) === 'PICKUP'
+    ) {
+      return [{ text: `${PICKUP_UNAVAILABLE} Where should we deliver it?` }];
     }
 
     await this.conversationService.mergeContext(conversation.id, {
@@ -495,11 +534,27 @@ export class CheckoutFlow {
     // The address is never reused silently. A returning buyer is asked about their last
     // paid delivery address at the fulfilment step; anyone else gives one here.
 
+    // Pickup switched off: delivery is the only way, so nobody is asked to choose — a
+    // first-time buyer goes straight to the address. Recorded, because an unset
+    // fulfilment would otherwise be read as pickup further on.
+    const pickup = this.ordering.pickupEnabled();
+    const lastAddress = fresh?.context?.lastDeliveryAddress;
+    if (
+      state === ConversationState.COLLECTING_FULFILLMENT &&
+      !pickup &&
+      !lastAddress
+    ) {
+      await this.conversationService.mergeContext(conversation.id, {
+        profile: { fulfillmentType: 'DELIVERY' },
+      });
+      state = ConversationState.COLLECTING_ADDRESS;
+    }
+
     await this.conversationService.setState(conversation.id, state);
 
     return state === ConversationState.CONFIRMING_ORDER
       ? this.summarise(fresh ?? conversation)
-      : [promptFor(state, profile.name, fresh?.context?.lastDeliveryAddress)];
+      : [promptFor(state, profile.name, lastAddress, pickup)];
   }
 
   /** Read the order back before charging for it, priced from the database. */
@@ -676,6 +731,7 @@ function promptFor(
   state: ConversationState,
   name?: string,
   lastAddress?: string,
+  pickup = true,
 ): OutboundMessage {
   switch (state) {
     case ConversationState.COLLECTING_NAME:
@@ -693,7 +749,7 @@ function promptFor(
       return lastAddress
         ? {
             text: `Should we deliver to ${lastAddress} again?`,
-            payload: returningChoices(),
+            payload: returningChoices(pickup),
           }
         : {
             text: 'Would you like it delivered, or will you pick it up?',
@@ -743,7 +799,8 @@ function isSkip(answer: string): boolean {
   );
 }
 
-function returningChoices() {
+/** Pickup is offered only while it is switched on (`PICKUP_ENABLED`). */
+function returningChoices(pickup = true) {
   return {
     kind: 'choices' as const,
     data: {
@@ -751,11 +808,14 @@ function returningChoices() {
       options: [
         { id: 'SAME', label: 'Yes, same address' },
         { id: 'NEW', label: 'New address' },
-        { id: 'PICKUP', label: "I'll pick it up" },
+        ...(pickup ? [{ id: 'PICKUP', label: "I'll pick it up" }] : []),
       ],
     },
   };
 }
+
+const PICKUP_UNAVAILABLE =
+  "Pickup isn't available just yet — we'll deliver it to you.";
 
 /**
  * The returning buyer's answer, tapped or typed. A new address is checked for first —

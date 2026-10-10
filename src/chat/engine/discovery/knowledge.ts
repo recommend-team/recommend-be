@@ -22,7 +22,13 @@ export interface RecommendFacts {
   deliveryFee: number;
   /** Areas with at least one approved vendor. */
   servedAreas: AreaSummary[];
+  /** Whether buyers may collect orders themselves (`PICKUP_ENABLED`). */
+  pickupEnabled: boolean;
 }
+
+/** What James says about pickup while it is switched off. */
+export const PICKUP_COMING_SOON =
+  "Pickup isn't available just yet — it's coming soon. For now, every order is delivered.";
 
 export function naira(amount: number): string {
   return `₦${amount.toLocaleString('en-US')}`;
@@ -43,6 +49,12 @@ export function describeAreas(areas: AreaSummary[]): string {
 /** The knowledge section of the system prompt, built fresh for each reply. */
 export function buildKnowledge(facts: RecommendFacts): string {
   const fee = naira(facts.deliveryFee);
+  const pickup = facts.pickupEnabled
+    ? `- Pickup: free. Once the order is ready, the buyer is told where to collect it, and shows
+  the collection code from their Orders tab at the counter.`
+    : `- Pickup: not available yet — it is coming soon. Every order is delivered for now. Never
+  offer pickup or suggest the buyer collect an order themselves. If asked, say it is
+  coming soon.`;
 
   return `
 WHAT YOU KNOW ABOUT RECOMMEND
@@ -54,13 +66,12 @@ about the business you may state — if something is not here, say you are not s
 - Ordering: the buyer asks, sees options as cards, opens a vendor or adds items to their
   cart, then taps Pay. Before payment, they may be offered extras from the same vendor
   (drinks, sides), then asked for their name, phone number, an optional email for the
-  receipt, and whether it is delivery or pickup. They see a summary and pay right here in
-  the chat.
+  receipt, and ${facts.pickupEnabled ? 'whether it is delivery or pickup' : 'their delivery address'}. They see a
+  summary and pay right here in the chat.
 - Delivery: a flat ${fee} wherever we deliver, whatever the order. Delivery takes
   ${DELIVERY_TIME}. Never promise an exact time. When the rider arrives, the buyer reads
   them the delivery code shown in their Orders tab.
-- Pickup: free. Once the order is ready, the buyer is told where to collect it, and shows
-  the collection code from their Orders tab at the counter.
+${pickup}
 - Payment: through Paystack — card, bank transfer or USSD, whichever they prefer at
   checkout. A receipt goes to their email if they gave one.
 - Their orders: the Orders tab (bottom of the screen) shows every order, its progress, the
@@ -138,8 +149,9 @@ export function answerFromKnowledge(
     return {
       kind: 'text',
       text:
-        `Delivery is a flat ${naira(facts.deliveryFee)} wherever we deliver, and pickup is ` +
-        `free. It ${DELIVERY_TIME.replace(/^usually/, 'usually takes')}.`,
+        `Delivery is a flat ${naira(facts.deliveryFee)} wherever we deliver` +
+        (facts.pickupEnabled ? ', and pickup is free' : '') +
+        `. It ${DELIVERY_TIME.replace(/^usually/, 'usually takes')}.`,
     };
   }
 
@@ -157,6 +169,7 @@ export function answerFromKnowledge(
     has(/\b(pick ?up|pick (it|them) up|collect)\b/) &&
     has(/\b(how|can i|do you|is there)\b/)
   ) {
+    if (!facts.pickupEnabled) return { kind: 'text', text: PICKUP_COMING_SOON };
     return {
       kind: 'text',
       text:
@@ -201,7 +214,8 @@ export function answerFromKnowledge(
       text:
         'Tell me what you want and roughly where you are, and I’ll show you vendors near ' +
         'you who have it. Add items to your cart, tap Pay, and pay right here in the chat — ' +
-        `then it’s delivered for ${naira(facts.deliveryFee)}, or you pick it up for free.`,
+        `then it’s delivered for ${naira(facts.deliveryFee)}` +
+        (facts.pickupEnabled ? ', or you pick it up for free.' : '.'),
     };
   }
 
