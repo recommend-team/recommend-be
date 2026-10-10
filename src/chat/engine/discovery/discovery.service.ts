@@ -8,7 +8,21 @@ import type {
 import { CATALOG_PORT } from '../../ports/catalog.port';
 import type { CatalogPort } from '../../ports/catalog.port';
 import { LOCATION_PORT } from '../../ports/location.port';
-import type { LocationPort } from '../../ports/location.port';
+import type { AreaSummary, LocationPort } from '../../ports/location.port';
+import { ORDERING_PORT } from '../../ports/ordering.port';
+import type {
+  BuyerOrderSummary,
+  OrderingPort,
+} from '../../ports/ordering.port';
+import {
+  RecommendFacts,
+  answerFromKnowledge,
+  buildKnowledge,
+  describeAreas,
+} from './knowledge';
+import { describeLatestOrder, orderPrices, orderProgress } from './my-orders';
+import { sanitizeUntrusted } from './sanitize';
+import { isAside, onlySaysNotHeard } from '../flows/aside';
 import { OutboundMessage } from '../../transport/channel.interface';
 import { ChatMessage } from '../../conversation/entities/message.entity';
 import { MessageAuthor } from '../../enums/chat.enums';
@@ -32,9 +46,18 @@ export interface DiscoveryRequest {
   areaId: string | null;
   /** A buyer who has paid before, by first name. Null for anyone else. */
   buyerFirstName?: string | null;
+  /** Where their last paid delivery went, if they have one. */
+  lastDeliveryAddress?: string | null;
+  /** Signed in with an email, so their chats and orders follow them. */
+  signedIn?: boolean;
+  /** This conversation's orders — the only ones the assistant may look up. */
+  orderReferences?: string[];
   /** Recent turns, oldest first. Trimmed to the configured window. */
   history: ChatMessage[];
 }
+
+/** How long the covered areas are reused before being read again. */
+const FACTS_TTL_MS = 60_000;
 
 export interface DiscoveryResult {
   messages: OutboundMessage[];
@@ -44,6 +67,8 @@ export interface DiscoveryResult {
   foundNothing: boolean;
   /** The model asked for a teammate, and why. The engine decides whether to honour it. */
   handover: string | null;
+  /** The buyer asked for a person in so many words — hand over without asking first. */
+  buyerAskedForPerson: boolean;
 }
 
 @Injectable()
@@ -60,6 +85,7 @@ export class DiscoveryService {
     private readonly configService: ConfigService,
     @Inject(CATALOG_PORT) private readonly catalog: CatalogPort,
     @Inject(LOCATION_PORT) private readonly locations: LocationPort,
+    @Inject(ORDERING_PORT) private readonly ordering: OrderingPort,
   ) {
     const apiKey = this.configService.get<string>('openai.apiKey');
     this.model =
@@ -70,7 +96,7 @@ export class DiscoveryService {
       this.configService.get<string>('chat.assistantName') ?? 'James',
     );
     this.maxHistory =
-      this.configService.get<number>('chat.maxHistoryMessages') ?? 12;
+      this.configService.get<number>('chat.maxHistoryMessages') ?? 20;
     this.maxToolRounds =
       this.configService.get<number>('chat.maxToolRounds') ?? 3;
 
@@ -109,6 +135,52 @@ export class DiscoveryService {
     }
   }
 
+  /**
+   * A question asked in the middle of checkout, answered on its own — no searching, no
+   * cards, nothing started. The checkout question is asked again by the caller. Null
+   * when there is nothing true to say.
+   */
+  async answerAside(request: DiscoveryRequest): Promise<string | null> {
+    const facts = await this.facts();
+
+    if (this.client) {
+      try {
+        const completion = await this.client.chat.completions.create({
+          model: this.model,
+          temperature: this.temperature,
+          messages: [
+            { role: 'system', content: this.prompt },
+            { role: 'system', content: buildKnowledge(facts) },
+            { role: 'system', content: await this.aboutTheBuyer(request) },
+            {
+              role: 'system',
+              content:
+                'The buyer is in the middle of checking out and has asked a question ' +
+                'instead of answering. Answer their question only, briefly and directly, ' +
+                'from what you know. Do not ask for their details or repeat the checkout ' +
+                'question — that follows automatically. If you do not know, say so.',
+            },
+            ...this.toModelHistory(request.history),
+            { role: 'user', content: request.text },
+          ],
+        });
+        const reply = completion.choices[0]?.message?.content?.trim() ?? '';
+        const guarded = enforcePriceIntegrity(reply, [facts.deliveryFee]).text;
+        if (guarded) return guarded;
+      } catch (error) {
+        this.logger.error(
+          `Aside model call failed, answering from what we know: ${
+            error instanceof Error ? error.message : 'unknown error'
+          }`,
+        );
+      }
+    }
+
+    const known = await this.answerWithoutModel(request, false);
+    if (!known || known.handover) return null;
+    return known.messages[0]?.text ?? null;
+  }
+
   // ─── Model path ─────────────────────────────────────────────────────────────
 
   private async runModel(
@@ -116,6 +188,10 @@ export class DiscoveryService {
     request: DiscoveryRequest,
   ): Promise<DiscoveryResult> {
     const harvest = emptyHarvest();
+    const facts = await this.facts();
+    // The delivery fee is in the knowledge the model is given, so it may say it.
+    harvest.prices.push(facts.deliveryFee);
+
     const named = await this.areaNamedIn(request.text);
     const areaId = named ?? request.areaId;
     if (named && named !== request.areaId) harvest.resolvedAreaId = named;
@@ -125,10 +201,16 @@ export class DiscoveryService {
       locations: this.locations,
       areaId,
       buyerText: recentBuyerText(request),
+      orders: {
+        port: this.ordering,
+        references: request.orderReferences ?? [],
+      },
     };
 
     const messages: ChatCompletionMessageParam[] = [
       { role: 'system', content: this.prompt },
+      { role: 'system', content: buildKnowledge(facts) },
+      { role: 'system', content: await this.aboutTheBuyer(request) },
       ...(areaId
         ? [
             {
@@ -209,6 +291,87 @@ export class DiscoveryService {
       modelFailed: false,
     });
   }
+  // ─── What the assistant knows ───────────────────────────────────────────────
+
+  private cachedFacts: { facts: RecommendFacts; at: number } | null = null;
+
+  /**
+   * The facts that change without a deploy, read from the system. Areas are cached for a
+   * minute — read on every reply otherwise — and a failed read keeps the last good list.
+   */
+  private async facts(): Promise<RecommendFacts> {
+    if (this.cachedFacts && Date.now() - this.cachedFacts.at < FACTS_TTL_MS) {
+      return this.cachedFacts.facts;
+    }
+
+    let servedAreas: AreaSummary[] = this.cachedFacts?.facts.servedAreas ?? [];
+    try {
+      servedAreas = await this.locations.listServedAreas();
+    } catch (error) {
+      this.logger.warn(
+        `Could not read the covered areas: ${
+          error instanceof Error ? error.message : 'unknown error'
+        }`,
+      );
+    }
+
+    const facts = {
+      deliveryFee: this.ordering.deliveryFeeFor('DELIVERY'),
+      servedAreas,
+      pickupEnabled: this.ordering.pickupEnabled(),
+    };
+    this.cachedFacts = { facts, at: Date.now() };
+    return facts;
+  }
+
+  /** A short note about who James is talking to, from what the platform knows. */
+  private async aboutTheBuyer(request: DiscoveryRequest): Promise<string> {
+    const lines: string[] = [];
+
+    lines.push(
+      request.buyerFirstName
+        ? `- ${request.buyerFirstName}, who has ordered from us before.`
+        : '- Has not ordered from us before (or not on this device). Name not known yet.',
+    );
+    if (request.lastDeliveryAddress) {
+      // Typed by the buyer, so neutralised like any other text from outside.
+      lines.push(
+        `- Last delivery went to: ${sanitizeUntrusted(request.lastDeliveryAddress, 160)}`,
+      );
+    }
+    lines.push(
+      request.signedIn
+        ? '- Signed in, so their chats and orders follow them across devices.'
+        : '- Not signed in.',
+    );
+
+    const latest = await this.latestOrder(request.orderReferences ?? []);
+    if (latest) {
+      lines.push(
+        `- Latest order ${latest.reference}: ${orderProgress(latest)}. ` +
+          'Use get_my_orders for the details.',
+      );
+    }
+
+    return `ABOUT THIS BUYER\n${lines.join('\n')}`;
+  }
+
+  private async latestOrder(
+    references: string[],
+  ): Promise<BuyerOrderSummary | null> {
+    if (references.length === 0) return null;
+    try {
+      return (await this.ordering.listOrders(references))[0] ?? null;
+    } catch (error) {
+      this.logger.warn(
+        `Could not read the buyer's orders: ${
+          error instanceof Error ? error.message : 'unknown error'
+        }`,
+      );
+      return null;
+    }
+  }
+
   private async areaNamedIn(text: string): Promise<string | null> {
     try {
       const areas = await this.locations.searchAreas(text);
@@ -233,6 +396,40 @@ export class DiscoveryService {
     request: DiscoveryRequest,
     modelFailed: boolean,
   ): Promise<DiscoveryResult> {
+    // "you did not answer my question" — answer the one they mean: the last they asked.
+    if (onlySaysNotHeard(request.text)) {
+      const earlier = [...request.history]
+        .reverse()
+        .find(
+          (message) =>
+            message.author === MessageAuthor.BUYER &&
+            isAside(message.text) &&
+            !onlySaysNotHeard(message.text),
+        );
+      const harvest = emptyHarvest();
+      if (!earlier) {
+        return this.assemble(
+          'Sorry about that — what would you like to know?',
+          harvest,
+          { usedFallback: true, modelFailed },
+        );
+      }
+      const again = await this.keywordFallback(
+        { ...request, text: earlier.text },
+        modelFailed,
+      );
+      const [first, ...rest] = again.messages;
+      return {
+        ...again,
+        messages: first
+          ? [{ ...first, text: `Sorry about that. ${first.text}` }, ...rest]
+          : again.messages,
+      };
+    }
+
+    const known = await this.answerWithoutModel(request, modelFailed);
+    if (known) return known;
+
     const harvest = emptyHarvest();
     harvest.searched = true;
 
@@ -259,6 +456,12 @@ export class DiscoveryService {
       harvest.areas.push(...areas);
     }
 
+    // Nothing asked for, only where they are — "I live in Ikeja", "what can I get?". Show
+    // who is there rather than searching for a dish called "live".
+    if (!query) {
+      return this.whoIsNear(areaId, areas, harvest, modelFailed);
+    }
+
     const products = await this.catalog.searchProducts({
       text: query || undefined,
       areaId: areaId ?? undefined,
@@ -266,7 +469,13 @@ export class DiscoveryService {
     harvest.products.push(...products);
     harvest.prices.push(...products.map((product) => product.price));
 
-    if (products.length === 0) {
+    // A question that is also a request — "do you have suya?" — has found its answer
+    // above. One that is not, or a message that is not words, gets an honest reply, not
+    // a vendor list or "could not find anything matching" the whole question.
+    const asked = isAside(request.text);
+    const unclear = looksUnclear(query);
+
+    if (products.length === 0 && !asked && !unclear) {
       const vendors = await this.catalog.searchVendors({
         text: query || undefined,
         areaId: areaId ?? undefined,
@@ -279,9 +488,122 @@ export class DiscoveryService {
         ? "Here's what I found:"
         : harvest.vendors.length > 0
           ? 'I could not match that exactly, but these vendors are near you:'
-          : `I could not find anything matching "${query || request.text}". Try another search, or tell me which area you're in.`;
+          : asked
+            ? NOT_SURE
+            : unclear
+              ? DID_NOT_CATCH
+              : `I could not find anything matching "${query || request.text}". Try another search, or tell me which area you're in.`;
 
     return this.assemble(reply, harvest, { usedFallback: true, modelFailed });
+  }
+
+  private async whoIsNear(
+    areaId: string | null,
+    named: AreaSummary[],
+    harvest: ToolHarvest,
+    modelFailed: boolean,
+  ): Promise<DiscoveryResult> {
+    const options = { usedFallback: true, modelFailed };
+
+    if (!areaId) {
+      // Not a failed search — nothing was asked for yet.
+      harvest.searched = false;
+      return this.assemble(
+        harvest.areas.length > 1
+          ? 'Which of these areas do you mean?'
+          : 'What are you looking for, and which area are you in?',
+        harvest,
+        options,
+      );
+    }
+
+    const area =
+      named.find((candidate) => candidate.id === areaId) ??
+      (await this.locations.getAreaById(areaId));
+    harvest.vendors.push(...(await this.catalog.searchVendors({ areaId })));
+
+    const place = area?.name ?? 'your area';
+    return this.assemble(
+      harvest.vendors.length > 0
+        ? `Here are the vendors in ${place} — tap one to see what they have, or tell me what you're in the mood for.`
+        : `We don't have vendors in ${place} yet. Tell me another area and I'll look there.`,
+      harvest,
+      options,
+    );
+  }
+
+  /**
+   * Questions about Recommend itself, answered from the same facts the model gets. Null
+   * when the message is not one — it is then searched as a product, as before.
+   */
+  private async answerWithoutModel(
+    request: DiscoveryRequest,
+    modelFailed: boolean,
+  ): Promise<DiscoveryResult | null> {
+    const facts = await this.facts();
+    const answer = answerFromKnowledge(request.text, facts);
+    if (!answer) return null;
+
+    const harvest = emptyHarvest();
+    harvest.prices.push(facts.deliveryFee);
+    const done = (text: string) =>
+      this.assemble(text, harvest, { usedFallback: true, modelFailed });
+
+    switch (answer.kind) {
+      case 'text':
+        return done(answer.text);
+
+      case 'team':
+        // Only the team can help — the engine asks whether they would like someone.
+        harvest.handoverReason = answer.reason;
+        return done('');
+
+      case 'orders': {
+        const references = request.orderReferences ?? [];
+        let orders: BuyerOrderSummary[] = [];
+        try {
+          orders = references.length
+            ? await this.ordering.listOrders(references)
+            : [];
+        } catch (error) {
+          this.logger.warn(
+            `Could not read the buyer's orders: ${
+              error instanceof Error ? error.message : 'unknown error'
+            }`,
+          );
+          return done(
+            "I couldn't look up your order just now — the Orders tab at the bottom of " +
+              'the screen shows where it is.',
+          );
+        }
+        harvest.prices.push(...orders.flatMap(orderPrices));
+        return done(describeLatestOrder(orders));
+      }
+
+      case 'coverage': {
+        const named = await this.locations.searchAreas(request.text);
+        const served = new Set(facts.servedAreas.map((area) => area.id));
+        const covered = named.filter((area) => served.has(area.id));
+
+        if (named.length === 0) {
+          return done(
+            `Right now we have vendors in ${describeAreas(facts.servedAreas)}. ` +
+              'Which area are you in?',
+          );
+        }
+        if (covered.length > 0) {
+          if (covered.length === 1) harvest.resolvedAreaId = covered[0].id;
+          return done(
+            `Yes — we have vendors in ${covered.map((area) => area.name).join(', ')}. ` +
+              'What would you like?',
+          );
+        }
+        return done(
+          `We don't have vendors in ${named[0].name} yet. Right now we cover ` +
+            `${describeAreas(facts.servedAreas)}.`,
+        );
+      }
+    }
   }
 
   // ─── Shared assembly ────────────────────────────────────────────────────────
@@ -339,6 +661,7 @@ export class DiscoveryService {
         harvest.products.length === 0 &&
         harvest.vendors.length === 0,
       handover: harvest.handoverReason,
+      buyerAskedForPerson: harvest.buyerAskedForPerson,
     };
   }
 
@@ -400,6 +723,24 @@ const FILLER = new Set([
   'by',
   'from',
   'inside',
+  // Saying where they are, or asking what there is — not a dish.
+  'live',
+  'stay',
+  'staying',
+  'am',
+  'im',
+  'based',
+  'located',
+  'what',
+  'whats',
+  'options',
+  'available',
+  'there',
+  'anything',
+  'something',
+  'show',
+  'see',
+  'eat',
 ]);
 
 /** Crude but predictable: drop filler words so "I want some jollof" searches "jollof". */
@@ -422,4 +763,27 @@ function recentBuyerText(request: DiscoveryRequest): string {
     .map((message) => message.text);
 
   return [request.text, ...previous.reverse()].join(' ');
+}
+
+/** A question we have no answer for — said plainly, with what we can do instead. */
+export const NOT_SURE =
+  "I'm not sure about that one. I can find food and other things from vendors near you, " +
+  'and tell you about delivery, payment and your orders — or say "talk to a person" and ' +
+  "I'll bring in our team.";
+
+/** A message that is not words — asked about, rather than searched for. */
+export const DID_NOT_CATCH =
+  "Sorry, I didn't quite catch that — what are you looking for, and roughly where?";
+
+/**
+ * Keyboard mash rather than words: at least half the words have no vowel, or a run of
+ * four consonants ("asdkjh"). Real dishes and Nigerian place names pass.
+ */
+function looksUnclear(query: string): boolean {
+  const words = query.split(' ').filter(Boolean);
+  if (words.length === 0) return false;
+  const mashed = words.filter(
+    (word) => !/[aeiouy]/.test(word) || /[^aeiouy0-9]{4,}/.test(word),
+  ).length;
+  return mashed * 2 >= words.length;
 }

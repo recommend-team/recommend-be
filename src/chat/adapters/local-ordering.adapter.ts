@@ -48,6 +48,10 @@ export class LocalOrderingAdapter implements OrderingPort {
     );
   }
 
+  pickupEnabled(): boolean {
+    return this.checkoutService.pickupEnabled();
+  }
+
   async placeCheckout(input: PlaceCheckoutInput): Promise<PlacedCheckout> {
     try {
       const result = await this.checkoutService.createCheckout(

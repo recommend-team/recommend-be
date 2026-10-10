@@ -66,6 +66,7 @@ describe('CheckoutService', () => {
     items: SavedItem[];
   };
   /** Mutable so a test can move the rate the way an operator would. */
+  let pickupEnabled = true;
   let feePercent: number;
   let config: { get: jest.Mock };
 
@@ -77,6 +78,7 @@ describe('CheckoutService', () => {
       // every key with the same value would have paid vendors a 1,500% fee.
       get: jest.fn((key: string) => {
         if (key === 'delivery.feeNgn') return DELIVERY_FEE;
+        if (key === 'delivery.pickupEnabled') return pickupEnabled;
         if (key === 'platform.feeRate') return feePercent / 100;
         return undefined;
       }),
@@ -239,6 +241,39 @@ describe('CheckoutService', () => {
 
       expect(result.deliveryFee).toBe(0);
       expect(result.totalAmount).toBe(result.goodsTotal);
+    });
+
+    it('refuses pickup while it is switched off, before touching anything', async () => {
+      pickupEnabled = false;
+      try {
+        await expect(
+          service.createCheckout({
+            ...baseDto,
+            fulfillmentType: FulfillmentType.PICKUP,
+            deliveryAddress: undefined,
+            items: [{ productId: 'jollof', quantity: 1 }],
+          } as never),
+        ).rejects.toMatchObject({
+          response: { code: 'PICKUP_UNAVAILABLE' },
+        });
+        expect(products.find).not.toHaveBeenCalled();
+      } finally {
+        pickupEnabled = true;
+      }
+    });
+
+    it('still takes deliveries while pickup is switched off', async () => {
+      pickupEnabled = false;
+      try {
+        const result = await service.createCheckout({
+          ...baseDto,
+          items: [{ productId: 'jollof', quantity: 1 }],
+        } as never);
+
+        expect(result.deliveryFee).toBe(DELIVERY_FEE);
+      } finally {
+        pickupEnabled = true;
+      }
     });
   });
 

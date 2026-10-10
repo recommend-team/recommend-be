@@ -31,7 +31,15 @@ export interface ConversationContext {
   pendingPaymentReference?: string;
   orderReferences?: string[];
   strugglingTurns?: number;
+  /** Retired: a handover no longer expires. Still cleared, for conversations that have it. */
   unansweredHandoverAt?: string;
+  /**
+   * The assistant offered a person and is waiting for the buyer's yes or no — why it
+   * offered, which becomes the handover reason if they accept.
+   */
+  teammateOffered?: string;
+  /** The buyer was told the team is busy — once per handover. */
+  handoverNoticeSentAt?: string;
   /** The buyer skipped the receipt-email step. Remembered, so a later order does not ask again. */
   receiptEmailSkipped?: boolean;
   /**
@@ -46,6 +54,18 @@ export interface ConversationContext {
   lastDeliveryAddress?: string;
   /** Add-ons were offered for the cart now being checked out — never offered twice. */
   addOnsOffered?: boolean;
+  /**
+   * A delivery address being taken in steps, all within COLLECTING_ADDRESS: the buyer
+   * is asked which area it is in (AREA), then for a landmark (LANDMARK). `text` is the
+   * address so far; `suggestedAreaId` is the area offered for a yes.
+   */
+  addressDraft?: {
+    text: string;
+    stage: 'AREA' | 'LANDMARK';
+    suggestedAreaId?: string;
+  };
+  /** The buyer was asked once to add a house number and street — never twice. */
+  addressRetried?: boolean;
 }
 
 @Entity('conversations')

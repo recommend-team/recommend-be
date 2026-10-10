@@ -94,4 +94,7 @@ export interface OrderingPort {
   completeOrder(reference: string): Promise<void>;
 
   deliveryFeeFor(fulfillmentType: 'PICKUP' | 'DELIVERY'): number;
+
+  /** Whether buyers may choose pickup right now. Off: delivery is the only option. */
+  pickupEnabled(): boolean;
 }

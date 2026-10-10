@@ -6,6 +6,7 @@ import {
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { ConfigService } from '@nestjs/config';
+import { Cron, CronExpression } from '@nestjs/schedule';
 import { IsNull, Repository } from 'typeorm';
 import { Conversation } from '../conversation/entities/conversation.entity';
 import type { MessagePayload } from '../conversation/entities/message.entity';
@@ -64,15 +65,17 @@ export class HandoverService {
     }
   }
 
+  /**
+   * Put the conversation in the "waiting for you" queue. The assistant keeps answering
+   * the buyer meanwhile — only an admin taking the chat quiets it.
+   *
+   * Only ever on the buyer's say-so: they asked for a person, or accepted the offer of one.
+   */
   async requestHandover(
     conversation: Conversation,
     reason: string,
   ): Promise<boolean> {
-    if (
-      conversation.heldByAdminId ||
-      conversation.handoverRequestedAt ||
-      conversation.context?.unansweredHandoverAt
-    ) {
+    if (conversation.heldByAdminId || conversation.handoverRequestedAt) {
       return false;
     }
 
@@ -89,6 +92,15 @@ export class HandoverService {
 
     conversation.handoverRequestedAt = now;
     conversation.handoverReason = reason;
+
+    // A fresh wait: the busy notice is owed again, and the struggling count is spent.
+    const reset = {
+      handoverNoticeSentAt: undefined,
+      teammateOffered: undefined,
+      strugglingTurns: 0,
+    };
+    await this.conversationService.mergeContext(conversation.id, reset);
+    conversation.context = { ...conversation.context, ...reset };
 
     const buyerName = conversation.context?.profile?.name ?? null;
 
@@ -108,7 +120,7 @@ export class HandoverService {
           conversation.id,
           reason,
           buyerName,
-          this.waitMinutes(),
+          this.noticeMinutes(),
         ),
       );
     } catch (error) {
@@ -125,42 +137,76 @@ export class HandoverService {
     return true;
   }
 
-  async awaitingTeammate(
-    conversation: Conversation,
-  ): Promise<'waiting' | 'expired' | 'none'> {
-    if (!conversation.handoverRequestedAt || conversation.heldByAdminId) {
-      return 'none';
+  /**
+   * Tell each buyer whose handover nobody has taken in `CHAT_HANDOVER_NOTICE_MINUTES`
+   * that the team is busy — once per handover.
+   *
+   * Claimed by one conditional UPDATE, so with several instances running only one of them
+   * sends any given notice. The chat stays in the admin queue; this only sets expectations.
+   */
+  @Cron(CronExpression.EVERY_30_SECONDS)
+  async sendBusyNotices(): Promise<number> {
+    const cutoff = new Date(Date.now() - this.noticeMinutes() * 60_000);
+
+    let claimed: Pick<Conversation, 'id' | 'channel' | 'channelAddress'>[];
+    try {
+      const result = await this.conversations
+        .createQueryBuilder()
+        .update(Conversation)
+        .set({
+          context: () =>
+            `context || jsonb_build_object('handoverNoticeSentAt', CAST(:sentAt AS text))`,
+        })
+        .where('"handoverRequestedAt" <= :cutoff', { cutoff })
+        .andWhere('"heldByAdminId" IS NULL')
+        .andWhere('"mergedIntoId" IS NULL')
+        .andWhere(`context->>'handoverNoticeSentAt' IS NULL`)
+        .setParameter('sentAt', new Date().toISOString())
+        .returning(['id', 'channel', 'channelAddress'])
+        .execute();
+      claimed = (result.raw ?? []) as typeof claimed;
+    } catch (error) {
+      this.logger.error(
+        `Could not look for unanswered handovers: ${
+          error instanceof Error ? error.message : 'unknown error'
+        }`,
+      );
+      return 0;
     }
 
-    const waitedMinutes =
-      (Date.now() - conversation.handoverRequestedAt.getTime()) / 60_000;
-    if (waitedMinutes < this.waitMinutes()) return 'waiting';
+    for (const conversation of claimed) {
+      try {
+        const persisted = await this.conversationService.recordOutbound({
+          conversationId: conversation.id,
+          text: TEAM_IS_BUSY,
+        });
+        await this.channels.send(
+          conversation.channel,
+          conversation.channelAddress,
+          {
+            text: TEAM_IS_BUSY,
+            messageId: persisted.id,
+            createdAt: persisted.createdAt,
+          },
+        );
+        this.logger.log(
+          `Nobody took conversation ${conversation.id} within ${this.noticeMinutes()} ` +
+            `minutes — told the buyer the team is busy`,
+        );
+      } catch (error) {
+        this.logger.error(
+          `Failed to send the busy notice on ${conversation.id}: ${
+            error instanceof Error ? error.message : 'unknown error'
+          }`,
+        );
+      }
+    }
 
-    const expiredAt = new Date().toISOString();
-    await this.conversations.update(
-      { id: conversation.id },
-      { handoverRequestedAt: null, handoverReason: null },
-    );
-    await this.conversationService.mergeContext(conversation.id, {
-      unansweredHandoverAt: expiredAt,
-    });
-
-    conversation.handoverRequestedAt = null;
-    conversation.handoverReason = null;
-    conversation.context = {
-      ...conversation.context,
-      unansweredHandoverAt: expiredAt,
-    };
-
-    this.logger.warn(
-      `Nobody took conversation ${conversation.id} within ${this.waitMinutes()} minutes — ` +
-        `the assistant is answering again`,
-    );
-    return 'expired';
+    return claimed.length;
   }
 
-  private waitMinutes(): number {
-    return this.config.get<number>('chat.handoverWaitMinutes') ?? 5;
+  private noticeMinutes(): number {
+    return this.config.get<number>('chat.handoverNoticeMinutes') ?? 3;
   }
 
   /**
@@ -194,13 +240,18 @@ export class HandoverService {
 
     await this.conversationService.clearAttention(conversationId);
 
-    // A clean slate: once a person has dealt with it, the assistant may ask again later.
+    // A clean slate: once a person has dealt with it, the assistant may offer again later.
+    const context = conversation.context;
     if (
-      conversation.context?.unansweredHandoverAt ||
-      conversation.context?.strugglingTurns
+      context?.unansweredHandoverAt ||
+      context?.strugglingTurns ||
+      context?.handoverNoticeSentAt ||
+      context?.teammateOffered
     ) {
       await this.conversationService.mergeContext(conversationId, {
         unansweredHandoverAt: undefined,
+        handoverNoticeSentAt: undefined,
+        teammateOffered: undefined,
         strugglingTurns: 0,
       });
     }
@@ -370,6 +421,11 @@ export class HandoverService {
     return conversation;
   }
 }
+
+/** Sent once when a handover has waited `CHAT_HANDOVER_NOTICE_MINUTES` with nobody on it. */
+export const TEAM_IS_BUSY =
+  "Our team is a bit busy right now — they'll reply here as soon as they can. " +
+  "Meanwhile I'm happy to keep helping.";
 
 /** A notification shows two or three lines; the rest is in the chat. */
 function preview(text: string): string {

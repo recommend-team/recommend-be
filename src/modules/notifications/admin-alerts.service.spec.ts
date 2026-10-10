@@ -176,29 +176,34 @@ describe('AdminAlertsService', () => {
     });
   });
 
-  describe('a buyer the assistant handed over', () => {
+  describe('a buyer handed to the team', () => {
     beforeEach(() =>
       service.onHandedOver(
-        new ConversationHandedOverEvent('c1', 'Wants a refund', 'Ada', 5),
+        new ConversationHandedOverEvent(
+          'c1',
+          'The buyer asked for a person',
+          'Ada',
+          3,
+        ),
       ),
     );
 
-    it('alerts every active admin, saying how long they have', () => {
+    it('alerts every active admin, saying when the buyer hears the team is busy', () => {
       expect(emitted[0]).toMatchObject({
         kind: 'CONVERSATION_HANDED_OVER',
         title: 'Ada is waiting for you',
-        body: 'Wants a refund. The assistant answers again in 5 min if nobody takes it.',
+        body: "The buyer asked for a person. They're told the team is busy if nobody takes it in 3 min.",
         url: '/admin/conversations/c1',
         adminId: null,
       });
       expect(pushedTo()).toEqual(['a1', 'a2']);
     });
 
-    it('expires the push with the wait — useless once the assistant has answered', () => {
+    it('keeps the push deliverable for an hour — the chat waits in the queue until taken', () => {
       expect(push.sendToUser).toHaveBeenCalledWith(
         'a1',
         expect.objectContaining({ tag: 'conversation:c1' }),
-        { urgency: 'high', ttlSeconds: 300 },
+        { urgency: 'high', ttlSeconds: 3600 },
       );
     });
   });

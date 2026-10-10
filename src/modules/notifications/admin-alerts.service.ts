@@ -73,7 +73,7 @@ export class AdminAlertsService {
     private readonly events: EventEmitter2,
   ) {}
 
-  /** The assistant has gone quiet for a buyer and is waiting on one of us. */
+  /** A buyer asked for a person, and is waiting on one of us. */
   @OnEvent(CONVERSATION_HANDED_OVER_EVENT)
   async onHandedOver(event: ConversationHandedOverEvent): Promise<void> {
     await this.send({
@@ -81,14 +81,15 @@ export class AdminAlertsService {
       title: `${event.buyerName ?? 'A buyer'} is waiting for you`,
       body:
         `${event.reason.replace(/\.$/, '')}. ` +
-        `The assistant answers again in ${event.waitMinutes} min if nobody takes it.`,
+        `They're told the team is busy if nobody takes it in ${event.noticeMinutes} min.`,
       url: `/admin/conversations/${event.conversationId}`,
       tag: `conversation:${event.conversationId}`,
       adminId: null,
-      // Useless once the wait is over — the assistant has answered by then.
+      // The chat stays in the queue until someone takes it, so the alert stays worth
+      // delivering for a good while.
       delivery: {
         urgency: 'high',
-        ttlSeconds: Math.max(60, event.waitMinutes * 60),
+        ttlSeconds: 60 * 60,
       },
     });
   }

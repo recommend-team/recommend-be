@@ -27,6 +27,11 @@ describe('the discovery prompt', () => {
     );
   });
 
+  it('tells the model to answer every question, and to ask when unsure', () => {
+    expect(prompt).toContain('Answer every question the buyer asks');
+    expect(prompt).toContain('ask one short question to clarify');
+  });
+
   it('keeps the rules that protect money and the catalogue', () => {
     expect(prompt).toContain('NEVER state a price');
     expect(prompt).toContain('Never invent a vendor, an item');

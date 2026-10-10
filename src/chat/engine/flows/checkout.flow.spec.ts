@@ -4,6 +4,7 @@ import { ConversationService } from '../../conversation/conversation.service';
 import { ORDERING_PORT } from '../../ports/ordering.port';
 import { IDENTITY_PORT } from '../../ports/identity.port';
 import { CATALOG_PORT } from '../../ports/catalog.port';
+import { LOCATION_PORT } from '../../ports/location.port';
 import { CartChangedError } from '../../adapters/local-ordering.adapter';
 import { ConversationState } from '../../enums/chat.enums';
 import {
@@ -12,6 +13,15 @@ import {
 } from '../../conversation/entities/conversation.entity';
 
 const CART = [{ productId: 'p1', quantity: 2 }];
+
+const IKEJA = { id: 'a-ikeja', name: 'Ikeja', stateName: 'Lagos' };
+const YABA = { id: 'a-yaba', name: 'Yaba', stateName: 'Lagos' };
+/** Exists, but no vendor serves it. */
+const AJAH = { id: 'a-ajah', name: 'Ajah', stateName: 'Lagos' };
+const AREAS = [IKEJA, YABA, AJAH];
+
+const ASK_ADDRESS =
+  "What's the full delivery address? House number, street and area.";
 
 const conversationAt = (
   state: ConversationState,
@@ -25,9 +35,22 @@ describe('CheckoutFlow', () => {
     setState: jest.Mock;
     findById: jest.Mock;
   };
-  let ordering: { placeCheckout: jest.Mock; deliveryFeeFor: jest.Mock };
+  let ordering: {
+    placeCheckout: jest.Mock;
+    deliveryFeeFor: jest.Mock;
+    pickupEnabled: jest.Mock;
+  };
   let identity: { upsertBuyer: jest.Mock };
-  let catalog: { getProductById: jest.Mock; listAddOns: jest.Mock };
+  let catalog: {
+    getProductById: jest.Mock;
+    listAddOns: jest.Mock;
+    getVendorById: jest.Mock;
+  };
+  let locations: {
+    searchAreas: jest.Mock;
+    listServedAreas: jest.Mock;
+    getAreaById: jest.Mock;
+  };
   /** Whatever findById should return next — the flow re-reads after every merge. */
   let stored: ConversationContext;
 
@@ -61,6 +84,9 @@ describe('CheckoutFlow', () => {
       deliveryFeeFor: jest.fn((type: string) =>
         type === 'DELIVERY' ? 1500 : 0,
       ),
+      // On here, so the pickup path stays tested for the day it is switched back on.
+      // "while pickup is switched off" covers the setting production ships with.
+      pickupEnabled: jest.fn().mockReturnValue(true),
     };
     identity = { upsertBuyer: jest.fn().mockResolvedValue({ buyerId: 'b1' }) };
     catalog = {
@@ -74,6 +100,26 @@ describe('CheckoutFlow', () => {
       }),
       // No vendor has extras unless a test says so.
       listAddOns: jest.fn().mockResolvedValue([]),
+      // Delivers to both areas we cover unless a test says otherwise.
+      getVendorById: jest.fn().mockResolvedValue({
+        id: 'v1',
+        name: "Mama's Kitchen",
+        areas: [IKEJA, YABA],
+      }),
+    };
+    locations = {
+      // Like the real search: every area named in the text.
+      searchAreas: jest.fn((text: string) =>
+        Promise.resolve(
+          AREAS.filter((area) =>
+            text.toLowerCase().includes(area.name.toLowerCase()),
+          ),
+        ),
+      ),
+      listServedAreas: jest.fn().mockResolvedValue([IKEJA, YABA]),
+      getAreaById: jest.fn((id: string) =>
+        Promise.resolve(AREAS.find((area) => area.id === id) ?? null),
+      ),
     };
 
     const module: TestingModule = await Test.createTestingModule({
@@ -83,6 +129,7 @@ describe('CheckoutFlow', () => {
         { provide: ORDERING_PORT, useValue: ordering },
         { provide: IDENTITY_PORT, useValue: identity },
         { provide: CATALOG_PORT, useValue: catalog },
+        { provide: LOCATION_PORT, useValue: locations },
       ],
     }).compile();
 
@@ -337,6 +384,98 @@ describe('CheckoutFlow', () => {
     });
   });
 
+  describe('while pickup is switched off', () => {
+    const returning: ConversationContext = {
+      profile: { name: 'Ada Obi', phone: '+2348012345678' },
+      lastPaidAt: '2026-10-01T10:00:00.000Z',
+      lastDeliveryAddress: '12 Admiralty Way, Lekki',
+    };
+
+    beforeEach(() => ordering.pickupEnabled.mockReturnValue(false));
+
+    it('never asks a new buyer to choose — straight to the address, as a delivery', async () => {
+      stored = {
+        profile: { name: 'Ada', phone: '+2348012345678' },
+        receiptEmailSkipped: true,
+      };
+
+      const replies = await flow.start(
+        conversationAt(ConversationState.DISCOVERY),
+        CART,
+      );
+
+      expect(conversations.setState).toHaveBeenCalledWith(
+        'c1',
+        ConversationState.COLLECTING_ADDRESS,
+      );
+      expect(replies[0].text).toBe(ASK_ADDRESS);
+      // Recorded: an unset fulfilment would be read as pickup at the summary.
+      expect(stored.profile?.fulfillmentType).toBe('DELIVERY');
+    });
+
+    it('offers a returning buyer their address, without a pickup button', async () => {
+      stored = { ...returning };
+
+      const replies = await flow.start(
+        conversationAt(ConversationState.DISCOVERY),
+        CART,
+      );
+
+      expect(replies[0].payload).toEqual({
+        kind: 'choices',
+        data: {
+          purpose: 'fulfillment',
+          options: [
+            { id: 'SAME', label: 'Yes, same address' },
+            { id: 'NEW', label: 'New address' },
+          ],
+        },
+      });
+    });
+
+    it('turns down a returning buyer who types pickup, and asks again', async () => {
+      stored = { ...returning };
+
+      const replies = await flow.handle(
+        conversationAt(ConversationState.COLLECTING_FULFILLMENT, returning),
+        "I'll pick it up",
+      );
+
+      expect(replies[0].text).toBe(
+        "Pickup isn't available just yet — we'll deliver it to you. Should we deliver to 12 Admiralty Way, Lekki again?",
+      );
+      expect(stored.profile?.fulfillmentType).toBeUndefined();
+      expect(conversations.setState).not.toHaveBeenCalled();
+    });
+
+    it('does not take "I’ll pick it up" as an address', async () => {
+      const replies = await flow.handle(
+        conversationAt(ConversationState.COLLECTING_ADDRESS),
+        "I'll pick it up myself",
+      );
+
+      expect(replies[0].text).toBe(
+        `Pickup isn't available just yet — we'll deliver it to you. ${ASK_ADDRESS}`,
+      );
+      expect(stored.profile?.address).toBeUndefined();
+    });
+
+    it('moves a checkout already waiting on the question on to the address', async () => {
+      // Asked "delivered or picked up?" before pickup was switched off.
+      const replies = await flow.handle(
+        conversationAt(ConversationState.COLLECTING_FULFILLMENT),
+        'pickup',
+      );
+
+      expect(stored.profile?.fulfillmentType).toBe('DELIVERY');
+      expect(conversations.setState).toHaveBeenCalledWith(
+        'c1',
+        ConversationState.COLLECTING_ADDRESS,
+      );
+      expect(replies[0].text).toMatch(/^Pickup isn't available just yet/);
+    });
+  });
+
   describe('a returning buyer', () => {
     const returning: ConversationContext = {
       profile: { name: 'Ada Obi', phone: '+2348012345678' },
@@ -407,7 +546,9 @@ describe('CheckoutFlow', () => {
         'c1',
         ConversationState.COLLECTING_ADDRESS,
       );
-      expect(replies[0].text).toBe("What's the new address?");
+      expect(replies[0].text).toBe(
+        "What's the new address? House number, street and area.",
+      );
     });
 
     it('reads a typed "no, a different one" as a new address, not a yes', async () => {
@@ -484,7 +625,7 @@ describe('CheckoutFlow', () => {
         'c1',
         ConversationState.COLLECTING_ADDRESS,
       );
-      expect(replies[0].text).toBe('Where should we deliver it?');
+      expect(replies[0].text).toBe(ASK_ADDRESS);
     });
   });
 
@@ -651,6 +792,304 @@ describe('CheckoutFlow', () => {
     });
   });
 
+  describe('asking the question again, after the buyer asked one', () => {
+    it('re-asks for the name without the "Lovely." it opened with', async () => {
+      const replies = await flow.repeatQuestion(
+        conversationAt(ConversationState.COLLECTING_NAME),
+      );
+      expect(replies[0].text).toBe('What name should I put on the order?');
+    });
+
+    it('re-asks for the address', async () => {
+      conversations.findById.mockResolvedValue({
+        id: 'c1',
+        state: ConversationState.COLLECTING_ADDRESS,
+        context: {},
+      });
+
+      const replies = await flow.repeatQuestion(
+        conversationAt(ConversationState.COLLECTING_ADDRESS),
+      );
+      expect(replies[0].text).toBe(ASK_ADDRESS);
+    });
+
+    it('re-asks the area for the address already given, with the same buttons', async () => {
+      conversations.findById.mockResolvedValue({
+        id: 'c1',
+        state: ConversationState.COLLECTING_ADDRESS,
+        context: {
+          addressDraft: {
+            text: '12 Allen Avenue',
+            stage: 'AREA',
+            suggestedAreaId: 'a-yaba',
+          },
+        },
+      });
+
+      const replies = await flow.repeatQuestion(
+        conversationAt(ConversationState.COLLECTING_ADDRESS),
+      );
+      expect(replies[0].text).toBe('Is 12 Allen Avenue in Yaba?');
+      expect(replies[0].payload?.kind).toBe('choices');
+    });
+
+    it('re-asks for the landmark, Skip and all', async () => {
+      conversations.findById.mockResolvedValue({
+        id: 'c1',
+        state: ConversationState.COLLECTING_ADDRESS,
+        context: {
+          addressDraft: { text: '12 Allen Avenue, Ikeja', stage: 'LANDMARK' },
+        },
+      });
+
+      const replies = await flow.repeatQuestion(
+        conversationAt(ConversationState.COLLECTING_ADDRESS),
+      );
+      expect(replies[0].text).toBe(
+        'Any landmark or bus stop near it, to help the rider find you?',
+      );
+    });
+
+    it('offers the extras again as a fresh card — the old one is retired once the buyer types', async () => {
+      catalog.listAddOns.mockResolvedValue([
+        {
+          id: 'w1',
+          name: 'Bottled Water',
+          price: 300,
+          vendorId: 'v1',
+          vendorName: "Mama's Kitchen",
+          imageUrl: null,
+          isAddOn: true,
+        },
+      ]);
+      conversations.findById.mockResolvedValue({
+        id: 'c1',
+        state: ConversationState.OFFERING_ADDONS,
+        context: { pendingCart: CART },
+      });
+
+      const replies = await flow.repeatQuestion(
+        conversationAt(ConversationState.OFFERING_ADDONS),
+      );
+      expect(replies[0].text).toBe(
+        'Would you like anything to go with it? Pick below, or tap No, thanks.',
+      );
+      expect(replies[0].payload?.kind).toBe('addon_offer');
+    });
+
+    it('asks to go ahead again at the summary', async () => {
+      conversations.findById.mockResolvedValue({
+        id: 'c1',
+        state: ConversationState.CONFIRMING_ORDER,
+        context: {},
+      });
+
+      const replies = await flow.repeatQuestion(
+        conversationAt(ConversationState.CONFIRMING_ORDER),
+      );
+      expect(replies[0].text).toBe('Shall I go ahead with the order above?');
+    });
+
+    it('records nothing and moves nothing', async () => {
+      await flow.repeatQuestion(
+        conversationAt(ConversationState.COLLECTING_PHONE),
+      );
+
+      expect(conversations.mergeContext).not.toHaveBeenCalled();
+      expect(conversations.setState).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('taking the delivery address', () => {
+    const at = (context: ConversationContext = {}) =>
+      conversationAt(ConversationState.COLLECTING_ADDRESS, context);
+
+    beforeEach(() => {
+      stored = { pendingCart: CART, profile: { fulfillmentType: 'DELIVERY' } };
+    });
+
+    it('asks once for the house number and street when there is neither', async () => {
+      const replies = await flow.handle(at(), 'Behind the big mosque, Yaba');
+
+      expect(replies[0].text).toBe(
+        'Could you add the house number and street, so the rider can find you?',
+      );
+      expect(stored.addressRetried).toBe(true);
+    });
+
+    it('takes it as given the second time — nobody is locked out', async () => {
+      stored.addressRetried = true;
+
+      const replies = await flow.handle(at(), 'Behind the big mosque, Yaba');
+
+      expect(replies[0].text).toBe(
+        'Any landmark or bus stop near it, to help the rider find you?',
+      );
+    });
+
+    it.each([
+      '12 Allen Avenue, Ikeja',
+      'Plot 5, Admiralty Way, Ikeja',
+      'Allen Avenue, Ikeja',
+    ])(
+      'accepts "%s" and asks for a landmark, with a Skip button',
+      async (address) => {
+        const replies = await flow.handle(at(), address);
+
+        expect(stored.addressDraft).toEqual({
+          text: address,
+          stage: 'LANDMARK',
+        });
+        expect(replies[0].payload).toEqual({
+          kind: 'choices',
+          data: {
+            purpose: 'landmark',
+            options: [{ id: 'skip', label: 'Skip' }],
+          },
+        });
+      },
+    );
+
+    it('adds the landmark to the address the rider reads', async () => {
+      stored.addressDraft = {
+        text: '12 Allen Avenue, Ikeja',
+        stage: 'LANDMARK',
+      };
+
+      const replies = await flow.handle(at(), 'opposite Ikeja City Mall');
+
+      expect(stored.profile?.address).toBe(
+        '12 Allen Avenue, Ikeja (opposite Ikeja City Mall)',
+      );
+      expect(stored.addressDraft).toBeUndefined();
+      expect(replies[replies.length - 1].payload?.kind).toBe('order_summary');
+    });
+
+    it('keeps the address as it was on Skip', async () => {
+      stored.addressDraft = {
+        text: '12 Allen Avenue, Ikeja',
+        stage: 'LANDMARK',
+      };
+
+      await flow.handle(at(), 'Skip');
+
+      expect(stored.profile?.address).toBe('12 Allen Avenue, Ikeja');
+    });
+
+    it('turns down an area we do not cover, naming the ones we do', async () => {
+      const replies = await flow.handle(at(), '4 Lekki-Epe Expressway, Ajah');
+
+      expect(replies[0].text).toBe(
+        "We don't deliver to Ajah yet — right now we cover Ikeja and Yaba. Could you give an address in one of those?",
+      );
+      expect(stored.addressDraft).toBeUndefined();
+      expect(stored.profile?.address).toBeUndefined();
+    });
+
+    it("turns down an area the cart's vendor does not deliver to", async () => {
+      catalog.getVendorById.mockResolvedValue({
+        id: 'v1',
+        name: "Mama's Kitchen",
+        areas: [YABA],
+      });
+
+      const replies = await flow.handle(at(), '12 Allen Avenue, Ikeja');
+
+      expect(replies[0].text).toBe(
+        'Mama\'s Kitchen doesn\'t deliver to Ikeja — they deliver to Yaba. Could you give an address there, or say "cancel" to change your order?',
+      );
+      expect(stored.profile?.address).toBeUndefined();
+    });
+
+    it('asks "Is that in Yaba?" when the address names no area but the chat knows one', async () => {
+      conversations.findById.mockImplementation(() =>
+        Promise.resolve({ id: 'c1', areaId: 'a-yaba', context: stored }),
+      );
+
+      const replies = await flow.handle(at(), '12 Herbert Macaulay Way');
+
+      expect(replies[0].text).toBe('Is that in Yaba?');
+      expect(replies[0].payload).toEqual({
+        kind: 'choices',
+        data: {
+          purpose: 'area-confirm',
+          options: [
+            { id: 'yes', label: 'Yes, Yaba' },
+            { id: 'no', label: 'No, a different area' },
+          ],
+        },
+      });
+
+      await flow.handle(at(), 'Yes, Yaba');
+
+      expect(stored.addressDraft).toEqual({
+        text: '12 Herbert Macaulay Way, Yaba',
+        stage: 'LANDMARK',
+      });
+    });
+
+    it('takes a plain "yes" to the suggested area', async () => {
+      stored.addressDraft = {
+        text: '12 Herbert Macaulay Way',
+        stage: 'AREA',
+        suggestedAreaId: 'a-yaba',
+      };
+
+      await flow.handle(at(), 'yes');
+
+      expect(stored.addressDraft?.text).toBe('12 Herbert Macaulay Way, Yaba');
+    });
+
+    it('asks which area on "No, a different area"', async () => {
+      stored.addressDraft = {
+        text: '12 Allen Avenue',
+        stage: 'AREA',
+        suggestedAreaId: 'a-yaba',
+      };
+
+      const replies = await flow.handle(at(), 'No, a different area');
+
+      expect(replies[0].text).toBe('Which area is it in?');
+
+      await flow.handle(at(), 'Ikeja');
+      expect(stored.addressDraft?.text).toBe('12 Allen Avenue, Ikeja');
+    });
+
+    it('asks which area when the chat knows none', async () => {
+      const replies = await flow.handle(at(), '12 Allen Avenue');
+
+      expect(replies[0].text).toBe('Which area is that in?');
+    });
+
+    it("says so when it doesn't recognise the area given", async () => {
+      stored.addressDraft = { text: '12 Allen Avenue', stage: 'AREA' };
+
+      const replies = await flow.handle(at(), 'Narnia');
+
+      expect(replies[0].text).toBe(
+        "I don't recognise that area. We deliver to Ikeja and Yaba — which is it in?",
+      );
+    });
+
+    it('checks an area given separately like any other', async () => {
+      stored.addressDraft = { text: '4 Lekki-Epe Expressway', stage: 'AREA' };
+
+      const replies = await flow.handle(at(), 'Ajah');
+
+      expect(replies[0].text).toMatch(/^We don't deliver to Ajah yet/);
+    });
+
+    it('starts every new checkout with a clean address', async () => {
+      stored.addressDraft = { text: 'old', stage: 'LANDMARK' };
+      stored.addressRetried = true;
+
+      await flow.start(conversationAt(ConversationState.DISCOVERY), CART);
+
+      expect(stored.addressDraft).toBeUndefined();
+      expect(stored.addressRetried).toBeUndefined();
+    });
+  });
+
   describe('reading the order back', () => {
     it('quotes the delivery fee and total the buyer is about to be charged', async () => {
       stored = {
@@ -658,13 +1097,13 @@ describe('CheckoutFlow', () => {
           name: 'Ada Obi',
           phone: '+2348012345678',
           fulfillmentType: 'DELIVERY',
-          address: '12 Allen Avenue, Ikeja',
         },
         pendingCart: CART,
+        addressDraft: { text: '12 Allen Avenue, Ikeja', stage: 'LANDMARK' },
       };
       const replies = await flow.handle(
         conversationAt(ConversationState.COLLECTING_ADDRESS, stored),
-        '12 Allen Avenue, Ikeja',
+        'Skip',
       );
       const summary = replies[replies.length - 1];
 
@@ -851,12 +1290,18 @@ describe('CheckoutFlow', () => {
           'c1',
           ConversationState.DISCOVERY,
         );
-        expect(conversations.mergeContext).toHaveBeenCalledWith('c1', {
-          profile:
-            state === ConversationState.COLLECTING_ADDRESS
-              ? { address: answer }
-              : { name: answer },
-        });
+        expect(conversations.mergeContext).toHaveBeenCalledWith(
+          'c1',
+          state === ConversationState.COLLECTING_ADDRESS
+            ? {
+                addressDraft: {
+                  text: answer,
+                  stage: 'AREA',
+                  suggestedAreaId: undefined,
+                },
+              }
+            : { profile: { name: answer } },
+        );
       },
     );
 

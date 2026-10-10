@@ -5,6 +5,8 @@ import {
   VendorSummary,
 } from '../../ports/catalog.port';
 import { AreaSummary, LocationPort } from '../../ports/location.port';
+import type { OrderingPort } from '../../ports/ordering.port';
+import { orderForModel, orderPrices } from './my-orders';
 import { sanitizeUntrusted } from './sanitize';
 import { categoriesFor } from './synonyms';
 
@@ -14,11 +16,12 @@ export const DISCOVERY_TOOLS = [
     function: {
       name: 'request_teammate',
       description:
-        'Hand this conversation to a teammate. ONLY for what you cannot do with the other ' +
-        'tools: a complaint, a refund, a problem with an order already placed (where it ' +
-        'is, something wrong with it), a question about payment, or a buyer clearly ' +
-        'frustrated with you. Never for an ordinary search, even one that found nothing — ' +
-        'suggest another search instead. After calling it, say nothing more.',
+        'Bring in someone from the team. If the buyer asked for a person, they are handed ' +
+        'over at once; otherwise they are asked whether they would like one. ONLY for what ' +
+        'you cannot do with the other tools: a refund, cancelling an order, a complaint, a ' +
+        'problem with an order already placed, a question about a payment, or a buyer ' +
+        'clearly frustrated with you. Never for an ordinary search, even one that found ' +
+        'nothing — suggest another search instead. After calling it, say nothing more.',
       parameters: {
         type: 'object',
         properties: {
@@ -27,8 +30,14 @@ export const DISCOVERY_TOOLS = [
             description:
               'One short line for the teammate, e.g. "Asking where order REC-1A2B is"',
           },
+          buyer_asked_for_person: {
+            type: 'boolean',
+            description:
+              'True only if the buyer themselves asked to speak to a person, a human, ' +
+              'customer care, an admin or the team.',
+          },
         },
-        required: ['reason'],
+        required: ['reason', 'buyer_asked_for_person'],
       },
     },
   },
@@ -101,6 +110,17 @@ export const DISCOVERY_TOOLS = [
       },
     },
   },
+  {
+    type: 'function' as const,
+    function: {
+      name: 'get_my_orders',
+      description:
+        "This buyer's own orders, newest first: where each one is, what was in it, the " +
+        'rider, the delivery or collection code, and where to collect a pickup. Use it ' +
+        'for "where is my order?" and anything about an order they placed.',
+      parameters: { type: 'object', properties: {} },
+    },
+  },
 ];
 
 export interface ToolContext {
@@ -109,6 +129,8 @@ export interface ToolContext {
   /** Area already established for this conversation, used when the model omits one. */
   areaId: string | null;
   buyerText?: string;
+  /** This conversation's orders — the only ones get_my_orders can ever show. */
+  orders?: { port: OrderingPort; references: string[] };
 }
 
 /** Everything the tools surfaced during one turn. */
@@ -122,6 +144,8 @@ export interface ToolHarvest {
   resolvedAreaId: string | null;
   /** Set when the model asked for a teammate — the reason it gave. */
   handoverReason: string | null;
+  /** The buyer asked for a person themselves, so no need to ask whether they want one. */
+  buyerAskedForPerson: boolean;
   /**
    * Whether anything was actually searched this turn. "Found nothing" only means
    * something when it is true — small talk searches nothing.
@@ -137,6 +161,7 @@ export function emptyHarvest(): ToolHarvest {
     prices: [],
     resolvedAreaId: null,
     handoverReason: null,
+    buyerAskedForPerson: false,
     searched: false,
   };
 }
@@ -145,6 +170,9 @@ export function emptyHarvest(): ToolHarvest {
 const HANDOVER_REASON_LIMIT = 160;
 
 const logger = new Logger('DiscoveryTools');
+
+/** Enough for "my last few orders"; older ones are in the Orders tab. */
+const MY_ORDERS_SHOWN = 5;
 
 /**
  * Runs one tool call and folds its output into the harvest. The string returned is
@@ -171,7 +199,8 @@ export async function executeTool(
           ? sanitizeUntrusted(args.reason, HANDOVER_REASON_LIMIT)
           : '';
       harvest.handoverReason = reason || 'The assistant asked for a teammate';
-      return 'A teammate will take it from here. Do not reply further this turn.';
+      harvest.buyerAskedForPerson = args.buyer_asked_for_person === true;
+      return 'The buyer will be connected with the team. Do not reply further this turn.';
     }
 
     case 'resolve_area': {
@@ -261,6 +290,20 @@ export async function executeTool(
       return products.length === 0
         ? 'That store has nothing available right now.'
         : JSON.stringify(products.map(forModel));
+    }
+
+    case 'get_my_orders': {
+      const references = context.orders?.references ?? [];
+      if (!context.orders || references.length === 0) {
+        return 'This buyer has no orders on this device. If they ordered elsewhere, signing in shows them here.';
+      }
+      const orders = (await context.orders.port.listOrders(references)).slice(
+        0,
+        MY_ORDERS_SHOWN,
+      );
+      // Their own totals may be quoted back to them, so the guard must allow them.
+      harvest.prices.push(...orders.flatMap(orderPrices));
+      return JSON.stringify(orders.map(orderForModel));
     }
 
     default:

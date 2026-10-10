@@ -10,6 +10,13 @@ import {
 import { ChatMessage } from '../conversation/entities/message.entity';
 import { MessageAuthor } from '../enums/chat.enums';
 import { CheckoutFlow } from './flows/checkout.flow';
+import {
+  CANNOT_ANSWER_HERE,
+  WHY_DETAILS,
+  asksWhyDetails,
+  isAside,
+  onlySaysNotHeard,
+} from './flows/aside';
 import { HandoverService } from './handover.service';
 import { ConversationState } from '../enums/chat.enums';
 import { DiscoveryService } from './discovery/discovery.service';
@@ -58,7 +65,7 @@ export class EngineService {
     @Inject(ORDERING_PORT) private readonly ordering: OrderingPort,
   ) {
     this.historyLimit =
-      this.configService.get<number>('chat.maxHistoryMessages') ?? 12;
+      this.configService.get<number>('chat.maxHistoryMessages') ?? 20;
     this.assistantName =
       this.configService.get<string>('chat.assistantName') ?? 'James';
   }
@@ -95,13 +102,8 @@ export class EngineService {
       return [];
     }
 
-    const handover = await this.handover.awaitingTeammate(conversation);
-    if (handover === 'waiting') {
-      this.logger.debug(
-        `Conversation ${conversation.id} is waiting for a teammate — not replying`,
-      );
-      return [];
-    }
+    // Waiting for a person is not a reason to go quiet: the assistant keeps helping until
+    // an admin actually takes the chat (above).
 
     if (input.cart) {
       await this.conversationService.mergeContext(conversation.id, {
@@ -109,17 +111,91 @@ export class EngineService {
       });
     }
 
-    const replies = await this.composeReply(
-      conversation,
-      input.text,
-      inbound.id,
-    );
-    return this.deliver(
-      conversation,
-      handover === 'expired'
-        ? [{ text: SORRY_FOR_THE_WAIT }, ...replies]
-        : replies,
-    );
+    const replies = await this.respond(conversation, input.text, inbound.id);
+    return this.deliver(conversation, replies);
+  }
+
+  /**
+   * A person first, if that is what the buyer wants — asked for in so many words, or a yes
+   * to the assistant's offer of one. Everything else is an ordinary reply.
+   */
+  private async respond(
+    conversation: Conversation,
+    text: string,
+    inboundId: string | null,
+  ): Promise<OutboundMessage[]> {
+    const trimmed = text.trim();
+    const offered = conversation.context?.teammateOffered;
+
+    // An offer is answered by the very next message, whatever it says. Left open, a "yes"
+    // to some later question would summon a person nobody asked for.
+    if (offered) {
+      await this.updateContext(conversation, { teammateOffered: undefined });
+    }
+
+    // The yes first: "Yes, talk to a person" also reads as asking for one, and the offer's
+    // reason tells the admin far more than "asked to speak to someone".
+    if (offered && isYes(trimmed)) {
+      return this.handOver(conversation, offered);
+    }
+    if (asksForPerson(trimmed)) {
+      return this.handOver(conversation, 'The buyer asked to speak to someone');
+    }
+    if (offered && isNo(trimmed)) {
+      return [{ text: KEEP_CHATTING }];
+    }
+
+    return this.composeReply(conversation, text, inboundId);
+  }
+
+  /** Hand over with the buyer's agreement, and tell them so plainly. */
+  private async handOver(
+    conversation: Conversation,
+    reason: string,
+  ): Promise<OutboundMessage[]> {
+    if (conversation.handoverRequestedAt) {
+      return [{ text: ALREADY_HANDED_OVER }];
+    }
+    if (await this.handover.requestHandover(conversation, reason)) {
+      return [{ text: HANDED_OVER }];
+    }
+    return [{ text: CANNOT_HAND_OVER }];
+  }
+
+  /**
+   * Ask whether the buyer would like a person, with the answers as chips. Nobody is
+   * handed over until they say yes.
+   */
+  private async offerTeammate(
+    conversation: Conversation,
+    reason: string,
+    question: string,
+  ): Promise<OutboundMessage> {
+    await this.updateContext(conversation, {
+      teammateOffered: reason,
+      strugglingTurns: 0,
+    });
+    return {
+      text: question,
+      payload: {
+        kind: 'choices',
+        data: {
+          purpose: 'teammate',
+          options: [
+            { id: 'yes', label: OFFER_YES },
+            { id: 'no', label: OFFER_NO },
+          ],
+        },
+      },
+    };
+  }
+
+  private async updateContext(
+    conversation: Conversation,
+    patch: Partial<Conversation['context']>,
+  ): Promise<void> {
+    await this.conversationService.mergeContext(conversation.id, patch);
+    conversation.context = { ...conversation.context, ...patch };
   }
 
   private async deliver(
@@ -203,29 +279,96 @@ export class EngineService {
       ];
     }
 
-    const conversational =
-      conversation.state === ConversationState.DISCOVERY &&
-      this.discoveryService.hasModel();
-
-    if (isGreeting(trimmed) && !conversational) {
-      const name = returningFirstName(conversation);
-      return [
-        {
-          text: name
-            ? `Hi ${name}! What can I get you today?`
-            : `Hello, I'm ${this.assistantName} from Recommend. What are you looking for ` +
-              'today, and which area are you in?',
-        },
-      ];
+    if (conversation.state !== ConversationState.DISCOVERY) {
+      return this.duringCheckout(conversation, trimmed, inboundId);
     }
 
-    if (conversation.state === ConversationState.DISCOVERY) {
-      return this.discover(conversation, trimmed, inboundId);
+    if (!this.discoveryService.hasModel()) {
+      const reply = isGreeting(trimmed)
+        ? this.greetingReply(conversation)
+        : this.smallTalkReply(trimmed);
+      if (reply) return [{ text: reply }];
     }
 
-    // Any other state means a checkout is in progress, and that path is scripted —
-    // no model decides a quantity, an address or a total.
-    return this.checkoutFlow.handle(conversation, trimmed);
+    return this.discover(conversation, trimmed, inboundId);
+  }
+
+  /**
+   * A checkout is in progress, and that path is scripted — no model decides a quantity,
+   * an address or a total. But a buyer who asks something, or says hello, is answered
+   * first and then asked the checkout question again: nothing they ask is ever taken as
+   * an answer, and nothing is skipped.
+   */
+  private async duringCheckout(
+    conversation: Conversation,
+    text: string,
+    inboundId: string | null,
+  ): Promise<OutboundMessage[]> {
+    if (QUESTION_STEPS.has(conversation.state)) {
+      if (isGreeting(text)) {
+        return [
+          { text: this.greetingReply(conversation) },
+          ...(await this.checkoutFlow.repeatQuestion(conversation)),
+        ];
+      }
+      if (isAside(text)) {
+        const history = await this.historyFor(conversation, inboundId);
+        let question = text;
+        let opening = '';
+
+        // "i asked a question" — answer the question they mean, the last one they asked.
+        if (onlySaysNotHeard(text)) {
+          const earlier = [...history]
+            .reverse()
+            .find(
+              (message) =>
+                message.author === MessageAuthor.BUYER &&
+                isAside(message.text) &&
+                !onlySaysNotHeard(message.text),
+            );
+          if (!earlier) {
+            return [
+              { text: 'Sorry about that — what would you like to know?' },
+              ...(await this.checkoutFlow.repeatQuestion(conversation)),
+            ];
+          }
+          question = earlier.text;
+          opening = 'Sorry about that. ';
+        }
+
+        const answer = asksWhyDetails(question)
+          ? WHY_DETAILS
+          : ((await this.discoveryService.answerAside({
+              text: question,
+              areaId: conversation.areaId,
+              buyerFirstName: returningFirstName(conversation),
+              lastDeliveryAddress:
+                conversation.context?.lastDeliveryAddress ?? null,
+              signedIn: !!conversation.accountId,
+              orderReferences: conversation.context?.orderReferences ?? [],
+              history,
+            })) ?? CANNOT_ANSWER_HERE);
+        return [
+          { text: opening + answer },
+          ...(await this.checkoutFlow.repeatQuestion(conversation)),
+        ];
+      }
+    }
+
+    return this.checkoutFlow.handle(conversation, text);
+  }
+
+  private async historyFor(
+    conversation: Conversation,
+    inboundId: string | null,
+  ): Promise<ChatMessage[]> {
+    return (
+      await this.conversationService.getHistory(conversation.id, {
+        limit: this.historyLimit + 1,
+      })
+    )
+      .filter((message) => message.id !== inboundId)
+      .slice(-this.historyLimit);
   }
 
   /**
@@ -317,18 +460,15 @@ export class EngineService {
     text: string,
     inboundId: string | null,
   ): Promise<OutboundMessage[]> {
-    const history = (
-      await this.conversationService.getHistory(conversation.id, {
-        limit: this.historyLimit + 1,
-      })
-    )
-      .filter((message) => message.id !== inboundId)
-      .slice(-this.historyLimit);
+    const history = await this.historyFor(conversation, inboundId);
 
     const result = await this.discoveryService.discover({
       text,
       areaId: conversation.areaId,
       buyerFirstName: returningFirstName(conversation),
+      lastDeliveryAddress: conversation.context?.lastDeliveryAddress ?? null,
+      signedIn: !!conversation.accountId,
+      orderReferences: conversation.context?.orderReferences ?? [],
       history,
     });
 
@@ -343,42 +483,96 @@ export class EngineService {
       );
     }
 
+    // The model is down and keyword search has nothing to say to "who are you?" — answer
+    // the small talk properly rather than reporting a search that found nothing.
+    const smallTalk = result.modelFailed
+      ? isGreeting(text)
+        ? this.greetingReply(conversation)
+        : this.smallTalkReply(text)
+      : null;
+
     const struggled = result.modelFailed || result.foundNothing;
     const repeated = repeatedThemselves(history, text);
 
-    const previousStreak = conversation.context?.strugglingTurns ?? 0;
-    const streak = struggled ? previousStreak + 1 : 0;
-    if (streak !== previousStreak) {
-      await this.conversationService.mergeContext(conversation.id, {
-        strugglingTurns: streak,
-      });
-      conversation.context = {
-        ...conversation.context,
-        strugglingTurns: streak,
-      };
+    // The model asked for the team: at once if the buyer asked for a person, otherwise
+    // by asking them first.
+    if (result.handover) {
+      if (result.buyerAskedForPerson) {
+        return this.handOver(conversation, result.handover);
+      }
+      if (conversation.handoverRequestedAt) {
+        return [{ text: ALREADY_HANDED_OVER }];
+      }
+      return [
+        await this.offerTeammate(
+          conversation,
+          result.handover,
+          OFFER_FOR_ISSUE,
+        ),
+      ];
     }
-    const handoverReason =
-      result.handover ??
-      (repeated
-        ? 'The buyer asked the same thing twice'
-        : streak >= 2
-          ? 'The assistant could not help twice in a row'
-          : null);
 
-    if (handoverReason) {
-      if (await this.handover.requestHandover(conversation, handoverReason)) {
-        return [{ text: HANDING_OVER }];
-      }
-
-      if (result.handover) {
-        await this.flagIfStruggling(conversation, struggled, repeated);
-        return [{ text: CANNOT_HAND_OVER }];
-      }
+    // Unhelpful means the buyer did not get what they needed: a search that came back
+    // empty, or the same message sent again. A model outage alone never counts — the
+    // buyer still got an answer.
+    const unhelpful = !smallTalk && (result.foundNothing || repeated);
+    const previousStreak = conversation.context?.strugglingTurns ?? 0;
+    const streak = unhelpful ? previousStreak + 1 : 0;
+    if (streak !== previousStreak) {
+      await this.updateContext(conversation, { strugglingTurns: streak });
     }
 
     await this.flagIfStruggling(conversation, struggled, repeated);
 
-    return result.messages;
+    const replies = smallTalk ? [{ text: smallTalk }] : result.messages;
+
+    if (streak >= 2 && !conversation.handoverRequestedAt) {
+      return [
+        ...replies,
+        await this.offerTeammate(
+          conversation,
+          'The assistant could not help twice in a row',
+          OFFER_WHEN_STUCK,
+        ),
+      ];
+    }
+
+    return replies;
+  }
+
+  private greetingReply(conversation: Conversation): string {
+    const name = returningFirstName(conversation);
+    return name
+      ? `Hi ${name}! What can I get you today?`
+      : `Hello, I'm ${this.assistantName} from Recommend. What are you looking for ` +
+          'today, and which area are you in?';
+  }
+
+  /** Fixed answers to small talk, for when no model is answering. Null for anything else. */
+  private smallTalkReply(text: string): string | null {
+    const said = text
+      .toLowerCase()
+      .replace(/[^a-z\s]/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+
+    if (/^(thank you|thanks|thank u|thx|ty)\b/.test(said)) {
+      return "You're welcome! Is there anything else I can find for you?";
+    }
+    if (
+      /\b(who are you|your name|are you (a )?(bot|robot|human|person|real))\b/.test(
+        said,
+      )
+    ) {
+      return (
+        `I'm ${this.assistantName}, Recommend's virtual assistant. I help you find and ` +
+        'order from vendors near you — what are you looking for?'
+      );
+    }
+    if (/^how (are you|is it going|you dey)\b/.test(said)) {
+      return "I'm doing well, thank you for asking! What can I find for you today?";
+    }
+    return null;
   }
 
   /**
@@ -415,13 +609,69 @@ export class EngineService {
 }
 
 /**
- * What the buyer sees when they are handed over. Never "a person", "a teammate" or "the
- * bot": they are talking to Recommend throughout (ADMIN_CHAT_PLAN.md §2).
+ * What the buyer is told about the team. Always plainly: a buyer is never handed over
+ * without knowing it, and never left waiting in silence (CHATBOT_PLAN.md).
  */
-const HANDING_OVER = 'Let me check on that for you — one moment.';
-const SORRY_FOR_THE_WAIT = 'Sorry to keep you waiting.';
+const HANDED_OVER =
+  "I've passed this chat to our team — someone will reply here shortly. " +
+  'You can keep chatting with me meanwhile.';
+const ALREADY_HANDED_OVER =
+  "I've already let our team know — they'll reply here as soon as they can. " +
+  'Meanwhile, I can help with anything else.';
 const CANNOT_HAND_OVER =
-  "I'm sorry, I can't sort that out from here just now. Is there anything I can help you find?";
+  "I'm sorry, I can't bring the team in just now. Is there anything I can help you find?";
+const OFFER_WHEN_STUCK =
+  "Sorry I haven't managed to help with that. Would you like me to bring in someone from our team?";
+const OFFER_FOR_ISSUE =
+  'Someone from our team is best placed to help with that. Would you like me to bring them in?';
+const KEEP_CHATTING = 'No problem — what would you like to try next?';
+const OFFER_YES = 'Yes, talk to a person';
+const OFFER_NO = 'No, keep chatting';
+
+/**
+ * The buyer asking for a person in so many words. Deliberately literal: a false positive
+ * hands over someone who did not ask, which is exactly what this replaces.
+ */
+function asksForPerson(text: string): boolean {
+  const said = text
+    .toLowerCase()
+    .replace(/[^a-z\s]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+  const someone =
+    '(a |an |the |some |your |real )*(person|human|someone|somebody|agent|admin|staff|' +
+    'team|representative|rep|manager|customer care|customer service|customer support|support)';
+  return (
+    new RegExp(
+      `\\b(speak|talk|chat|connect me|put me through) (to|with) ${someone}\\b`,
+    ).test(said) ||
+    new RegExp(
+      `\\b(i want|i need|i d like|can i get|get me|let me talk to) ${someone}\\b`,
+    ).test(said) ||
+    /^(customer care|customer service|human|agent|real person|admin)( please)?$/.test(
+      said,
+    )
+  );
+}
+
+function isYes(text: string): boolean {
+  const said = text
+    .toLowerCase()
+    .replace(/[^a-z\s]/g, ' ')
+    .trim();
+  return /^(yes|yeah|yea|yep|yup|sure|ok|okay|please|alright|go ahead)\b/.test(
+    said,
+  );
+}
+
+function isNo(text: string): boolean {
+  const said = text
+    .toLowerCase()
+    .replace(/[^a-z\s]/g, ' ')
+    .trim();
+  return /^(no|nope|nah|not now|keep chatting|no thanks)\b/.test(said);
+}
 
 /**
  * The buyer saying the same thing again.
@@ -443,6 +693,18 @@ function repeatedThemselves(history: ChatMessage[], text: string): boolean {
   const now = normalise(text);
   return now.length > 3 && now === normalise(previous.text);
 }
+
+/** Checkout steps where a question or a greeting gets an answer, then the step again. */
+const QUESTION_STEPS = new Set<ConversationState>([
+  ConversationState.OFFERING_ADDONS,
+  ConversationState.COLLECTING_NAME,
+  ConversationState.COLLECTING_PHONE,
+  ConversationState.COLLECTING_EMAIL,
+  ConversationState.COLLECTING_FULFILLMENT,
+  ConversationState.COLLECTING_ADDRESS,
+  ConversationState.CONFIRMING_ORDER,
+  ConversationState.AWAITING_PAYMENT,
+]);
 
 const GREETINGS = [
   'hi',

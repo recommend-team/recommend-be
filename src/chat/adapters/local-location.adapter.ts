@@ -3,6 +3,8 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Brackets, Repository } from 'typeorm';
 import { Area } from '../../modules/locations/entities/area.entity';
 import { AreaSummary, LocationPort } from '../ports/location.port';
+import { Role } from '../../common/enums/roles.enum';
+import { SellerStatus } from '../../common/enums/seller-status.enum';
 
 /**
  * In-process implementation of `LocationPort`.
@@ -28,8 +30,10 @@ export class LocalLocationAdapter implements LocationPort {
      * So: match if ANY word hits an area name, or if a word names the state (which
      * returns that state's areas as candidates for the buyer to choose from).
      */
+    // Punctuation is not part of a place: "do you deliver to Yaba?" must find Yaba, not
+    // search for "Yaba?". Hyphens stay — "Ibeju-Lekki" is one name.
     const words = needle
-      .replace(/[%_]/g, ' ')
+      .replace(/[^\p{L}\p{N}\s-]/gu, ' ')
       .split(/\s+/)
       .filter((word) => word.length > 2)
       .slice(0, 5);
@@ -74,6 +78,30 @@ export class LocalLocationAdapter implements LocationPort {
   async listAreas(limit = 50): Promise<AreaSummary[]> {
     const areas = await this.baseQuery()
       .orderBy('area.name', 'ASC')
+      .take(clamp(limit, 200))
+      .getMany();
+
+    return areas.map(toAreaSummary);
+  }
+
+  async listServedAreas(limit = 100): Promise<AreaSummary[]> {
+    // The same bar a vendor clears to appear in search — approved, with a store page and
+    // a category — so "we cover Yaba" is only said where a buyer would find someone.
+    const areas = await this.baseQuery()
+      .andWhere(
+        `EXISTS (
+           SELECT 1 FROM vendor_service_areas vsa
+           JOIN users vendor ON vendor.id = vsa."vendorId"
+           WHERE vsa."areaId" = area.id
+             AND vendor.role = :role
+             AND vendor.status = :status
+             AND vendor.slug IS NOT NULL
+             AND COALESCE(vendor."businessCategory", '') <> ''
+         )`,
+        { role: Role.SELLER, status: SellerStatus.APPROVED },
+      )
+      .orderBy('state.name', 'ASC')
+      .addOrderBy('area.name', 'ASC')
       .take(clamp(limit, 200))
       .getMany();
 

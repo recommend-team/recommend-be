@@ -76,6 +76,14 @@ export class CheckoutService {
   }
 
   /**
+   * Whether buyers may collect orders themselves — `PICKUP_ENABLED`. Read per call, like
+   * the fee, so the chat and checkout always agree.
+   */
+  pickupEnabled(): boolean {
+    return this.configService.get<boolean>('delivery.pickupEnabled') ?? false;
+  }
+
+  /**
    * Recommend's cut of a vendor's subtotal, as a fraction.
    *
    * Read per checkout rather than cached on the instance, so a rate change takes effect on
@@ -101,6 +109,18 @@ export class CheckoutService {
     dto: CreateCheckoutDto,
     createdByAdminId: string | null = null,
   ): Promise<CheckoutResult> {
+    // Enforced here, where every checkout passes — chat, website and admin alike — so
+    // no client can place a pickup order while pickup is switched off.
+    if (
+      dto.fulfillmentType === FulfillmentType.PICKUP &&
+      !this.pickupEnabled()
+    ) {
+      throw new BadRequestException({
+        code: 'PICKUP_UNAVAILABLE',
+        message: 'Pickup is not available yet — please choose delivery.',
+      });
+    }
+
     const products = await this.loadProducts(dto);
     const changes = this.detectChanges(dto, products);
 

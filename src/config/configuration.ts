@@ -186,7 +186,7 @@ export const chatConfig = registerAs('chat', () => ({
    * every extra message is paid for on every turn of every conversation.
    */
   maxHistoryMessages: parseInt(
-    process.env.CHAT_MAX_HISTORY_MESSAGES || '12',
+    process.env.CHAT_MAX_HISTORY_MESSAGES || '20',
     10,
   ),
   /** Tool round-trips allowed per turn, so a confused model cannot loop indefinitely. */
@@ -208,8 +208,12 @@ export const chatConfig = registerAs('chat', () => ({
     process.env.ADMIN_HANDOVER_STALE_MINUTES || '30',
     10,
   ),
-  handoverWaitMinutes: parseInt(
-    process.env.CHAT_HANDOVER_WAIT_MINUTES || '5',
+  /**
+   * How long a handover waits for an admin before the buyer is told, once, that the team
+   * is busy. The assistant keeps answering throughout; this only sets expectations.
+   */
+  handoverNoticeMinutes: parseInt(
+    process.env.CHAT_HANDOVER_NOTICE_MINUTES || '3',
     10,
   ),
 }));
@@ -246,6 +250,12 @@ export const brandConfig = registerAs('brand', () => {
 
 export const deliveryConfig = registerAs('delivery', () => ({
   feeNgn: parseInt(process.env.DELIVERY_FEE_NGN || '1500', 10),
+  /**
+   * Whether buyers may collect orders themselves. Off until pickup is ready: checkout
+   * refuses it, and the chat goes straight to the delivery address. Orders already
+   * placed for pickup are unaffected.
+   */
+  pickupEnabled: process.env.PICKUP_ENABLED === 'true',
 }));
 
 export const platformConfig = registerAs('platform', () => {
