@@ -3,6 +3,9 @@ import { ConfigService } from '@nestjs/config';
 import { DiscoveryService } from './discovery.service';
 import { CATALOG_PORT } from '../../ports/catalog.port';
 import { LOCATION_PORT } from '../../ports/location.port';
+import { ORDERING_PORT } from '../../ports/ordering.port';
+
+const YABA = { id: 'area-yaba', name: 'Yaba', stateName: 'Lagos' };
 
 const mockCreate = jest.fn<Promise<unknown>, unknown[]>();
 jest.mock('openai', () => ({
@@ -34,14 +37,22 @@ const product = (over: Partial<Record<string, unknown>> = {}) => ({
 describe('DiscoveryService (keyword fallback)', () => {
   let service: DiscoveryService;
   let catalog: { searchProducts: jest.Mock; searchVendors: jest.Mock };
-  let locations: { searchAreas: jest.Mock };
+  let locations: { searchAreas: jest.Mock; listServedAreas: jest.Mock };
+  let ordering: { listOrders: jest.Mock; deliveryFeeFor: jest.Mock };
 
   beforeEach(async () => {
     catalog = {
       searchProducts: jest.fn().mockResolvedValue([]),
       searchVendors: jest.fn().mockResolvedValue([]),
     };
-    locations = { searchAreas: jest.fn().mockResolvedValue([]) };
+    locations = {
+      searchAreas: jest.fn().mockResolvedValue([]),
+      listServedAreas: jest.fn().mockResolvedValue([YABA]),
+    };
+    ordering = {
+      listOrders: jest.fn().mockResolvedValue([]),
+      deliveryFeeFor: jest.fn().mockReturnValue(1500),
+    };
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -53,10 +64,87 @@ describe('DiscoveryService (keyword fallback)', () => {
         },
         { provide: CATALOG_PORT, useValue: catalog },
         { provide: LOCATION_PORT, useValue: locations },
+        { provide: ORDERING_PORT, useValue: ordering },
       ],
     }).compile();
 
     service = module.get<DiscoveryService>(DiscoveryService);
+  });
+
+  describe('questions about Recommend', () => {
+    const ask = (text: string, orderReferences: string[] = []) =>
+      service.discover({ text, areaId: null, history: [], orderReferences });
+
+    it('answers the delivery fee from configuration, past the price guard', async () => {
+      ordering.deliveryFeeFor.mockReturnValue(2000);
+
+      const result = await ask('how much is delivery?');
+
+      expect(result.messages[0].text).toContain('₦2,000');
+      expect(catalog.searchProducts).not.toHaveBeenCalled();
+      // Answered, not a search that came back empty.
+      expect(result.foundNothing).toBe(false);
+    });
+
+    it('says yes to an area we cover, and remembers it', async () => {
+      locations.searchAreas.mockResolvedValue([YABA]);
+
+      const result = await ask('do you deliver to Yaba?');
+
+      expect(result.messages[0].text).toBe(
+        'Yes — we have vendors in Yaba. What would you like?',
+      );
+      expect(result.resolvedAreaId).toBe('area-yaba');
+    });
+
+    it('is honest about an area with no vendors, and names the ones we cover', async () => {
+      locations.searchAreas.mockResolvedValue([
+        { id: 'area-ajah', name: 'Ajah', stateName: 'Lagos' },
+      ]);
+
+      const result = await ask('do you deliver to Ajah');
+
+      expect(result.messages[0].text).toBe(
+        "We don't have vendors in Ajah yet. Right now we cover Yaba (Lagos).",
+      );
+    });
+
+    it('answers "where is my order?" from their own orders', async () => {
+      ordering.listOrders.mockResolvedValue([
+        {
+          reference: 'REC-1A2B',
+          status: 'READY',
+          fulfillmentType: 'PICKUP',
+          handoverCode: '4821',
+          goodsTotal: 4100,
+          deliveryFee: 0,
+          totalAmount: 4100,
+          rider: null,
+          vendors: [],
+        },
+      ]);
+
+      const result = await ask('where is my order', ['REC-1A2B']);
+
+      expect(ordering.listOrders).toHaveBeenCalledWith(['REC-1A2B']);
+      expect(result.messages[0].text).toContain(
+        'REC-1A2B, is ready to collect',
+      );
+    });
+
+    it('hands a refund question to the engine to offer the team', async () => {
+      const result = await ask('I want a refund for my order');
+
+      expect(result.handover).toMatch(/refund/);
+      expect(result.buyerAskedForPerson).toBe(false);
+    });
+
+    it('reads the covered areas once a minute, not on every reply', async () => {
+      await ask('how much is delivery?');
+      await ask('which areas do you cover?');
+
+      expect(locations.listServedAreas).toHaveBeenCalledTimes(1);
+    });
   });
 
   it('searches on the dish, with filler words stripped', async () => {
@@ -242,9 +330,15 @@ describe('DiscoveryService (keyword fallback)', () => {
  */
 describe('DiscoveryService (model)', () => {
   let service: DiscoveryService;
+  const modelOrdering = {
+    listOrders: jest.fn(),
+    deliveryFeeFor: jest.fn(),
+  };
 
   beforeEach(async () => {
     mockCreate.mockReset();
+    modelOrdering.listOrders.mockReset().mockResolvedValue([]);
+    modelOrdering.deliveryFeeFor.mockReset().mockReturnValue(1500);
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -265,12 +359,105 @@ describe('DiscoveryService (model)', () => {
         },
         {
           provide: LOCATION_PORT,
-          useValue: { searchAreas: jest.fn().mockResolvedValue([]) },
+          useValue: {
+            searchAreas: jest.fn().mockResolvedValue([]),
+            listServedAreas: jest.fn().mockResolvedValue([YABA]),
+          },
         },
+        { provide: ORDERING_PORT, useValue: modelOrdering },
       ],
     }).compile();
 
     service = module.get(DiscoveryService);
+  });
+
+  const replies = (content: string) => ({
+    choices: [{ message: { role: 'assistant', content } }],
+  });
+
+  /** Every system message the model was given on its first call. */
+  const systemMessages = (): string[] => {
+    const [request] = mockCreate.mock.calls[0] as [
+      { messages: { role: string; content: string }[] },
+    ];
+    return request.messages
+      .filter((message) => message.role === 'system')
+      .map((message) => message.content);
+  };
+
+  it('gives the model what Recommend is, with the live fee and areas', async () => {
+    mockCreate.mockResolvedValueOnce(replies('Delivery is a flat ₦1,500.'));
+
+    const result = await service.discover({
+      text: 'how much is delivery',
+      areaId: null,
+      history: [],
+    });
+
+    const knowledge = systemMessages().find((content) =>
+      content.startsWith('WHAT YOU KNOW ABOUT RECOMMEND'),
+    );
+    expect(knowledge).toContain('flat ₦1,500');
+    expect(knowledge).toContain('Yaba (Lagos)');
+    // The fee came from the system, so the price guard lets it through.
+    expect(result.messages[0].text).toBe('Delivery is a flat ₦1,500.');
+  });
+
+  it('still drops a price nobody gave it', async () => {
+    mockCreate.mockResolvedValueOnce(replies('Delivery is a flat ₦900.'));
+
+    const result = await service.discover({
+      text: 'how much is delivery',
+      areaId: null,
+      history: [],
+    });
+
+    expect(result.messages[0].text).not.toContain('900');
+  });
+
+  it('tells the model about the buyer, including their latest order', async () => {
+    modelOrdering.listOrders.mockResolvedValueOnce([
+      {
+        reference: 'REC-9Z',
+        status: 'DISPATCHED',
+        fulfillmentType: 'DELIVERY',
+        rider: { name: 'Tunde Bakare', phone: null },
+        vendors: [],
+      },
+    ]);
+    mockCreate.mockResolvedValueOnce(replies('Hi Ada!'));
+
+    await service.discover({
+      text: 'hello',
+      areaId: null,
+      history: [],
+      buyerFirstName: 'Ada',
+      lastDeliveryAddress: '12 Herbert Macaulay Way',
+      signedIn: true,
+      orderReferences: ['REC-9Z'],
+    });
+
+    const note = systemMessages().find((content) =>
+      content.startsWith('ABOUT THIS BUYER'),
+    );
+    expect(note).toContain('Ada, who has ordered from us before');
+    expect(note).toContain('Last delivery went to: 12 Herbert Macaulay Way');
+    expect(note).toContain('Signed in');
+    expect(note).toContain('Latest order REC-9Z: on its way with Tunde');
+  });
+
+  it('still answers when the orders cannot be read', async () => {
+    modelOrdering.listOrders.mockRejectedValueOnce(new Error('db down'));
+    mockCreate.mockResolvedValueOnce(replies('Hello!'));
+
+    const result = await service.discover({
+      text: 'hello',
+      areaId: null,
+      history: [],
+      orderReferences: ['REC-9Z'],
+    });
+
+    expect(result.messages[0].text).toBe('Hello!');
   });
 
   const toolCall = (name: string, args: Record<string, unknown>) => ({
@@ -320,10 +507,6 @@ describe('DiscoveryService (model)', () => {
     expect(result.usedFallback).toBe(true);
     expect(result.modelFailed).toBe(true);
     expect(result.handover).toBeNull();
-  });
-
-  const replies = (content: string) => ({
-    choices: [{ message: { role: 'assistant', content } }],
   });
 
   it('does not count small talk as a search that found nothing', async () => {

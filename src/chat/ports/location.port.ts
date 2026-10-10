@@ -16,5 +16,10 @@ export interface LocationPort {
   /** Fuzzy match on what the buyer typed. Empty when nothing plausible matches. */
   searchAreas(text: string, limit?: number): Promise<AreaSummary[]>;
   listAreas(limit?: number): Promise<AreaSummary[]>;
+  /**
+   * Areas a buyer can actually order in: at least one approved vendor serves them. What
+   * the assistant says when asked where Recommend operates — never an area with no one.
+   */
+  listServedAreas(limit?: number): Promise<AreaSummary[]>;
   getAreaById(areaId: string): Promise<AreaSummary | null>;
 }

@@ -5,6 +5,8 @@ import {
   VendorSummary,
 } from '../../ports/catalog.port';
 import { AreaSummary, LocationPort } from '../../ports/location.port';
+import type { OrderingPort } from '../../ports/ordering.port';
+import { orderForModel, orderPrices } from './my-orders';
 import { sanitizeUntrusted } from './sanitize';
 import { categoriesFor } from './synonyms';
 
@@ -108,6 +110,17 @@ export const DISCOVERY_TOOLS = [
       },
     },
   },
+  {
+    type: 'function' as const,
+    function: {
+      name: 'get_my_orders',
+      description:
+        "This buyer's own orders, newest first: where each one is, what was in it, the " +
+        'rider, the delivery or collection code, and where to collect a pickup. Use it ' +
+        'for "where is my order?" and anything about an order they placed.',
+      parameters: { type: 'object', properties: {} },
+    },
+  },
 ];
 
 export interface ToolContext {
@@ -116,6 +129,8 @@ export interface ToolContext {
   /** Area already established for this conversation, used when the model omits one. */
   areaId: string | null;
   buyerText?: string;
+  /** This conversation's orders — the only ones get_my_orders can ever show. */
+  orders?: { port: OrderingPort; references: string[] };
 }
 
 /** Everything the tools surfaced during one turn. */
@@ -155,6 +170,9 @@ export function emptyHarvest(): ToolHarvest {
 const HANDOVER_REASON_LIMIT = 160;
 
 const logger = new Logger('DiscoveryTools');
+
+/** Enough for "my last few orders"; older ones are in the Orders tab. */
+const MY_ORDERS_SHOWN = 5;
 
 /**
  * Runs one tool call and folds its output into the harvest. The string returned is
@@ -272,6 +290,20 @@ export async function executeTool(
       return products.length === 0
         ? 'That store has nothing available right now.'
         : JSON.stringify(products.map(forModel));
+    }
+
+    case 'get_my_orders': {
+      const references = context.orders?.references ?? [];
+      if (!context.orders || references.length === 0) {
+        return 'This buyer has no orders on this device. If they ordered elsewhere, signing in shows them here.';
+      }
+      const orders = (await context.orders.port.listOrders(references)).slice(
+        0,
+        MY_ORDERS_SHOWN,
+      );
+      // Their own totals may be quoted back to them, so the guard must allow them.
+      harvest.prices.push(...orders.flatMap(orderPrices));
+      return JSON.stringify(orders.map(orderForModel));
     }
 
     default:

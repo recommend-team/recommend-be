@@ -396,6 +396,9 @@ export class EngineService {
       text,
       areaId: conversation.areaId,
       buyerFirstName: returningFirstName(conversation),
+      lastDeliveryAddress: conversation.context?.lastDeliveryAddress ?? null,
+      signedIn: !!conversation.accountId,
+      orderReferences: conversation.context?.orderReferences ?? [],
       history,
     });
 
