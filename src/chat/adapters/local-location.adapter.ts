@@ -30,8 +30,10 @@ export class LocalLocationAdapter implements LocationPort {
      * So: match if ANY word hits an area name, or if a word names the state (which
      * returns that state's areas as candidates for the buyer to choose from).
      */
+    // Punctuation is not part of a place: "do you deliver to Yaba?" must find Yaba, not
+    // search for "Yaba?". Hyphens stay — "Ibeju-Lekki" is one name.
     const words = needle
-      .replace(/[%_]/g, ' ')
+      .replace(/[^\p{L}\p{N}\s-]/gu, ' ')
       .split(/\s+/)
       .filter((word) => word.length > 2)
       .slice(0, 5);
