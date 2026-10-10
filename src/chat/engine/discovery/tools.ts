@@ -14,11 +14,12 @@ export const DISCOVERY_TOOLS = [
     function: {
       name: 'request_teammate',
       description:
-        'Hand this conversation to a teammate. ONLY for what you cannot do with the other ' +
-        'tools: a complaint, a refund, a problem with an order already placed (where it ' +
-        'is, something wrong with it), a question about payment, or a buyer clearly ' +
-        'frustrated with you. Never for an ordinary search, even one that found nothing — ' +
-        'suggest another search instead. After calling it, say nothing more.',
+        'Bring in someone from the team. If the buyer asked for a person, they are handed ' +
+        'over at once; otherwise they are asked whether they would like one. ONLY for what ' +
+        'you cannot do with the other tools: a refund, cancelling an order, a complaint, a ' +
+        'problem with an order already placed, a question about a payment, or a buyer ' +
+        'clearly frustrated with you. Never for an ordinary search, even one that found ' +
+        'nothing — suggest another search instead. After calling it, say nothing more.',
       parameters: {
         type: 'object',
         properties: {
@@ -27,8 +28,14 @@ export const DISCOVERY_TOOLS = [
             description:
               'One short line for the teammate, e.g. "Asking where order REC-1A2B is"',
           },
+          buyer_asked_for_person: {
+            type: 'boolean',
+            description:
+              'True only if the buyer themselves asked to speak to a person, a human, ' +
+              'customer care, an admin or the team.',
+          },
         },
-        required: ['reason'],
+        required: ['reason', 'buyer_asked_for_person'],
       },
     },
   },
@@ -122,6 +129,8 @@ export interface ToolHarvest {
   resolvedAreaId: string | null;
   /** Set when the model asked for a teammate — the reason it gave. */
   handoverReason: string | null;
+  /** The buyer asked for a person themselves, so no need to ask whether they want one. */
+  buyerAskedForPerson: boolean;
   /**
    * Whether anything was actually searched this turn. "Found nothing" only means
    * something when it is true — small talk searches nothing.
@@ -137,6 +146,7 @@ export function emptyHarvest(): ToolHarvest {
     prices: [],
     resolvedAreaId: null,
     handoverReason: null,
+    buyerAskedForPerson: false,
     searched: false,
   };
 }
@@ -171,7 +181,8 @@ export async function executeTool(
           ? sanitizeUntrusted(args.reason, HANDOVER_REASON_LIMIT)
           : '';
       harvest.handoverReason = reason || 'The assistant asked for a teammate';
-      return 'A teammate will take it from here. Do not reply further this turn.';
+      harvest.buyerAskedForPerson = args.buyer_asked_for_person === true;
+      return 'The buyer will be connected with the team. Do not reply further this turn.';
     }
 
     case 'resolve_area': {

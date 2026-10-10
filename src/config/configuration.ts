@@ -208,8 +208,12 @@ export const chatConfig = registerAs('chat', () => ({
     process.env.ADMIN_HANDOVER_STALE_MINUTES || '30',
     10,
   ),
-  handoverWaitMinutes: parseInt(
-    process.env.CHAT_HANDOVER_WAIT_MINUTES || '5',
+  /**
+   * How long a handover waits for an admin before the buyer is told, once, that the team
+   * is busy. The assistant keeps answering throughout; this only sets expectations.
+   */
+  handoverNoticeMinutes: parseInt(
+    process.env.CHAT_HANDOVER_NOTICE_MINUTES || '3',
     10,
   ),
 }));

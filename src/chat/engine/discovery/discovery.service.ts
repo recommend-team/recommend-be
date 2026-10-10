@@ -44,6 +44,8 @@ export interface DiscoveryResult {
   foundNothing: boolean;
   /** The model asked for a teammate, and why. The engine decides whether to honour it. */
   handover: string | null;
+  /** The buyer asked for a person in so many words — hand over without asking first. */
+  buyerAskedForPerson: boolean;
 }
 
 @Injectable()
@@ -339,6 +341,7 @@ export class DiscoveryService {
         harvest.products.length === 0 &&
         harvest.vendors.length === 0,
       handover: harvest.handoverReason,
+      buyerAskedForPerson: harvest.buyerAskedForPerson,
     };
   }
 

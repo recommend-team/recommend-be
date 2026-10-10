@@ -46,8 +46,8 @@ export class ConversationHandedOverEvent {
     readonly conversationId: string,
     readonly reason: string,
     readonly buyerName: string | null,
-    /** How long the assistant will wait before answering the buyer itself. */
-    readonly waitMinutes: number,
+    /** How long before the buyer is told the team is busy. */
+    readonly noticeMinutes: number,
   ) {}
 }
 

@@ -3,7 +3,7 @@ import { Test, TestingModule } from '@nestjs/testing';
 import { ConfigService } from '@nestjs/config';
 import { getRepositoryToken } from '@nestjs/typeorm';
 import { ConflictException, NotFoundException } from '@nestjs/common';
-import { HandoverService } from './handover.service';
+import { HandoverService, TEAM_IS_BUSY } from './handover.service';
 import { Conversation } from '../conversation/entities/conversation.entity';
 import { ConversationService } from '../conversation/conversation.service';
 import { ChannelRegistry } from '../transport/channel.registry';
@@ -17,7 +17,7 @@ import {
 } from '../../common/events/admin-alert.events';
 
 const STALE_MINUTES = 30;
-const WAIT_MINUTES = 5;
+const NOTICE_MINUTES = 3;
 const minutesAgo = (n: number) => new Date(Date.now() - n * 60_000);
 
 const buyerPush = { notify: jest.fn() };
@@ -32,6 +32,9 @@ describe('HandoverService', () => {
   let recordOutbound: jest.Mock;
   let flagForAttention: jest.Mock;
   let mergeContext: jest.Mock;
+  /** What the busy-notice UPDATE claims, and the conditions it was given. */
+  let claimed: { id: string; channel: ChatChannel; channelAddress: string }[];
+  let claimQuery: { where: string[]; params: Record<string, unknown> };
   const events = { emit: jest.fn() };
 
   const conversation = (over: Partial<Conversation> = {}): Conversation =>
@@ -51,8 +54,30 @@ describe('HandoverService', () => {
     updates = [];
     sent = [];
     emitTyping = jest.fn();
+    claimed = [];
+    claimQuery = { where: [], params: {} };
+
+    // Chainable, like TypeORM's: every step returns the builder until execute().
+    const builder: Record<string, jest.Mock> = {};
+    Object.assign(builder, {
+      update: jest.fn(() => builder),
+      set: jest.fn(() => builder),
+      where: jest.fn((sql: string, params?: Record<string, unknown>) => {
+        claimQuery.where.push(sql);
+        Object.assign(claimQuery.params, params);
+        return builder;
+      }),
+      andWhere: jest.fn((sql: string) => {
+        claimQuery.where.push(sql);
+        return builder;
+      }),
+      setParameter: jest.fn(() => builder),
+      returning: jest.fn(() => builder),
+      execute: jest.fn(() => Promise.resolve({ raw: claimed })),
+    });
 
     const conversations = {
+      createQueryBuilder: jest.fn(() => builder),
       findOne: jest.fn(() => Promise.resolve(row)),
       update: jest.fn((_where: unknown, patch: Record<string, unknown>) => {
         updates.push(patch);
@@ -100,7 +125,9 @@ describe('HandoverService', () => {
           provide: ConfigService,
           useValue: {
             get: jest.fn((key: string) =>
-              key === 'chat.handoverWaitMinutes' ? WAIT_MINUTES : STALE_MINUTES,
+              key === 'chat.handoverNoticeMinutes'
+                ? NOTICE_MINUTES
+                : STALE_MINUTES,
             ),
           },
         },
@@ -363,10 +390,10 @@ describe('HandoverService', () => {
     });
   });
 
-  describe('the assistant asking for a teammate', () => {
+  describe('handing a buyer to the team', () => {
     beforeEach(() => events.emit.mockClear());
 
-    it('marks it waiting, flags it quietly, and alerts with the wait', async () => {
+    it('marks it waiting, flags it quietly, and alerts with the notice time', async () => {
       row = conversation({ context: { profile: { name: 'Ada' } } });
 
       await expect(
@@ -390,9 +417,23 @@ describe('HandoverService', () => {
           'c1',
           'Wants a refund',
           'Ada',
-          WAIT_MINUTES,
+          NOTICE_MINUTES,
         ),
       );
+    });
+
+    it('starts a fresh wait: the busy notice is owed again, the struggling count spent', async () => {
+      row = conversation({
+        context: { handoverNoticeSentAt: 'earlier', strugglingTurns: 2 },
+      });
+
+      await service.requestHandover(row, 'The buyer asked to speak to someone');
+
+      expect(mergeContext).toHaveBeenCalledWith('c1', {
+        handoverNoticeSentAt: undefined,
+        teammateOffered: undefined,
+        strugglingTurns: 0,
+      });
     });
 
     it('will not hand over a conversation someone already holds', async () => {
@@ -408,13 +449,13 @@ describe('HandoverService', () => {
       await expect(service.requestHandover(row, 'x')).resolves.toBe(false);
     });
 
-    it('will not park the buyer again after a handover went unanswered', async () => {
+    it('hands over again after an old handover went unanswered — the buyer asked', async () => {
+      // It used to refuse here, leaving a buyer who wanted a person no way to get one.
       row = conversation({
         context: { unansweredHandoverAt: new Date().toISOString() },
       });
 
-      await expect(service.requestHandover(row, 'x')).resolves.toBe(false);
-      expect(updates).toHaveLength(0);
+      await expect(service.requestHandover(row, 'x')).resolves.toBe(true);
     });
 
     it('loses a race cleanly', async () => {
@@ -428,64 +469,86 @@ describe('HandoverService', () => {
       await expect(service.requestHandover(row, 'x')).resolves.toBe(false);
       expect(events.emit).not.toHaveBeenCalled();
     });
-  });
 
-  describe('waiting for a teammate', () => {
-    it('is nothing to wait for without a handover', async () => {
-      await expect(service.awaitingTeammate(conversation())).resolves.toBe(
-        'none',
-      );
-    });
-
-    it('waits inside the window', async () => {
-      row = conversation({ handoverRequestedAt: minutesAgo(WAIT_MINUTES - 1) });
-
-      await expect(service.awaitingTeammate(row)).resolves.toBe('waiting');
-      expect(updates).toHaveLength(0);
-    });
-
-    it('gives up after it, clears the handover, and remembers nobody came', async () => {
-      row = conversation({
-        handoverRequestedAt: minutesAgo(WAIT_MINUTES + 1),
-        handoverReason: 'Wants a refund',
-      });
-
-      await expect(service.awaitingTeammate(row)).resolves.toBe('expired');
-
-      expect(row.handoverRequestedAt).toBeNull();
-      expect(row.handoverReason).toBeNull();
-      const [, patch] = mergeContext.mock.calls[0] as [
-        string,
-        { unansweredHandoverAt?: string },
-      ];
-      expect(typeof patch.unansweredHandoverAt).toBe('string');
-    });
-
-    it('is nothing to wait for once an admin holds it', async () => {
-      row = conversation({
-        heldByAdminId: 'admin-1',
-        handoverRequestedAt: minutesAgo(WAIT_MINUTES + 1),
-      });
-
-      await expect(service.awaitingTeammate(row)).resolves.toBe('none');
-    });
-
-    it('is answered by an admin taking it', async () => {
+    it('is answered by an admin taking it, with a clean slate', async () => {
       row = conversation({
         handoverRequestedAt: minutesAgo(1),
         handoverReason: 'Wants a refund',
-        context: { unansweredHandoverAt: 'earlier', strugglingTurns: 2 },
+        context: {
+          unansweredHandoverAt: 'earlier',
+          handoverNoticeSentAt: 'earlier',
+          strugglingTurns: 2,
+        },
       });
 
       await service.take('c1', 'admin-1');
 
       expect(row.handoverRequestedAt).toBeNull();
       expect(row.handoverReason).toBeNull();
-      // A clean slate: once a person has dealt with it, the assistant may ask again.
+      // Once a person has dealt with it, the assistant may offer again — and owes a
+      // notice again for the next handover.
       expect(mergeContext).toHaveBeenCalledWith('c1', {
         unansweredHandoverAt: undefined,
+        handoverNoticeSentAt: undefined,
+        teammateOffered: undefined,
         strugglingTurns: 0,
       });
+    });
+  });
+
+  describe('telling a waiting buyer the team is busy', () => {
+    it('claims only handovers past the notice time, unheld, not yet told', async () => {
+      await service.sendBusyNotices();
+
+      const cutoff = claimQuery.params.cutoff as Date;
+      const age = (Date.now() - cutoff.getTime()) / 60_000;
+      expect(age).toBeCloseTo(NOTICE_MINUTES, 1);
+      expect(claimQuery.where).toEqual(
+        expect.arrayContaining([
+          '"heldByAdminId" IS NULL',
+          `context->>'handoverNoticeSentAt' IS NULL`,
+        ]),
+      );
+    });
+
+    it('sends each claimed buyer the notice once, on the record', async () => {
+      claimed = [
+        { id: 'c1', channel: ChatChannel.PWA, channelAddress: 'session-1' },
+        { id: 'c2', channel: ChatChannel.PWA, channelAddress: 'session-2' },
+      ];
+
+      await expect(service.sendBusyNotices()).resolves.toBe(2);
+
+      expect(recordOutbound).toHaveBeenCalledWith({
+        conversationId: 'c1',
+        text: TEAM_IS_BUSY,
+      });
+      expect(sent).toEqual([
+        { address: 'session-1', text: TEAM_IS_BUSY },
+        { address: 'session-2', text: TEAM_IS_BUSY },
+      ]);
+    });
+
+    it('says the team is busy, and that the assistant is still here', () => {
+      expect(TEAM_IS_BUSY).toMatch(/busy/);
+      expect(TEAM_IS_BUSY).toMatch(/keep helping/);
+    });
+
+    it('does nothing when nobody is waiting', async () => {
+      await expect(service.sendBusyNotices()).resolves.toBe(0);
+      expect(sent).toEqual([]);
+    });
+
+    it('carries on past a buyer it could not reach', async () => {
+      claimed = [
+        { id: 'c1', channel: ChatChannel.PWA, channelAddress: 'session-1' },
+        { id: 'c2', channel: ChatChannel.PWA, channelAddress: 'session-2' },
+      ];
+      recordOutbound.mockRejectedValueOnce(new Error('db blip'));
+
+      await service.sendBusyNotices();
+
+      expect(sent).toEqual([{ address: 'session-2', text: TEAM_IS_BUSY }]);
     });
   });
 });

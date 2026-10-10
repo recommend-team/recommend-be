@@ -31,7 +31,15 @@ export interface ConversationContext {
   pendingPaymentReference?: string;
   orderReferences?: string[];
   strugglingTurns?: number;
+  /** Retired: a handover no longer expires. Still cleared, for conversations that have it. */
   unansweredHandoverAt?: string;
+  /**
+   * The assistant offered a person and is waiting for the buyer's yes or no — why it
+   * offered, which becomes the handover reason if they accept.
+   */
+  teammateOffered?: string;
+  /** The buyer was told the team is busy — once per handover. */
+  handoverNoticeSentAt?: string;
   /** The buyer skipped the receipt-email step. Remembered, so a later order does not ask again. */
   receiptEmailSkipped?: boolean;
   /**
