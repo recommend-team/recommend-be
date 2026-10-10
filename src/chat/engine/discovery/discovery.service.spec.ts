@@ -349,6 +349,58 @@ describe('DiscoveryService (keyword fallback)', () => {
     expect(result.foundNothing).toBe(false);
   });
 
+  it('answers a question it cannot match honestly — no search for the question', async () => {
+    const result = await service.discover({
+      text: 'why are your prices so high?',
+      areaId: null,
+      history: [],
+    });
+
+    expect(result.messages[0].text).toMatch(/^I'm not sure about that one/);
+    // Not a vendor list dressed up as an answer.
+    expect(catalog.searchVendors).not.toHaveBeenCalled();
+  });
+
+  it('still searches a request phrased as a question', async () => {
+    catalog.searchProducts.mockResolvedValue([product()]);
+
+    const result = await service.discover({
+      text: 'do you have jollof?',
+      areaId: null,
+      history: [],
+    });
+
+    expect(result.messages[0].payload?.kind).toBe('product_list');
+  });
+
+  it("says it didn't catch keyboard mash, rather than searching for it", async () => {
+    const result = await service.discover({
+      text: 'asdkjh qwezx',
+      areaId: null,
+      history: [],
+    });
+
+    expect(result.messages[0].text).toBe(
+      "Sorry, I didn't quite catch that — what are you looking for, and roughly where?",
+    );
+    expect(catalog.searchVendors).not.toHaveBeenCalled();
+  });
+
+  it('answers the earlier question on "you did not answer my question"', async () => {
+    const result = await service.discover({
+      text: 'you did not answer my question',
+      areaId: null,
+      history: [
+        { author: 'BUYER', text: 'how do I pay?' },
+        { author: 'ASSISTANT', text: '…' },
+      ] as never,
+    });
+
+    expect(result.messages[0].text).toMatch(
+      /^Sorry about that. You pay right here/,
+    );
+  });
+
   it('says so plainly when nothing matches at all', async () => {
     const result = await service.discover({
       text: 'caviar',

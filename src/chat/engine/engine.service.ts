@@ -10,6 +10,13 @@ import {
 import { ChatMessage } from '../conversation/entities/message.entity';
 import { MessageAuthor } from '../enums/chat.enums';
 import { CheckoutFlow } from './flows/checkout.flow';
+import {
+  CANNOT_ANSWER_HERE,
+  WHY_DETAILS,
+  asksWhyDetails,
+  isAside,
+  onlySaysNotHeard,
+} from './flows/aside';
 import { HandoverService } from './handover.service';
 import { ConversationState } from '../enums/chat.enums';
 import { DiscoveryService } from './discovery/discovery.service';
@@ -272,27 +279,96 @@ export class EngineService {
       ];
     }
 
-    const conversational =
-      conversation.state === ConversationState.DISCOVERY &&
-      this.discoveryService.hasModel();
+    if (conversation.state !== ConversationState.DISCOVERY) {
+      return this.duringCheckout(conversation, trimmed, inboundId);
+    }
 
-    if (!conversational) {
-      // Mid-checkout only a greeting is answered aside — "thanks" may be an answer there.
+    if (!this.discoveryService.hasModel()) {
       const reply = isGreeting(trimmed)
         ? this.greetingReply(conversation)
-        : conversation.state === ConversationState.DISCOVERY
-          ? this.smallTalkReply(trimmed)
-          : null;
+        : this.smallTalkReply(trimmed);
       if (reply) return [{ text: reply }];
     }
 
-    if (conversation.state === ConversationState.DISCOVERY) {
-      return this.discover(conversation, trimmed, inboundId);
+    return this.discover(conversation, trimmed, inboundId);
+  }
+
+  /**
+   * A checkout is in progress, and that path is scripted — no model decides a quantity,
+   * an address or a total. But a buyer who asks something, or says hello, is answered
+   * first and then asked the checkout question again: nothing they ask is ever taken as
+   * an answer, and nothing is skipped.
+   */
+  private async duringCheckout(
+    conversation: Conversation,
+    text: string,
+    inboundId: string | null,
+  ): Promise<OutboundMessage[]> {
+    if (QUESTION_STEPS.has(conversation.state)) {
+      if (isGreeting(text)) {
+        return [
+          { text: this.greetingReply(conversation) },
+          ...(await this.checkoutFlow.repeatQuestion(conversation)),
+        ];
+      }
+      if (isAside(text)) {
+        const history = await this.historyFor(conversation, inboundId);
+        let question = text;
+        let opening = '';
+
+        // "i asked a question" — answer the question they mean, the last one they asked.
+        if (onlySaysNotHeard(text)) {
+          const earlier = [...history]
+            .reverse()
+            .find(
+              (message) =>
+                message.author === MessageAuthor.BUYER &&
+                isAside(message.text) &&
+                !onlySaysNotHeard(message.text),
+            );
+          if (!earlier) {
+            return [
+              { text: 'Sorry about that — what would you like to know?' },
+              ...(await this.checkoutFlow.repeatQuestion(conversation)),
+            ];
+          }
+          question = earlier.text;
+          opening = 'Sorry about that. ';
+        }
+
+        const answer = asksWhyDetails(question)
+          ? WHY_DETAILS
+          : ((await this.discoveryService.answerAside({
+              text: question,
+              areaId: conversation.areaId,
+              buyerFirstName: returningFirstName(conversation),
+              lastDeliveryAddress:
+                conversation.context?.lastDeliveryAddress ?? null,
+              signedIn: !!conversation.accountId,
+              orderReferences: conversation.context?.orderReferences ?? [],
+              history,
+            })) ?? CANNOT_ANSWER_HERE);
+        return [
+          { text: opening + answer },
+          ...(await this.checkoutFlow.repeatQuestion(conversation)),
+        ];
+      }
     }
 
-    // Any other state means a checkout is in progress, and that path is scripted —
-    // no model decides a quantity, an address or a total.
-    return this.checkoutFlow.handle(conversation, trimmed);
+    return this.checkoutFlow.handle(conversation, text);
+  }
+
+  private async historyFor(
+    conversation: Conversation,
+    inboundId: string | null,
+  ): Promise<ChatMessage[]> {
+    return (
+      await this.conversationService.getHistory(conversation.id, {
+        limit: this.historyLimit + 1,
+      })
+    )
+      .filter((message) => message.id !== inboundId)
+      .slice(-this.historyLimit);
   }
 
   /**
@@ -384,13 +460,7 @@ export class EngineService {
     text: string,
     inboundId: string | null,
   ): Promise<OutboundMessage[]> {
-    const history = (
-      await this.conversationService.getHistory(conversation.id, {
-        limit: this.historyLimit + 1,
-      })
-    )
-      .filter((message) => message.id !== inboundId)
-      .slice(-this.historyLimit);
+    const history = await this.historyFor(conversation, inboundId);
 
     const result = await this.discoveryService.discover({
       text,
@@ -623,6 +693,18 @@ function repeatedThemselves(history: ChatMessage[], text: string): boolean {
   const now = normalise(text);
   return now.length > 3 && now === normalise(previous.text);
 }
+
+/** Checkout steps where a question or a greeting gets an answer, then the step again. */
+const QUESTION_STEPS = new Set<ConversationState>([
+  ConversationState.OFFERING_ADDONS,
+  ConversationState.COLLECTING_NAME,
+  ConversationState.COLLECTING_PHONE,
+  ConversationState.COLLECTING_EMAIL,
+  ConversationState.COLLECTING_FULFILLMENT,
+  ConversationState.COLLECTING_ADDRESS,
+  ConversationState.CONFIRMING_ORDER,
+  ConversationState.AWAITING_PAYMENT,
+]);
 
 const GREETINGS = [
   'hi',

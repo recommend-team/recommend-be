@@ -132,6 +132,87 @@ export class CheckoutFlow {
     };
   }
 
+  /**
+   * The question the buyer is on, asked again — after they asked something of their own.
+   * Nothing is recorded or advanced: their question was not an answer.
+   */
+  async repeatQuestion(conversation: Conversation): Promise<OutboundMessage[]> {
+    const fresh = await this.conversationService.findById(conversation.id);
+    const context = fresh?.context ?? {};
+    const state = fresh?.state ?? conversation.state;
+    const draft = context.addressDraft;
+
+    if (state === ConversationState.COLLECTING_ADDRESS && draft) {
+      if (draft.stage === 'LANDMARK') {
+        return [
+          {
+            text: 'Any landmark or bus stop near it, to help the rider find you?',
+            payload: choices('landmark', [{ id: 'skip', label: 'Skip' }]),
+          },
+        ];
+      }
+      const suggested = draft.suggestedAreaId
+        ? await this.locations.getAreaById(draft.suggestedAreaId)
+        : null;
+      return [
+        suggested
+          ? {
+              text: `Is ${draft.text} in ${suggested.name}?`,
+              payload: choices('area-confirm', [
+                { id: 'yes', label: `Yes, ${suggested.name}` },
+                { id: 'no', label: 'No, a different area' },
+              ]),
+            }
+          : { text: `Which area is ${draft.text} in?` },
+      ];
+    }
+
+    switch (state) {
+      case ConversationState.OFFERING_ADDONS: {
+        // A fresh card, not "the card above": the app retires a card once the buyer has
+        // typed anything after it, so the old one no longer has working buttons.
+        const offer = await this.addOnOffer(context.pendingCart ?? []);
+        const text =
+          'Would you like anything to go with it? Pick below, or tap No, thanks.';
+        return [offer ? { ...offer, text } : { text }];
+      }
+      case ConversationState.CONFIRMING_ORDER:
+        return [
+          {
+            text: 'Shall I go ahead with the order above?',
+            payload: confirmChoices(),
+          },
+        ];
+      case ConversationState.AWAITING_PAYMENT:
+        return [
+          {
+            text: "Your payment link is above — I'll confirm your order here as soon as it's paid.",
+          },
+        ];
+      case ConversationState.COLLECTING_NAME:
+      case ConversationState.COLLECTING_PHONE:
+      case ConversationState.COLLECTING_EMAIL:
+      case ConversationState.COLLECTING_FULFILLMENT:
+      case ConversationState.COLLECTING_ADDRESS: {
+        const prompt = promptFor(
+          state,
+          context.profile?.name,
+          context.lastDeliveryAddress,
+          this.ordering.pickupEnabled(),
+        );
+        // "Lovely." and "Thanks, Ada." belong to the first time it was asked.
+        return [
+          {
+            ...prompt,
+            text: prompt.text.replace(/^(Lovely|Thanks(, [^.]+)?)\. /, ''),
+          },
+        ];
+      }
+      default:
+        return [];
+    }
+  }
+
   /** Every buyer message while a checkout is in progress. */
   async handle(
     conversation: Conversation,

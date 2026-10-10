@@ -116,6 +116,30 @@ describe('what the assistant knows', () => {
     });
   });
 
+  describe('answering every question in a message', () => {
+    it('answers two at once', () => {
+      const text = textOf('how much is delivery, and how do I pay?');
+
+      expect(text).toContain('₦1,500');
+      expect(text).toContain('through Paystack');
+    });
+
+    it('explains why we ask for their phone number — not ours to call', () => {
+      const text = textOf('why do you need my phone number?');
+
+      expect(text).toMatch(/^Fair question/);
+      expect(text).not.toContain('814 306 7676');
+    });
+
+    it('still gives our number when they ask how to reach us', () => {
+      expect(textOf('what is your phone number')).toContain('814 306 7676');
+    });
+
+    it('tells the model what each detail is for', () => {
+      expect(buildKnowledge(facts)).toMatch(/Why we ask for details/);
+    });
+  });
+
   describe('answering without a model', () => {
     it.each([
       'how much is delivery?',

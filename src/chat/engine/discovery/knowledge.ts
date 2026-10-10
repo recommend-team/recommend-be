@@ -1,4 +1,5 @@
 import type { AreaSummary } from '../../ports/location.port';
+import { WHY_DETAILS, asksWhyDetails } from '../flows/aside';
 
 /**
  * What the assistant knows about Recommend.
@@ -79,6 +80,10 @@ ${pickup}
   their orders yourself with get_my_orders.
 - Signing in: optional, with their email, from the menu at the top right. It keeps their
   chats and orders on any phone or browser.
+- Why we ask for details: the name and phone number let the vendor and rider reach the
+  buyer about their order; the address tells the rider where to bring it; the email is
+  optional — only for the receipt, and to keep the chat on other phones — and can be
+  skipped.
 - Areas we cover right now: ${describeAreas(facts.servedAreas)}. If someone asks about a
   place that is not listed, say we do not have vendors there yet.
 - Talking to the team: ${SUPPORT_PHONE}, or ${SUPPORT_EMAIL}. Open ${SUPPORT_HOURS}. You can
@@ -141,55 +146,79 @@ export function answerFromKnowledge(
     return { kind: 'orders' };
   }
 
-  if (
-    has(
-      /\bdeliver(y|ies)? (fee|cost|charge|price)\b|\bhow much (is|for) delivery\b/,
-    )
-  ) {
-    return {
-      kind: 'text',
-      text:
-        `Delivery is a flat ${naira(facts.deliveryFee)} wherever we deliver` +
+  // Every question the message asks is answered — "how much is delivery, and how do
+  // I pay?" gets both — in the order below.
+  const answers: string[] = [];
+
+  // First: "why do you need my phone number?" is about us asking, not about calling us.
+  const aboutDetails = asksWhyDetails(text);
+  if (aboutDetails) answers.push(WHY_DETAILS);
+
+  const fee = has(
+    /\bdeliver(y|ies)? (fee|cost|charge|price)\b|\bhow much (is|for) delivery\b/,
+  );
+  if (fee) {
+    answers.push(
+      `Delivery is a flat ${naira(facts.deliveryFee)} wherever we deliver` +
         (facts.pickupEnabled ? ', and pickup is free' : '') +
         `. It ${DELIVERY_TIME.replace(/^usually/, 'usually takes')}.`,
-    };
+    );
   }
 
+  // The fee answer already gives the time.
   if (
+    !fee &&
     has(/\bhow (long|fast|soon)\b/) &&
     has(/\b(deliver|delivery|arrive|take|come)\b/)
   ) {
-    return {
-      kind: 'text',
-      text: `Delivery ${DELIVERY_TIME.replace(/^usually/, 'usually takes')}.`,
-    };
+    answers.push(
+      `Delivery ${DELIVERY_TIME.replace(/^usually/, 'usually takes')}.`,
+    );
   }
 
   if (
     has(/\b(pick ?up|pick (it|them) up|collect)\b/) &&
     has(/\b(how|can i|do you|is there)\b/)
   ) {
-    if (!facts.pickupEnabled) return { kind: 'text', text: PICKUP_COMING_SOON };
-    return {
-      kind: 'text',
-      text:
-        'Yes — choose pickup at checkout and it is free. Once your order is ready, ' +
-        "we'll tell you where to collect it, and you show the collection code from your " +
-        'Orders tab at the counter.',
-    };
+    answers.push(
+      facts.pickupEnabled
+        ? 'Yes — choose pickup at checkout and it is free. Once your order is ready, ' +
+            "we'll tell you where to collect it, and you show the collection code from your " +
+            'Orders tab at the counter.'
+        : PICKUP_COMING_SOON,
+    );
   }
 
   if (
     has(/\bhow (do|can) i pay\b|\bpayment (method|option)s?\b/) ||
     has(/\b(pay|payment)\b.*\b(card|transfer|ussd|cash)\b/)
   ) {
-    return {
-      kind: 'text',
-      text:
-        'You pay right here in the chat through Paystack — by card, bank transfer or ' +
+    answers.push(
+      'You pay right here in the chat through Paystack — by card, bank transfer or ' +
         'USSD, whichever you prefer. Add what you want to your cart and tap Pay when ready.',
-    };
+    );
   }
+
+  if (
+    !aboutDetails &&
+    has(/\b(contact|phone number|email|call you|customer care number)\b/)
+  ) {
+    answers.push(
+      `You can call us on ${SUPPORT_PHONE} or email ${SUPPORT_EMAIL} — we're open ` +
+        `${SUPPORT_HOURS}. Or just ask here and I'll bring the team in.`,
+    );
+  }
+
+  if (has(/\bhow (does|do) (this|it|recommend) work\b|\bwhat is recommend\b/)) {
+    answers.push(
+      'Tell me what you want and roughly where you are, and I’ll show you vendors near ' +
+        'you who have it. Add items to your cart, tap Pay, and pay right here in the chat — ' +
+        `then it’s delivered for ${naira(facts.deliveryFee)}` +
+        (facts.pickupEnabled ? ', or you pick it up for free.' : '.'),
+    );
+  }
+
+  if (answers.length > 0) return { kind: 'text', text: answers.join(' ') };
 
   if (
     has(/\b(which|what) (areas|locations|places)\b/) ||
@@ -197,26 +226,6 @@ export function answerFromKnowledge(
     has(/\bdo you (deliver|operate|cover|work) (to|in|at|around)\b/)
   ) {
     return { kind: 'coverage' };
-  }
-
-  if (has(/\b(contact|phone number|email|call you|customer care number)\b/)) {
-    return {
-      kind: 'text',
-      text:
-        `You can call us on ${SUPPORT_PHONE} or email ${SUPPORT_EMAIL} — we're open ` +
-        `${SUPPORT_HOURS}. Or just ask here and I'll bring the team in.`,
-    };
-  }
-
-  if (has(/\bhow (does|do) (this|it|recommend) work\b|\bwhat is recommend\b/)) {
-    return {
-      kind: 'text',
-      text:
-        'Tell me what you want and roughly where you are, and I’ll show you vendors near ' +
-        'you who have it. Add items to your cart, tap Pay, and pay right here in the chat — ' +
-        `then it’s delivered for ${naira(facts.deliveryFee)}` +
-        (facts.pickupEnabled ? ', or you pick it up for free.' : '.'),
-    };
   }
 
   return null;

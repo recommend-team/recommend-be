@@ -792,6 +792,114 @@ describe('CheckoutFlow', () => {
     });
   });
 
+  describe('asking the question again, after the buyer asked one', () => {
+    it('re-asks for the name without the "Lovely." it opened with', async () => {
+      const replies = await flow.repeatQuestion(
+        conversationAt(ConversationState.COLLECTING_NAME),
+      );
+      expect(replies[0].text).toBe('What name should I put on the order?');
+    });
+
+    it('re-asks for the address', async () => {
+      conversations.findById.mockResolvedValue({
+        id: 'c1',
+        state: ConversationState.COLLECTING_ADDRESS,
+        context: {},
+      });
+
+      const replies = await flow.repeatQuestion(
+        conversationAt(ConversationState.COLLECTING_ADDRESS),
+      );
+      expect(replies[0].text).toBe(ASK_ADDRESS);
+    });
+
+    it('re-asks the area for the address already given, with the same buttons', async () => {
+      conversations.findById.mockResolvedValue({
+        id: 'c1',
+        state: ConversationState.COLLECTING_ADDRESS,
+        context: {
+          addressDraft: {
+            text: '12 Allen Avenue',
+            stage: 'AREA',
+            suggestedAreaId: 'a-yaba',
+          },
+        },
+      });
+
+      const replies = await flow.repeatQuestion(
+        conversationAt(ConversationState.COLLECTING_ADDRESS),
+      );
+      expect(replies[0].text).toBe('Is 12 Allen Avenue in Yaba?');
+      expect(replies[0].payload?.kind).toBe('choices');
+    });
+
+    it('re-asks for the landmark, Skip and all', async () => {
+      conversations.findById.mockResolvedValue({
+        id: 'c1',
+        state: ConversationState.COLLECTING_ADDRESS,
+        context: {
+          addressDraft: { text: '12 Allen Avenue, Ikeja', stage: 'LANDMARK' },
+        },
+      });
+
+      const replies = await flow.repeatQuestion(
+        conversationAt(ConversationState.COLLECTING_ADDRESS),
+      );
+      expect(replies[0].text).toBe(
+        'Any landmark or bus stop near it, to help the rider find you?',
+      );
+    });
+
+    it('offers the extras again as a fresh card — the old one is retired once the buyer types', async () => {
+      catalog.listAddOns.mockResolvedValue([
+        {
+          id: 'w1',
+          name: 'Bottled Water',
+          price: 300,
+          vendorId: 'v1',
+          vendorName: "Mama's Kitchen",
+          imageUrl: null,
+          isAddOn: true,
+        },
+      ]);
+      conversations.findById.mockResolvedValue({
+        id: 'c1',
+        state: ConversationState.OFFERING_ADDONS,
+        context: { pendingCart: CART },
+      });
+
+      const replies = await flow.repeatQuestion(
+        conversationAt(ConversationState.OFFERING_ADDONS),
+      );
+      expect(replies[0].text).toBe(
+        'Would you like anything to go with it? Pick below, or tap No, thanks.',
+      );
+      expect(replies[0].payload?.kind).toBe('addon_offer');
+    });
+
+    it('asks to go ahead again at the summary', async () => {
+      conversations.findById.mockResolvedValue({
+        id: 'c1',
+        state: ConversationState.CONFIRMING_ORDER,
+        context: {},
+      });
+
+      const replies = await flow.repeatQuestion(
+        conversationAt(ConversationState.CONFIRMING_ORDER),
+      );
+      expect(replies[0].text).toBe('Shall I go ahead with the order above?');
+    });
+
+    it('records nothing and moves nothing', async () => {
+      await flow.repeatQuestion(
+        conversationAt(ConversationState.COLLECTING_PHONE),
+      );
+
+      expect(conversations.mergeContext).not.toHaveBeenCalled();
+      expect(conversations.setState).not.toHaveBeenCalled();
+    });
+  });
+
   describe('taking the delivery address', () => {
     const at = (context: ConversationContext = {}) =>
       conversationAt(ConversationState.COLLECTING_ADDRESS, context);

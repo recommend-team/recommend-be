@@ -4,7 +4,11 @@ import { EngineService } from './engine.service';
 import { ConversationService } from '../conversation/conversation.service';
 import { ChannelRegistry } from '../transport/channel.registry';
 import { Conversation } from '../conversation/entities/conversation.entity';
-import { ChatChannel, ConversationState } from '../enums/chat.enums';
+import {
+  ChatChannel,
+  ConversationState,
+  MessageAuthor,
+} from '../enums/chat.enums';
 import { DiscoveryService } from './discovery/discovery.service';
 import { CheckoutFlow } from './flows/checkout.flow';
 import { HandoverService } from './handover.service';
@@ -29,11 +33,16 @@ describe('EngineService', () => {
     setArea: jest.Mock;
   };
   let registry: { send: jest.Mock };
-  let discovery: { discover: jest.Mock; hasModel: jest.Mock };
+  let discovery: {
+    discover: jest.Mock;
+    hasModel: jest.Mock;
+    answerAside: jest.Mock;
+  };
   let checkoutFlow: {
     start: jest.Mock;
     handle: jest.Mock;
     addAddOns: jest.Mock;
+    repeatQuestion: jest.Mock;
   };
   let handover: {
     shouldStaySilent: jest.Mock;
@@ -60,6 +69,7 @@ describe('EngineService', () => {
     discovery = {
       // No model by default — the keyword-only deployment. Tests that need one say so.
       hasModel: jest.fn().mockReturnValue(false),
+      answerAside: jest.fn().mockResolvedValue(null),
       discover: jest.fn().mockResolvedValue({
         messages: [{ text: 'Here is what I found:' }],
         resolvedAreaId: null,
@@ -71,6 +81,9 @@ describe('EngineService', () => {
       start: jest.fn().mockResolvedValue([{ text: 'What name should I use?' }]),
       handle: jest.fn().mockResolvedValue([{ text: 'Got it.' }]),
       addAddOns: jest.fn(),
+      repeatQuestion: jest
+        .fn()
+        .mockResolvedValue([{ text: 'What is the full delivery address?' }]),
     };
 
     const module: TestingModule = await Test.createTestingModule({
@@ -95,6 +108,120 @@ describe('EngineService', () => {
     }).compile();
 
     service = module.get<EngineService>(EngineService);
+  });
+
+  describe('a question in the middle of checkout', () => {
+    const atAddress = {
+      ...conversation,
+      state: ConversationState.COLLECTING_ADDRESS,
+    } as Conversation;
+    const said = async (text: string) =>
+      (await service.handleInbound({ conversation: atAddress, text })).map(
+        (reply) => reply.text,
+      );
+
+    it('answers "why do you need my details?", then asks again — the screenshot', async () => {
+      const replies = await said(
+        'what do you need thesed etails for?, my phone, email and address too',
+      );
+
+      expect(replies[0]).toMatch(/^Fair question. Your name and phone number/);
+      expect(replies[0]).toMatch(/email is optional/);
+      expect(replies[1]).toBe('What is the full delivery address?');
+      // Never taken as the address.
+      expect(checkoutFlow.handle).not.toHaveBeenCalled();
+    });
+
+    it('answers the earlier question on "i asked a question"', async () => {
+      conversations.getHistory.mockResolvedValue([
+        {
+          id: 'm1',
+          author: MessageAuthor.BUYER,
+          text: 'why do you need my phone number',
+        },
+        { id: 'm2', author: MessageAuthor.ASSISTANT, text: 'Could you add…' },
+      ]);
+
+      const replies = await said('i asked a question');
+
+      expect(replies[0]).toMatch(/^Sorry about that. Fair question./);
+      expect(replies[1]).toBe('What is the full delivery address?');
+      expect(checkoutFlow.handle).not.toHaveBeenCalled();
+    });
+
+    it('asks what they want to know when there is no earlier question', async () => {
+      const replies = await said('i asked a question');
+
+      expect(replies[0]).toBe(
+        'Sorry about that — what would you like to know?',
+      );
+      expect(checkoutFlow.handle).not.toHaveBeenCalled();
+    });
+
+    it('answers any other question from what James knows', async () => {
+      discovery.answerAside.mockResolvedValue(
+        'Delivery usually takes 20 to 30 minutes.',
+      );
+
+      const replies = await said('how long will delivery take?');
+
+      expect(discovery.answerAside).toHaveBeenCalledWith(
+        expect.objectContaining({ text: 'how long will delivery take?' }),
+      );
+      expect(replies).toEqual([
+        'Delivery usually takes 20 to 30 minutes.',
+        'What is the full delivery address?',
+      ]);
+    });
+
+    it('says so when it cannot answer, and still asks again', async () => {
+      const replies = await said('can you make it extra spicy?');
+
+      expect(replies[0]).toMatch(/^I'm not sure about that one/);
+      expect(replies[1]).toBe('What is the full delivery address?');
+    });
+
+    it('greets back, then asks again', async () => {
+      const replies = await said('hello');
+
+      expect(replies[0]).toContain("I'm James from Recommend");
+      expect(replies[1]).toBe('What is the full delivery address?');
+      expect(checkoutFlow.handle).not.toHaveBeenCalled();
+    });
+
+    it('answers a question asked at the extras card, then offers the card again', async () => {
+      checkoutFlow.repeatQuestion.mockResolvedValue([
+        {
+          text: 'Would you like anything to go with it? Pick below, or tap No, thanks.',
+        },
+      ]);
+      discovery.answerAside.mockResolvedValue(
+        'Delivery usually takes 20 to 30 minutes.',
+      );
+
+      const replies = (
+        await service.handleInbound({
+          conversation: {
+            ...conversation,
+            state: ConversationState.OFFERING_ADDONS,
+          } as Conversation,
+          text: 'how long will delivery take?',
+        })
+      ).map((reply) => reply.text);
+
+      expect(replies[0]).toBe('Delivery usually takes 20 to 30 minutes.');
+      expect(replies[1]).toMatch(/Pick below/);
+      expect(checkoutFlow.handle).not.toHaveBeenCalled();
+    });
+
+    it('takes an answer as an answer', async () => {
+      await said('12 Allen Avenue, Ikeja');
+
+      expect(checkoutFlow.handle).toHaveBeenCalledWith(
+        atAddress,
+        '12 Allen Avenue, Ikeja',
+      );
+    });
   });
 
   describe('the add-on card', () => {

@@ -42,6 +42,8 @@ const NEVER = [
   /\b(abeg|wahala|i dey|sharp sharp|how far)\b/i,
   // Pickup is switched off (PICKUP_ENABLED) — never offered.
   /pickup is free|pick it up for free|choose pickup/i,
+  // A question is answered, never searched for as if it were a dish.
+  /could not find anything matching "(why|what|how|when|where|who|can|do|does|is|are)\b/i,
 ];
 
 const asksAboutPerson =
@@ -159,8 +161,47 @@ export const SCENARIOS: Scenario[] = [
     name: 'gibberish, twice',
     buyer: ['asdkjh qwezx', 'asdkjh qwezx'],
     expect: { handsOver: false },
-    // Two searches that found nothing: offered, not handed over.
-    fallback: { offersPerson: true },
+    // Asked about, not searched for; twice, and a person is offered, not handed over.
+    fallback: { says: [/didn't quite catch that/], offersPerson: true },
+  },
+  {
+    name: 'why we need their details, outside checkout',
+    buyer: ['why do you need my phone number?'],
+    expect: { says: [/(vendor|rider)/i], handsOver: false },
+    // Not our support number: the question is why we ask for theirs.
+    fallback: { says: [/^Fair question/], neverSays: [/814 306 7676/] },
+  },
+  {
+    name: 'two questions at once',
+    buyer: ['how much is delivery, and how do I pay?'],
+    expect: { says: [/1,?500/, /(card|transfer)/i], handsOver: false },
+  },
+  {
+    name: 'a question James cannot answer',
+    buyer: ['why are your prices so high?'],
+    expect: { handsOver: false },
+    fallback: { says: [/not sure about that one/] },
+  },
+  {
+    name: 'a request phrased as a question',
+    buyer: ['do you have jollof rice in Yaba?'],
+    expect: { showsProducts: true, handsOver: false },
+  },
+  {
+    name: '"you didn\'t answer me"',
+    buyer: [
+      'how long does delivery take and how do i pay',
+      'you did not answer my question',
+    ],
+    // Answered again, not "not sure": both questions were answerable.
+    expect: {
+      says: [/(20|30|minute|card|transfer|Paystack)/i],
+      neverSays: [/not sure about that one/],
+      handsOver: false,
+    },
+    fallback: {
+      says: [/^Sorry about that\. Delivery usually takes 20 to 30 minutes/],
+    },
   },
   {
     name: 'a long conversation keeps its thread',

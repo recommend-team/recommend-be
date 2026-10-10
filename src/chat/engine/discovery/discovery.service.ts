@@ -22,6 +22,7 @@ import {
 } from './knowledge';
 import { describeLatestOrder, orderPrices, orderProgress } from './my-orders';
 import { sanitizeUntrusted } from './sanitize';
+import { isAside, onlySaysNotHeard } from '../flows/aside';
 import { OutboundMessage } from '../../transport/channel.interface';
 import { ChatMessage } from '../../conversation/entities/message.entity';
 import { MessageAuthor } from '../../enums/chat.enums';
@@ -132,6 +133,52 @@ export class DiscoveryService {
       );
       return this.keywordFallback(request, true);
     }
+  }
+
+  /**
+   * A question asked in the middle of checkout, answered on its own — no searching, no
+   * cards, nothing started. The checkout question is asked again by the caller. Null
+   * when there is nothing true to say.
+   */
+  async answerAside(request: DiscoveryRequest): Promise<string | null> {
+    const facts = await this.facts();
+
+    if (this.client) {
+      try {
+        const completion = await this.client.chat.completions.create({
+          model: this.model,
+          temperature: this.temperature,
+          messages: [
+            { role: 'system', content: this.prompt },
+            { role: 'system', content: buildKnowledge(facts) },
+            { role: 'system', content: await this.aboutTheBuyer(request) },
+            {
+              role: 'system',
+              content:
+                'The buyer is in the middle of checking out and has asked a question ' +
+                'instead of answering. Answer their question only, briefly and directly, ' +
+                'from what you know. Do not ask for their details or repeat the checkout ' +
+                'question — that follows automatically. If you do not know, say so.',
+            },
+            ...this.toModelHistory(request.history),
+            { role: 'user', content: request.text },
+          ],
+        });
+        const reply = completion.choices[0]?.message?.content?.trim() ?? '';
+        const guarded = enforcePriceIntegrity(reply, [facts.deliveryFee]).text;
+        if (guarded) return guarded;
+      } catch (error) {
+        this.logger.error(
+          `Aside model call failed, answering from what we know: ${
+            error instanceof Error ? error.message : 'unknown error'
+          }`,
+        );
+      }
+    }
+
+    const known = await this.answerWithoutModel(request, false);
+    if (!known || known.handover) return null;
+    return known.messages[0]?.text ?? null;
   }
 
   // ─── Model path ─────────────────────────────────────────────────────────────
@@ -349,6 +396,37 @@ export class DiscoveryService {
     request: DiscoveryRequest,
     modelFailed: boolean,
   ): Promise<DiscoveryResult> {
+    // "you did not answer my question" — answer the one they mean: the last they asked.
+    if (onlySaysNotHeard(request.text)) {
+      const earlier = [...request.history]
+        .reverse()
+        .find(
+          (message) =>
+            message.author === MessageAuthor.BUYER &&
+            isAside(message.text) &&
+            !onlySaysNotHeard(message.text),
+        );
+      const harvest = emptyHarvest();
+      if (!earlier) {
+        return this.assemble(
+          'Sorry about that — what would you like to know?',
+          harvest,
+          { usedFallback: true, modelFailed },
+        );
+      }
+      const again = await this.keywordFallback(
+        { ...request, text: earlier.text },
+        modelFailed,
+      );
+      const [first, ...rest] = again.messages;
+      return {
+        ...again,
+        messages: first
+          ? [{ ...first, text: `Sorry about that. ${first.text}` }, ...rest]
+          : again.messages,
+      };
+    }
+
     const known = await this.answerWithoutModel(request, modelFailed);
     if (known) return known;
 
@@ -391,7 +469,13 @@ export class DiscoveryService {
     harvest.products.push(...products);
     harvest.prices.push(...products.map((product) => product.price));
 
-    if (products.length === 0) {
+    // A question that is also a request — "do you have suya?" — has found its answer
+    // above. One that is not, or a message that is not words, gets an honest reply, not
+    // a vendor list or "could not find anything matching" the whole question.
+    const asked = isAside(request.text);
+    const unclear = looksUnclear(query);
+
+    if (products.length === 0 && !asked && !unclear) {
       const vendors = await this.catalog.searchVendors({
         text: query || undefined,
         areaId: areaId ?? undefined,
@@ -404,7 +488,11 @@ export class DiscoveryService {
         ? "Here's what I found:"
         : harvest.vendors.length > 0
           ? 'I could not match that exactly, but these vendors are near you:'
-          : `I could not find anything matching "${query || request.text}". Try another search, or tell me which area you're in.`;
+          : asked
+            ? NOT_SURE
+            : unclear
+              ? DID_NOT_CATCH
+              : `I could not find anything matching "${query || request.text}". Try another search, or tell me which area you're in.`;
 
     return this.assemble(reply, harvest, { usedFallback: true, modelFailed });
   }
@@ -675,4 +763,27 @@ function recentBuyerText(request: DiscoveryRequest): string {
     .map((message) => message.text);
 
   return [request.text, ...previous.reverse()].join(' ');
+}
+
+/** A question we have no answer for — said plainly, with what we can do instead. */
+export const NOT_SURE =
+  "I'm not sure about that one. I can find food and other things from vendors near you, " +
+  'and tell you about delivery, payment and your orders — or say "talk to a person" and ' +
+  "I'll bring in our team.";
+
+/** A message that is not words — asked about, rather than searched for. */
+export const DID_NOT_CATCH =
+  "Sorry, I didn't quite catch that — what are you looking for, and roughly where?";
+
+/**
+ * Keyboard mash rather than words: at least half the words have no vowel, or a run of
+ * four consonants ("asdkjh"). Real dishes and Nigerian place names pass.
+ */
+function looksUnclear(query: string): boolean {
+  const words = query.split(' ').filter(Boolean);
+  if (words.length === 0) return false;
+  const mashed = words.filter(
+    (word) => !/[aeiouy]/.test(word) || /[^aeiouy0-9]{4,}/.test(word),
+  ).length;
+  return mashed * 2 >= words.length;
 }
