@@ -95,7 +95,7 @@ export class DiscoveryService {
       this.configService.get<string>('chat.assistantName') ?? 'James',
     );
     this.maxHistory =
-      this.configService.get<number>('chat.maxHistoryMessages') ?? 12;
+      this.configService.get<number>('chat.maxHistoryMessages') ?? 20;
     this.maxToolRounds =
       this.configService.get<number>('chat.maxToolRounds') ?? 3;
 
@@ -377,6 +377,12 @@ export class DiscoveryService {
       harvest.areas.push(...areas);
     }
 
+    // Nothing asked for, only where they are — "I live in Ikeja", "what can I get?". Show
+    // who is there rather than searching for a dish called "live".
+    if (!query) {
+      return this.whoIsNear(areaId, areas, harvest, modelFailed);
+    }
+
     const products = await this.catalog.searchProducts({
       text: query || undefined,
       areaId: areaId ?? undefined,
@@ -400,6 +406,41 @@ export class DiscoveryService {
           : `I could not find anything matching "${query || request.text}". Try another search, or tell me which area you're in.`;
 
     return this.assemble(reply, harvest, { usedFallback: true, modelFailed });
+  }
+
+  private async whoIsNear(
+    areaId: string | null,
+    named: AreaSummary[],
+    harvest: ToolHarvest,
+    modelFailed: boolean,
+  ): Promise<DiscoveryResult> {
+    const options = { usedFallback: true, modelFailed };
+
+    if (!areaId) {
+      // Not a failed search — nothing was asked for yet.
+      harvest.searched = false;
+      return this.assemble(
+        harvest.areas.length > 1
+          ? 'Which of these areas do you mean?'
+          : 'What are you looking for, and which area are you in?',
+        harvest,
+        options,
+      );
+    }
+
+    const area =
+      named.find((candidate) => candidate.id === areaId) ??
+      (await this.locations.getAreaById(areaId));
+    harvest.vendors.push(...(await this.catalog.searchVendors({ areaId })));
+
+    const place = area?.name ?? 'your area';
+    return this.assemble(
+      harvest.vendors.length > 0
+        ? `Here are the vendors in ${place} — tap one to see what they have, or tell me what you're in the mood for.`
+        : `We don't have vendors in ${place} yet. Tell me another area and I'll look there.`,
+      harvest,
+      options,
+    );
   }
 
   /**
@@ -593,6 +634,24 @@ const FILLER = new Set([
   'by',
   'from',
   'inside',
+  // Saying where they are, or asking what there is — not a dish.
+  'live',
+  'stay',
+  'staying',
+  'am',
+  'im',
+  'based',
+  'located',
+  'what',
+  'whats',
+  'options',
+  'available',
+  'there',
+  'anything',
+  'something',
+  'show',
+  'see',
+  'eat',
 ]);
 
 /** Crude but predictable: drop filler words so "I want some jollof" searches "jollof". */

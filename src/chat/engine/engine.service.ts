@@ -58,7 +58,7 @@ export class EngineService {
     @Inject(ORDERING_PORT) private readonly ordering: OrderingPort,
   ) {
     this.historyLimit =
-      this.configService.get<number>('chat.maxHistoryMessages') ?? 12;
+      this.configService.get<number>('chat.maxHistoryMessages') ?? 20;
     this.assistantName =
       this.configService.get<string>('chat.assistantName') ?? 'James';
   }

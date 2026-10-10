@@ -133,6 +133,14 @@ describe('what the assistant knows', () => {
     });
 
     it.each([
+      'this is rubbish, my food came cold',
+      'the rider was late and the food is spoilt',
+    ])('offers the team to an unhappy buyer: "%s"', (said) => {
+      expect(answerFromKnowledge(said, facts)?.kind).toBe('team');
+    });
+
+    it.each([
+      'cold drinks',
       'jollof rice',
       'pizza in yaba',
       'I want shawarma',

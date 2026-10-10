@@ -300,6 +300,50 @@ describe('DiscoveryService (keyword fallback)', () => {
     expect(result.messages[0].payload?.kind).toBe('vendor_list');
   });
 
+  it('shows who is there when the buyer only says where they are', async () => {
+    // "I live in Ikeja" used to search for a dish called "live".
+    locations.searchAreas.mockResolvedValue([
+      { id: 'area-ikeja', name: 'Ikeja', stateName: 'Lagos' },
+    ]);
+    catalog.searchVendors.mockResolvedValue([
+      {
+        id: 'v1',
+        name: 'Grill House',
+        slug: 'grill',
+        category: 'Food',
+        areas: [],
+        isOpen: true,
+        logoUrl: null,
+      },
+    ]);
+
+    const result = await service.discover({
+      text: 'I live in Ikeja',
+      areaId: null,
+      history: [],
+    });
+
+    expect(catalog.searchProducts).not.toHaveBeenCalled();
+    expect(catalog.searchVendors).toHaveBeenCalledWith({
+      areaId: 'area-ikeja',
+    });
+    expect(result.messages[0].text).toMatch(/^Here are the vendors in Ikeja/);
+    expect(result.resolvedAreaId).toBe('area-ikeja');
+  });
+
+  it('asks what and where, rather than failing, when given neither', async () => {
+    const result = await service.discover({
+      text: 'what can I get?',
+      areaId: null,
+      history: [],
+    });
+
+    expect(result.messages[0].text).toBe(
+      'What are you looking for, and which area are you in?',
+    );
+    expect(result.foundNothing).toBe(false);
+  });
+
   it('says so plainly when nothing matches at all', async () => {
     const result = await service.discover({
       text: 'caviar',

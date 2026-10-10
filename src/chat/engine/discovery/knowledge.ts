@@ -111,6 +111,16 @@ export function answerFromKnowledge(
     };
   }
 
+  // Unhappy with something that already happened — the team should hear about it.
+  if (
+    has(
+      /\b(rubbish|terrible|awful|horrible|disappointed|angry|worst|nonsense|unacceptable|cold|late|spoilt|spoiled|stale)\b/,
+    ) &&
+    has(/\b(food|order|delivery|rider|meal|package|came)\b/)
+  ) {
+    return { kind: 'team', reason: `Unhappy: ${text.trim().slice(0, 120)}` };
+  }
+
   if (
     // "where's" arrives as "where s" once punctuation is gone.
     has(/\bwhere( ?s| is)? my (order|food|package|delivery)\b/) ||

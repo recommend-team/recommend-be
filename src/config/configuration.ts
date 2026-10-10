@@ -186,7 +186,7 @@ export const chatConfig = registerAs('chat', () => ({
    * every extra message is paid for on every turn of every conversation.
    */
   maxHistoryMessages: parseInt(
-    process.env.CHAT_MAX_HISTORY_MESSAGES || '12',
+    process.env.CHAT_MAX_HISTORY_MESSAGES || '20',
     10,
   ),
   /** Tool round-trips allowed per turn, so a confused model cannot loop indefinitely. */
