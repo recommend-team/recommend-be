@@ -12,6 +12,8 @@ import { IDENTITY_PORT } from '../../ports/identity.port';
 import type { IdentityPort } from '../../ports/identity.port';
 import { CATALOG_PORT } from '../../ports/catalog.port';
 import type { CatalogPort } from '../../ports/catalog.port';
+import { LOCATION_PORT } from '../../ports/location.port';
+import type { AreaSummary, LocationPort } from '../../ports/location.port';
 import { CartChangedError } from '../../adapters/local-ordering.adapter';
 import { formatForDisplay, formatNaira, toE164 } from '../../utils/phone.util';
 
@@ -27,6 +29,7 @@ export class CheckoutFlow {
     @Inject(ORDERING_PORT) private readonly ordering: OrderingPort,
     @Inject(IDENTITY_PORT) private readonly identity: IdentityPort,
     @Inject(CATALOG_PORT) private readonly catalog: CatalogPort,
+    @Inject(LOCATION_PORT) private readonly locations: LocationPort,
   ) {}
 
   /** Entry point — the buyer tapped Pay. */
@@ -44,6 +47,9 @@ export class CheckoutFlow {
 
     await this.conversationService.mergeContext(conversation.id, {
       pendingCart: cart,
+      // A new order starts its address afresh.
+      addressDraft: undefined,
+      addressRetried: undefined,
     });
 
     // Extras first, while the buyer is still thinking about the food — once per order,
@@ -272,8 +278,8 @@ export class CheckoutFlow {
         {
           text:
             readFulfillment(answer) === 'PICKUP'
-              ? `${PICKUP_UNAVAILABLE} Where should we deliver it?`
-              : 'Where should we deliver it?',
+              ? `${PICKUP_UNAVAILABLE} ${ASK_ADDRESS}`
+              : ASK_ADDRESS,
         },
       ];
     }
@@ -357,19 +363,35 @@ export class CheckoutFlow {
       conversation.id,
       ConversationState.COLLECTING_ADDRESS,
     );
-    return [{ text: "What's the new address?" }];
+    return [{ text: ASK_NEW_ADDRESS }];
   }
 
+  /**
+   * The delivery address, in up to three short steps — all within COLLECTING_ADDRESS:
+   * the address itself (with a house number and street), the area if it did not name
+   * one, then an optional landmark. The area must be one we cover *and* one every vendor
+   * in the cart delivers to: a rider should never be sent somewhere no one agreed to go.
+   */
   private async captureAddress(
     conversation: Conversation,
     answer: string,
   ): Promise<OutboundMessage[]> {
+    const fresh = await this.conversationService.findById(conversation.id);
+    const context = fresh?.context ?? conversation.context ?? {};
+    const draft = context.addressDraft;
+
+    if (draft?.stage === 'LANDMARK') {
+      return this.finishAddress(
+        conversation,
+        isSkip(answer) ? draft.text : `${draft.text} (${answer})`,
+      );
+    }
+    if (draft?.stage === 'AREA') {
+      return this.answerArea(conversation, draft, answer);
+    }
+
     if (answer.length < 5) {
-      return [
-        {
-          text: 'I need a bit more of the address than that — street and area?',
-        },
-      ];
+      return [{ text: ADDRESS_TOO_SHORT }];
     }
 
     // "I'll pick it up" is not an address — and while pickup is off, not an option.
@@ -377,13 +399,228 @@ export class CheckoutFlow {
       !this.ordering.pickupEnabled() &&
       readFulfillment(answer) === 'PICKUP'
     ) {
-      return [{ text: `${PICKUP_UNAVAILABLE} Where should we deliver it?` }];
+      return [{ text: `${PICKUP_UNAVAILABLE} ${ASK_ADDRESS}` }];
+    }
+
+    // Asked once for the house number and street. Asked twice, the buyer may simply not
+    // have one — "the yellow house behind the mosque" — and is never locked out.
+    if (!hasStreetPart(answer) && !context.addressRetried) {
+      await this.conversationService.mergeContext(conversation.id, {
+        addressRetried: true,
+      });
+      return [{ text: ADD_STREET }];
+    }
+
+    const named = await this.areasIn(answer);
+    const area =
+      named.length === 1
+        ? named[0]
+        : named.find((candidate) => candidate.id === fresh?.areaId);
+
+    if (area) return this.checkArea(conversation, answer, area);
+
+    // No area in it, or several it could be. Offer the one the chat already knows.
+    const known = fresh?.areaId
+      ? await this.locations.getAreaById(fresh.areaId)
+      : null;
+    await this.conversationService.mergeContext(conversation.id, {
+      addressDraft: {
+        text: answer,
+        stage: 'AREA',
+        suggestedAreaId: known?.id,
+      },
+    });
+
+    if (known) {
+      return [
+        {
+          text: `Is that in ${known.name}?`,
+          payload: choices('area-confirm', [
+            { id: 'yes', label: `Yes, ${known.name}` },
+            { id: 'no', label: 'No, a different area' },
+          ]),
+        },
+      ];
+    }
+    return [
+      named.length > 1
+        ? {
+            text: 'Which area is that in?',
+            payload: choices(
+              'area',
+              named.slice(0, 5).map((option) => ({
+                id: option.id,
+                label: option.name,
+              })),
+            ),
+          }
+        : { text: 'Which area is that in?' },
+    ];
+  }
+
+  /**
+   * The areas an address names, read from the end — where Nigerian addresses put the
+   * area ("12 Herbert Macaulay Way, Yaba"). The area search reads only a few words, so a
+   * long street part would otherwise hide the area. A part naming only a state ("Lagos")
+   * matches many areas and is passed over for a more specific one.
+   */
+  private async areasIn(address: string): Promise<AreaSummary[]> {
+    const parts = address
+      .split(',')
+      .map((part) => part.trim())
+      .filter(Boolean)
+      .reverse();
+    let fallback: AreaSummary[] = [];
+    for (const part of parts) {
+      const found = await this.locations.searchAreas(part);
+      if (found.length === 1) return found;
+      if (found.length > 1 && fallback.length === 0) fallback = found;
+    }
+    if (fallback.length > 0) return fallback;
+    // No commas to go by: the last few words.
+    return this.locations.searchAreas(address.split(/\s+/).slice(-5).join(' '));
+  }
+
+  /** The buyer said which area their address is in, or answered "Is that in Yaba?". */
+  private async answerArea(
+    conversation: Conversation,
+    draft: NonNullable<Conversation['context']['addressDraft']>,
+    answer: string,
+  ): Promise<OutboundMessage[]> {
+    const suggested = draft.suggestedAreaId
+      ? await this.locations.getAreaById(draft.suggestedAreaId)
+      : null;
+
+    if (suggested && /^(no|nope|not|different)\b/i.test(answer)) {
+      await this.conversationService.mergeContext(conversation.id, {
+        addressDraft: { text: draft.text, stage: 'AREA' },
+      });
+      return [{ text: 'Which area is it in?' }];
+    }
+
+    const named = await this.locations.searchAreas(answer);
+    const area =
+      named.length === 1
+        ? named[0]
+        : suggested && isAffirmative(answer.replace(/,.*$/, ''))
+          ? suggested
+          : null;
+
+    if (!area) {
+      if (named.length > 1) {
+        return [
+          {
+            text: 'Which of these is it?',
+            payload: choices(
+              'area',
+              named.slice(0, 5).map((option) => ({
+                id: option.id,
+                label: option.name,
+              })),
+            ),
+          },
+        ];
+      }
+      const served = await this.locations.listServedAreas();
+      return [
+        {
+          text: `I don't recognise that area. We deliver to ${listNames(served)} — which is it in?`,
+        },
+      ];
+    }
+
+    // Said separately, so it joins the address the rider will read.
+    return this.checkArea(conversation, `${draft.text}, ${area.name}`, area);
+  }
+
+  /**
+   * An area we cover, and every vendor in the cart delivers to — or the buyer is told
+   * why not, before anything is charged.
+   */
+  private async checkArea(
+    conversation: Conversation,
+    address: string,
+    area: AreaSummary,
+  ): Promise<OutboundMessage[]> {
+    const served = await this.locations.listServedAreas();
+    if (!served.some((candidate) => candidate.id === area.id)) {
+      await this.clearAddressDraft(conversation.id);
+      return [
+        {
+          text: `We don't deliver to ${area.name} yet — right now we cover ${listNames(served)}. Could you give an address in one of those?`,
+        },
+      ];
+    }
+
+    const vendors = await this.cartVendors(conversation.id);
+    const unserved = vendors.find(
+      (vendor) => !vendor.areas.some((candidate) => candidate.id === area.id),
+    );
+    if (unserved) {
+      await this.clearAddressDraft(conversation.id);
+      const theirs = unserved.areas.map((candidate) => candidate.name);
+      return [
+        {
+          text:
+            `${unserved.name} doesn't deliver to ${area.name}` +
+            (theirs.length ? ` — they deliver to ${listNames(theirs)}.` : '.') +
+            ' Could you give an address there, or say "cancel" to change your order?',
+        },
+      ];
     }
 
     await this.conversationService.mergeContext(conversation.id, {
-      profile: { address: answer },
+      addressDraft: { text: address, stage: 'LANDMARK' },
+    });
+    return [
+      {
+        text: 'Any landmark or bus stop near it, to help the rider find you?',
+        payload: choices('landmark', [{ id: 'skip', label: 'Skip' }]),
+      },
+    ];
+  }
+
+  private async finishAddress(
+    conversation: Conversation,
+    address: string,
+  ): Promise<OutboundMessage[]> {
+    await this.conversationService.mergeContext(conversation.id, {
+      profile: { address },
+      addressDraft: undefined,
+      addressRetried: undefined,
     });
     return this.advanceFrom(conversation, ConversationState.CONFIRMING_ORDER);
+  }
+
+  private async clearAddressDraft(conversationId: string): Promise<void> {
+    await this.conversationService.mergeContext(conversationId, {
+      addressDraft: undefined,
+    });
+  }
+
+  /** Every vendor with something in the cart, with the areas they deliver to. */
+  private async cartVendors(conversationId: string) {
+    const fresh = await this.conversationService.findById(conversationId);
+    const products = await Promise.all(
+      (fresh?.context?.pendingCart ?? []).map((line) =>
+        this.catalog.getProductById(line.productId),
+      ),
+    );
+    const vendorIds = [
+      ...new Set(
+        products
+          .filter(
+            (product): product is NonNullable<typeof product> => !!product,
+          )
+          .map((product) => product.vendorId),
+      ),
+    ];
+    const vendors = await Promise.all(
+      vendorIds.map((id) => this.catalog.getVendorById(id)),
+    );
+    return vendors.filter(
+      (vendor): vendor is NonNullable<typeof vendor> => !!vendor,
+    );
   }
 
   private async confirm(
@@ -717,6 +954,8 @@ export class CheckoutFlow {
       pendingCart: [],
       // A new order is offered extras again.
       addOnsOffered: false,
+      addressDraft: undefined,
+      addressRetried: undefined,
     });
     await this.conversationService.setState(
       conversationId,
@@ -726,6 +965,44 @@ export class CheckoutFlow {
 }
 
 // ─── Wording and parsing ──────────────────────────────────────────────────────
+
+const ASK_ADDRESS =
+  "What's the full delivery address? House number, street and area.";
+const ASK_NEW_ADDRESS =
+  "What's the new address? House number, street and area.";
+const ADDRESS_TOO_SHORT =
+  'I need a bit more of the address than that — house number, street and area?';
+const ADD_STREET =
+  'Could you add the house number and street, so the rider can find you?';
+
+/**
+ * Whether an address has something a rider can find: a number ("12", "Plot 5", "Block
+ * C3") or a word for a street. Lagos addresses vary too much for more than that.
+ */
+function hasStreetPart(address: string): boolean {
+  return (
+    /\d/.test(address) ||
+    /\b(street|st|road|rd|close|avenue|ave|way|crescent|cres|lane|ln|drive|dr|estate|layout|boulevard|expressway|highway|plot|block|flat|house|off)\b/i.test(
+      address,
+    )
+  );
+}
+
+/** "Yaba, Ikeja and Lekki" — for telling a buyer where we, or a vendor, deliver. */
+function listNames(items: (string | { name: string })[]): string {
+  const names = items.map((item) =>
+    typeof item === 'string' ? item : item.name,
+  );
+  if (names.length <= 1) return names[0] ?? 'nowhere yet';
+  const shown = names.slice(0, 8);
+  const rest = names.length - shown.length;
+  if (rest > 0) return `${shown.join(', ')} and ${rest} more`;
+  return `${shown.slice(0, -1).join(', ')} and ${shown[shown.length - 1]}`;
+}
+
+function choices(purpose: string, options: { id: string; label: string }[]) {
+  return { kind: 'choices' as const, data: { purpose, options } };
+}
 
 function promptFor(
   state: ConversationState,
@@ -756,7 +1033,7 @@ function promptFor(
             payload: fulfillmentChoices(),
           };
     case ConversationState.COLLECTING_ADDRESS:
-      return { text: 'Where should we deliver it?' };
+      return { text: ASK_ADDRESS };
     default:
       return { text: 'Shall I go ahead?' };
   }
