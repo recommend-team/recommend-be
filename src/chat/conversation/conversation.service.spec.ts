@@ -248,11 +248,11 @@ describe('ConversationService', () => {
         take: jest.fn().mockReturnThis(),
         andWhere: jest.fn().mockReturnThis(),
         getManyAndCount: jest.fn().mockResolvedValue([[], 0]),
+        getCount: jest.fn().mockResolvedValue(0),
       };
       Object.assign(conversations, {
         createQueryBuilder: jest.fn().mockReturnValue(builder),
       });
-      conversations.count.mockResolvedValue(0);
 
       await service.listForAdmin({});
 
@@ -265,6 +265,30 @@ describe('ConversationService', () => {
       expect(builder.addOrderBy).toHaveBeenCalledWith('c."createdAt"', 'DESC');
       // One folded into a signed-in buyer's thread is not listed twice.
       expect(builder.where).toHaveBeenCalledWith('c."mergedIntoId" IS NULL');
+    });
+
+    it('lists, and counts as waiting, only chats the buyer has written in', async () => {
+      const builder = {
+        where: jest.fn().mockReturnThis(),
+        orderBy: jest.fn().mockReturnThis(),
+        addOrderBy: jest.fn().mockReturnThis(),
+        skip: jest.fn().mockReturnThis(),
+        take: jest.fn().mockReturnThis(),
+        andWhere: jest.fn().mockReturnThis(),
+        getManyAndCount: jest.fn().mockResolvedValue([[], 0]),
+        getCount: jest.fn().mockResolvedValue(0),
+      };
+      Object.assign(conversations, {
+        createQueryBuilder: jest.fn().mockReturnValue(builder),
+      });
+
+      await service.listForAdmin({});
+
+      const spoken = (builder.andWhere.mock.calls as unknown[][]).filter(
+        ([sql]) => typeof sql === 'string' && sql.includes("'INBOUND'"),
+      );
+      // Once for the list, once for the waiting badge.
+      expect(spoken).toHaveLength(2);
     });
   });
 

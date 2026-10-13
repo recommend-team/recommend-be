@@ -11,6 +11,9 @@ import { SuperAdminController } from './super-admin.controller';
 import { AdminService } from './admin.service';
 import { BootstrapSuperAdminService } from './bootstrap-super-admin.service';
 import { EmailService } from '../../common/services/email.service';
+import { Account } from '../wallet/entities/account.entity';
+import { Withdrawal } from '../wallet/entities/withdrawal.entity';
+import { WalletModule } from '../wallet/wallet.module';
 
 @Module({
   // OrdersModule for `confirmByReference` — the admin's "check with Paystack" must
@@ -22,8 +25,12 @@ import { EmailService } from '../../common/services/email.service';
       Order,
       Checkout,
       OrderStatusEvent,
+      Account,
+      Withdrawal,
     ]),
     OrdersModule,
+    // The vendor page shows the balance, summed the one way the wallet sums it.
+    WalletModule,
   ],
   controllers: [AdminController, SuperAdminController],
   providers: [AdminService, BootstrapSuperAdminService, EmailService],

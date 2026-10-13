@@ -6,6 +6,7 @@ import { ChatMessage } from './conversation/entities/message.entity';
 import { User } from '../modules/auth/entities/auth.entity';
 import { Product } from '../modules/products/entities/product.entity';
 import { ConversationService } from './conversation/conversation.service';
+import { ConversationCleanupService } from './conversation/conversation-cleanup.service';
 import { SessionService } from './session/session.service';
 import { ChatRateLimitService } from './session/rate-limit.service';
 import { EngineService } from './engine/engine.service';
@@ -71,6 +72,7 @@ import { WelcomeEmailService } from '../common/services/welcome-email.service';
   controllers: [AdminChatController],
   providers: [
     ConversationService,
+    ConversationCleanupService,
     SessionService,
     ChatRateLimitService,
     EngineService,

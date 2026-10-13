@@ -64,17 +64,36 @@ export class AdminWalletController {
 
   @Get('withdrawals')
   @ApiOperation({
-    summary: 'Withdrawals, stuck ones first',
+    summary: 'Every withdrawal, in-flight ones first',
     description:
-      'Ordered so that anything still in flight, longest since its last attempt, is at ' +
-      'the top — which is the only reason to open this list.',
+      'Settled, failed and reversed ones too, with the vendor and the account each was ' +
+      'sent to. Anything still in flight is at the top, then newest first.',
   })
   @ApiQuery({ name: 'status', required: false, enum: WithdrawalStatus })
-  @ApiResponse({ status: 200, description: 'Withdrawals' })
-  async list(@Query('status') status?: WithdrawalStatus) {
+  @ApiQuery({
+    name: 'search',
+    required: false,
+    description: 'Reference, or vendor business name, name or email',
+  })
+  @ApiQuery({ name: 'page', required: false, example: 1 })
+  @ApiQuery({ name: 'limit', required: false, example: 20 })
+  @ApiResponse({ status: 200, description: 'A page of withdrawals' })
+  async list(
+    @Query('status') status?: WithdrawalStatus,
+    @Query('search') search?: string,
+    @Query('page') page?: string,
+    @Query('limit') limit?: string,
+  ) {
+    const statuses = Object.values(WithdrawalStatus) as string[];
     return {
       message: 'Withdrawals retrieved successfully',
-      data: await this.withdrawals.listForAdmin(status),
+      data: await this.withdrawals.listForAdmin({
+        // An unknown status would match nothing; ignoring it shows the whole list.
+        status: status && statuses.includes(status) ? status : undefined,
+        search,
+        page: page ? Number(page) || 1 : 1,
+        limit: limit ? Number(limit) || 20 : 20,
+      }),
     };
   }
 
