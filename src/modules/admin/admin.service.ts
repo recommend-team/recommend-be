@@ -24,6 +24,9 @@ import { CreateAdminDto } from './dto/create-admin.dto';
 import type { CreateRiderDto } from './dto/rider.dto';
 import { FulfillmentType } from '../../common/enums/fulfillment-type.enum';
 import { RiderType } from '../../common/enums/rider-type.enum';
+import { Account, AccountStatus } from '../wallet/entities/account.entity';
+import { Withdrawal } from '../wallet/entities/withdrawal.entity';
+import { WalletService } from '../wallet/wallet.service';
 
 export interface PaginatedResult<T> {
   items: T[];
@@ -108,6 +111,86 @@ function toTransactionSummary(checkout: Checkout): TransactionSummary {
   };
 }
 
+/** A payout account as the admin sees it — the whole number, no verification internals. */
+export interface AdminPayoutAccount {
+  id: string;
+  bankName: string;
+  bankCode: string;
+  accountNumber: string;
+  accountName: string;
+  status: AccountStatus;
+  isDefault: boolean;
+  verifiedAt: Date | null;
+  removedAt: Date | null;
+  createdAt: Date;
+}
+
+const ACCOUNT_ORDER: Record<AccountStatus, number> = {
+  [AccountStatus.ACTIVE]: 0,
+  [AccountStatus.PENDING_VERIFICATION]: 1,
+  [AccountStatus.REMOVED]: 2,
+};
+
+function toAdminPayoutAccount(account: Account): AdminPayoutAccount {
+  return {
+    id: account.id,
+    bankName: account.bankName,
+    bankCode: account.bankCode,
+    accountNumber: account.accountNumber,
+    accountName: account.accountName,
+    status: account.status,
+    isDefault: account.isDefault,
+    verifiedAt: account.verifiedAt,
+    removedAt: account.removedAt,
+    createdAt: account.createdAt,
+  };
+}
+
+/** A withdrawal on the vendor page. Every vendor's are at GET /admin/withdrawals. */
+export interface AdminWithdrawalRow {
+  id: string;
+  reference: string;
+  status: Withdrawal['status'];
+  amountRequested: number;
+  feeAmount: number;
+  amountSent: number;
+  failureReason: string | null;
+  attempts: number;
+  settledAt: Date | null;
+  createdAt: Date;
+  account: {
+    bankName: string;
+    accountNumber: string;
+    accountName: string;
+  } | null;
+}
+
+function toAdminWithdrawalRow(
+  withdrawal: Withdrawal,
+  account: Account | undefined,
+): AdminWithdrawalRow {
+  return {
+    id: withdrawal.id,
+    reference: withdrawal.reference,
+    status: withdrawal.status,
+    // Postgres hands decimals back as strings.
+    amountRequested: Number(withdrawal.amountRequested),
+    feeAmount: Number(withdrawal.feeAmount),
+    amountSent: Number(withdrawal.amountSent),
+    failureReason: withdrawal.failureReason,
+    attempts: withdrawal.attempts,
+    settledAt: withdrawal.settledAt,
+    createdAt: withdrawal.createdAt,
+    account: account
+      ? {
+          bankName: account.bankName,
+          accountNumber: account.accountNumber,
+          accountName: account.accountName,
+        }
+      : null,
+  };
+}
+
 /** A rider as the admin panel lists them. */
 export interface RiderRow {
   id: string;
@@ -164,6 +247,11 @@ export class AdminService {
     @InjectRepository(OrderStatusEvent)
     private readonly statusEvents: Repository<OrderStatusEvent>,
     private readonly emailService: EmailService,
+    @InjectRepository(Account)
+    private readonly accountsRepo: Repository<Account>,
+    @InjectRepository(Withdrawal)
+    private readonly withdrawalsRepo: Repository<Withdrawal>,
+    private readonly wallet: WalletService,
   ) {}
 
   // ─── Pending approvals (unified) ───────────────────────────────────────────
@@ -394,21 +482,56 @@ export class AdminService {
     vendor: Partial<User>;
     products: Product[];
     productCount: number;
+    serviceAreas: { id: string; name: string; stateName: string | null }[];
+    payoutAccounts: AdminPayoutAccount[];
+    wallet: { balance: number; entryCount: number };
+    withdrawals: AdminWithdrawalRow[];
   }> {
     const vendor = await this.usersRepo.findOne({
       where: { id, role: Role.SELLER },
+      relations: ['serviceAreas', 'serviceAreas.state'],
     });
     if (!vendor) throw new NotFoundException('Vendor not found');
 
-    const [products, productCount] = await this.productsRepo.findAndCount({
-      where: { vendorId: id },
-      order: { createdAt: 'DESC' },
-    });
+    const [[products, productCount], accounts, summary, withdrawals] =
+      await Promise.all([
+        this.productsRepo.findAndCount({
+          where: { vendorId: id },
+          order: { createdAt: 'DESC' },
+        }),
+        // Removed ones too: a withdrawal can still point at an account retired since.
+        this.accountsRepo.find({
+          where: { userId: id },
+          order: { isDefault: 'DESC', createdAt: 'ASC' },
+        }),
+        this.wallet.summaryOf(id),
+        this.withdrawalsRepo.find({
+          where: { userId: id },
+          order: { createdAt: 'DESC' },
+          take: 20,
+        }),
+      ]);
+
+    const accountsById = new Map(accounts.map((a) => [a.id, a]));
+    const { serviceAreas, ...profile } = vendor;
 
     return {
-      vendor: this.stripSensitive(vendor),
+      vendor: this.stripSensitive(profile as User),
       products,
       productCount,
+      serviceAreas: (serviceAreas ?? []).map((area) => ({
+        id: area.id,
+        name: area.name,
+        stateName: area.state?.name ?? null,
+      })),
+      // Active first, removed last — the order an admin reads them in.
+      payoutAccounts: accounts
+        .sort((a, b) => ACCOUNT_ORDER[a.status] - ACCOUNT_ORDER[b.status])
+        .map(toAdminPayoutAccount),
+      wallet: summary,
+      withdrawals: withdrawals.map((w) =>
+        toAdminWithdrawalRow(w, accountsById.get(w.accountId)),
+      ),
     };
   }
 

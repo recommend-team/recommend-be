@@ -7,7 +7,7 @@ import {
 import { InjectRepository } from '@nestjs/typeorm';
 import { ConfigService } from '@nestjs/config';
 import { EventEmitter2 } from '@nestjs/event-emitter';
-import { DataSource, LessThan, Repository } from 'typeorm';
+import { DataSource, In, LessThan, Repository } from 'typeorm';
 import { randomBytes } from 'crypto';
 import { Withdrawal, WithdrawalStatus } from './entities/withdrawal.entity';
 import { Account, AccountStatus } from './entities/account.entity';
@@ -29,6 +29,33 @@ import {
   WithdrawalFailedEvent,
   WithdrawalSettledEvent,
 } from '../../common/events/wallet.events';
+
+/** One row of the admin withdrawals page: who, to where, and how it went. */
+export interface AdminWithdrawal {
+  id: string;
+  reference: string;
+  status: WithdrawalStatus;
+  amountRequested: number;
+  feeAmount: number;
+  amountSent: number;
+  failureReason: string | null;
+  attempts: number;
+  transferCode: string | null;
+  lastAttemptAt: Date | null;
+  settledAt: Date | null;
+  createdAt: Date;
+  vendor: {
+    id: string;
+    name: string;
+    businessName: string | null;
+    email: string;
+  } | null;
+  account: {
+    bankName: string;
+    accountNumber: string;
+    accountName: string;
+  } | null;
+}
 
 export interface WithdrawalQuote {
   amountRequested: number;
@@ -372,23 +399,108 @@ export class WithdrawalsService {
   // ─── Admin ──────────────────────────────────────────────────────────────────
 
   /**
-   * Everything in flight, stuck ones first. Ordering matters: the whole reason to open
-   * this list is to find what is not moving.
+   * Every withdrawal, in flight ones first, then newest first. Ordering matters: the
+   * first reason to open this list is to find what is not moving; the second is history.
    */
-  async listForAdmin(status?: WithdrawalStatus): Promise<Withdrawal[]> {
-    const query = this.withdrawals
+  async listForAdmin(query: {
+    status?: WithdrawalStatus;
+    /** A reference, or part of the vendor's business name, name or email. */
+    search?: string;
+    page?: number;
+    limit?: number;
+  }): Promise<{
+    items: AdminWithdrawal[];
+    total: number;
+    page: number;
+    limit: number;
+    totalPages: number;
+  }> {
+    const page = Math.max(1, query.page ?? 1);
+    const limit = Math.min(100, Math.max(1, query.limit ?? 20));
+
+    const qb = this.withdrawals
       .createQueryBuilder('w')
       .orderBy(
         `CASE w.status WHEN 'PROCESSING' THEN 0 WHEN 'REQUESTED' THEN 1 ELSE 2 END`,
         'ASC',
       )
-      .addOrderBy('w.lastAttemptAt', 'ASC', 'NULLS FIRST')
       .addOrderBy('w.createdAt', 'DESC')
-      .take(100);
+      .offset((page - 1) * limit)
+      .limit(limit);
 
-    if (status) query.where('w.status = :status', { status });
+    if (query.status)
+      qb.andWhere('w.status = :status', { status: query.status });
 
-    return query.getMany();
+    const search = query.search?.trim();
+    if (search) {
+      qb.andWhere(
+        `(w.reference ILIKE :term OR w."userId" IN (
+          SELECT u.id FROM users u
+          WHERE u."businessName" ILIKE :term OR u.email ILIKE :term
+             OR (u."firstName" || ' ' || u."lastName") ILIKE :term
+        ))`,
+        { term: `%${search}%` },
+      );
+    }
+
+    const [rows, total] = await qb.getManyAndCount();
+
+    // No relations on the entity, so the two lookups are done once for the whole page.
+    const userIds = [...new Set(rows.map((w) => w.userId))];
+    const accountIds = [...new Set(rows.map((w) => w.accountId))];
+    const [users, accounts] = await Promise.all([
+      userIds.length
+        ? this.dataSource.getRepository(User).find({
+            where: { id: In(userIds) },
+            select: ['id', 'firstName', 'lastName', 'businessName', 'email'],
+          })
+        : Promise.resolve<User[]>([]),
+      accountIds.length
+        ? this.accounts.find({ where: { id: In(accountIds) } })
+        : Promise.resolve<Account[]>([]),
+    ]);
+    const usersById = new Map(users.map((u) => [u.id, u]));
+    const accountsById = new Map(accounts.map((a) => [a.id, a]));
+
+    return {
+      items: rows.map((w) => {
+        const user = usersById.get(w.userId);
+        const account = accountsById.get(w.accountId);
+        return {
+          id: w.id,
+          reference: w.reference,
+          status: w.status,
+          amountRequested: Number(w.amountRequested),
+          feeAmount: Number(w.feeAmount),
+          amountSent: Number(w.amountSent),
+          failureReason: w.failureReason,
+          attempts: w.attempts,
+          transferCode: w.transferCode,
+          lastAttemptAt: w.lastAttemptAt,
+          settledAt: w.settledAt,
+          createdAt: w.createdAt,
+          vendor: user
+            ? {
+                id: user.id,
+                name: `${user.firstName} ${user.lastName}`.trim(),
+                businessName: user.businessName,
+                email: user.email,
+              }
+            : null,
+          account: account
+            ? {
+                bankName: account.bankName,
+                accountNumber: account.accountNumber,
+                accountName: account.accountName,
+              }
+            : null,
+        };
+      }),
+      total,
+      page,
+      limit,
+      totalPages: Math.ceil(total / limit),
+    };
   }
 
   /** Try again now, rather than waiting for the sweep. */

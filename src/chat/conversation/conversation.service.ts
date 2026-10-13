@@ -1,7 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { EventEmitter2 } from '@nestjs/event-emitter';
-import { Brackets, In, IsNull, LessThan, Not, Repository } from 'typeorm';
+import { Brackets, In, IsNull, LessThan, Repository } from 'typeorm';
 import {
   CHAT_MESSAGE_RECORDED_EVENT,
   ChatMessageRecordedEvent,
@@ -47,6 +47,20 @@ export interface ConversationSummary {
   handoverRequestedAt: Date | null;
   handoverReason: string | null;
   createdAt: Date;
+}
+
+/**
+ * A conversation the buyer has started: they have sent at least one message.
+ *
+ * Opening the chat creates a conversation and greets it, so most of them are visits
+ * nobody followed up — the buyer typing, or tapping a suggestion, is what makes one real.
+ */
+function buyerHasSpoken(conversation: string): string {
+  return `EXISTS (
+    SELECT 1 FROM chat_messages m
+    WHERE m."conversationId" = ${conversation}.id
+      AND m.direction = '${MessageDirection.INBOUND}'
+  )`;
 }
 
 export interface RecordOutboundInput {
@@ -257,6 +271,8 @@ export class ConversationService {
       .createQueryBuilder('c')
       // One folded into a signed-in buyer's thread lives on there, not as a duplicate.
       .where('c."mergedIntoId" IS NULL')
+      // A visit that only got the greeting is not a conversation yet.
+      .andWhere(buyerHasSpoken('c'))
       .orderBy('c."lastMessageAt"', 'DESC', 'NULLS LAST')
       .addOrderBy('c."createdAt"', 'DESC')
       .skip((page - 1) * limit)
@@ -284,12 +300,16 @@ export class ConversationService {
 
     const [rows, total] = await builder.getManyAndCount();
 
-    const needingAttention = await this.conversationsRepository.count({
-      where: [
-        { needsAttentionAt: Not(IsNull()), mergedIntoId: IsNull() },
-        { handoverRequestedAt: Not(IsNull()), mergedIntoId: IsNull() },
-      ],
-    });
+    // Counted by the same rule as the list, so the badge never promises a chat the
+    // list does not show.
+    const needingAttention = await this.conversationsRepository
+      .createQueryBuilder('c')
+      .where('c."mergedIntoId" IS NULL')
+      .andWhere(
+        '(c."needsAttentionAt" IS NOT NULL OR c."handoverRequestedAt" IS NOT NULL)',
+      )
+      .andWhere(buyerHasSpoken('c'))
+      .getCount();
 
     // One query for the last message of every row on the page, rather than one per row.
     const lastMessages = await this.lastMessageFor(rows.map((row) => row.id));
@@ -319,6 +339,31 @@ export class ConversationService {
       page,
       limit,
     };
+  }
+
+  /**
+   * Delete visits that never became conversations: opened, greeted, and left.
+   *
+   * Only ones nothing else depends on. A signed-in browser's (`accountId`) or a folded one
+   * (`mergedIntoId`) is how that browser finds its way back to the buyer's thread, so it
+   * stays even if the buyer never typed on it. Messages and push subscriptions go with
+   * the row (ON DELETE CASCADE). A buyer returning afterwards is simply greeted again.
+   */
+  async deleteUnstarted(createdBefore: Date): Promise<number> {
+    const result = await this.conversationsRepository
+      .createQueryBuilder()
+      .delete()
+      .from(Conversation)
+      .where('"createdAt" < :createdBefore', { createdBefore })
+      .andWhere('"accountId" IS NULL')
+      .andWhere('"mergedIntoId" IS NULL')
+      .andWhere('"heldByAdminId" IS NULL')
+      .andWhere('"needsAttentionAt" IS NULL')
+      .andWhere('"handoverRequestedAt" IS NULL')
+      // No alias on a DELETE, so the condition names the table itself.
+      .andWhere(`NOT ${buyerHasSpoken('conversations')}`)
+      .execute();
+    return result.affected ?? 0;
   }
 
   /** The verified email of each signed-in conversation, in one query. */

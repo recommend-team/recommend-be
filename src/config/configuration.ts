@@ -216,6 +216,14 @@ export const chatConfig = registerAs('chat', () => ({
     process.env.CHAT_HANDOVER_NOTICE_MINUTES || '3',
     10,
   ),
+  /**
+   * How long a chat that only got the greeting is kept. Long enough that a visitor who
+   * comes back within the week finds the same chat; after that it is deleted.
+   */
+  unstartedRetentionDays: parseInt(
+    process.env.CHAT_UNSTARTED_RETENTION_DAYS || '7',
+    10,
+  ),
 }));
 
 export const contactConfig = registerAs('contact', () => ({

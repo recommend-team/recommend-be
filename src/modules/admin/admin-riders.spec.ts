@@ -85,6 +85,9 @@ describe('AdminService — riders', () => {
       lifecycle as never,
       {} as never,
       {} as never,
+      {} as never,
+      {} as never,
+      {} as never,
     );
   });
 
