@@ -15,10 +15,10 @@ export type VerifyEmailDto = z.infer<typeof verifyEmailSchema>;
 export class VerifyEmailRequestDto {
   @ApiProperty({ example: 'user@example.com' })
   @IsEmail()
-  email: string;
+  email!: string;
 
   @ApiProperty({ example: '123456' })
   @IsString()
   @Length(6, 6, { message: 'Code must be exactly 6 digits' })
-  code: string;
+  code!: string;
 }

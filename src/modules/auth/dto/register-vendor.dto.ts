@@ -44,19 +44,19 @@ export type RegisterVendorDto = z.infer<typeof registerVendorSchema>;
 
 export class RegisterVendorRequestDto {
   @ApiProperty({ example: 'vendor@example.com' })
-  email: string;
+  email!: string;
 
   @ApiProperty({ example: 'StrongPass123!' })
-  password: string;
+  password!: string;
 
   @ApiProperty({ example: 'John' })
-  firstName: string;
+  firstName!: string;
 
   @ApiProperty({ example: 'Doe' })
-  lastName: string;
+  lastName!: string;
 
   @ApiProperty({ example: '+2348012345678' })
-  phoneNumber: string;
+  phoneNumber!: string;
 
   @ApiProperty({
     enum: VendorType,
@@ -64,16 +64,16 @@ export class RegisterVendorRequestDto {
     description:
       'REGISTERED = has CAC/TIN (unlimited orders, verified badge). NON_REGISTERED = informal vendor (20 orders/month cap).',
   })
-  vendorType: VendorType;
+  vendorType!: VendorType;
 
   @ApiProperty({ example: "Mama's Kitchen" })
-  businessName: string;
+  businessName!: string;
 
   @ApiProperty({ example: '12 Broad Street, Lagos Island' })
-  businessAddress: string;
+  businessAddress!: string;
 
   @ApiProperty({ example: 'Restaurant' })
-  businessCategory: string;
+  businessCategory!: string;
 
   @ApiPropertyOptional({ example: 'Authentic Nigerian cuisine' })
   businessDescription?: string;

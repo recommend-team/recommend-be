@@ -1,0 +1,1287 @@
+import { Inject, Injectable, Logger } from '@nestjs/common';
+import { ConversationService } from '../../conversation/conversation.service';
+import {
+  Conversation,
+  PendingCartLine,
+} from '../../conversation/entities/conversation.entity';
+import { ConversationState } from '../../enums/chat.enums';
+import { OutboundMessage } from '../../transport/channel.interface';
+import { ORDERING_PORT } from '../../ports/ordering.port';
+import type { OrderingPort } from '../../ports/ordering.port';
+import { IDENTITY_PORT } from '../../ports/identity.port';
+import type { IdentityPort } from '../../ports/identity.port';
+import { CATALOG_PORT } from '../../ports/catalog.port';
+import type { CatalogPort } from '../../ports/catalog.port';
+import { LOCATION_PORT } from '../../ports/location.port';
+import type { AreaSummary, LocationPort } from '../../ports/location.port';
+import { CartChangedError } from '../../adapters/local-ordering.adapter';
+import { formatForDisplay, formatNaira, toE164 } from '../../utils/phone.util';
+
+/**
+ * The money path, as a conversation.
+ */
+@Injectable()
+export class CheckoutFlow {
+  private readonly logger = new Logger(CheckoutFlow.name);
+
+  constructor(
+    private readonly conversationService: ConversationService,
+    @Inject(ORDERING_PORT) private readonly ordering: OrderingPort,
+    @Inject(IDENTITY_PORT) private readonly identity: IdentityPort,
+    @Inject(CATALOG_PORT) private readonly catalog: CatalogPort,
+    @Inject(LOCATION_PORT) private readonly locations: LocationPort,
+  ) {}
+
+  /** Entry point — the buyer tapped Pay. */
+  async start(
+    conversation: Conversation,
+    cart: PendingCartLine[],
+  ): Promise<OutboundMessage[]> {
+    if (cart.length === 0) {
+      return [
+        {
+          text: "Your cart is empty — tell me what you'd like and I'll find it.",
+        },
+      ];
+    }
+
+    await this.conversationService.mergeContext(conversation.id, {
+      pendingCart: cart,
+      // A new order starts its address afresh.
+      addressDraft: undefined,
+      addressRetried: undefined,
+    });
+
+    // Extras first, while the buyer is still thinking about the food — once per order,
+    // and only when a vendor in the cart has any.
+    const fresh = await this.conversationService.findById(conversation.id);
+    if (!fresh?.context?.addOnsOffered) {
+      const offer = await this.addOnOffer(cart);
+      if (offer) {
+        await this.conversationService.mergeContext(conversation.id, {
+          addOnsOffered: true,
+        });
+        await this.conversationService.setState(
+          conversation.id,
+          ConversationState.OFFERING_ADDONS,
+        );
+        return [offer];
+      }
+    }
+
+    // Re-order within one conversation shouldn't re-ask for what we already know.
+    return this.advanceFrom(conversation, ConversationState.COLLECTING_NAME);
+  }
+
+  /**
+   * The buyer picked extras in the add-on card. Only add-ons of a vendor with a main item
+   * in the cart are taken — anything else is ignored, never trusted — and quantities are
+   * whole and capped. Then the checkout carries on.
+   *
+   * `added` describes what was added, for the buyer's side of the thread; null when
+   * nothing valid was picked, which reads as "no, thanks".
+   */
+  async addAddOns(
+    conversation: Conversation,
+    picked: { productId: string; quantity: number }[],
+  ): Promise<{ added: string | null; replies: OutboundMessage[] }> {
+    // A card answered after the checkout moved on, or was abandoned, changes nothing.
+    if (conversation.state !== ConversationState.OFFERING_ADDONS) {
+      return { added: null, replies: [] };
+    }
+
+    const cart = conversation.context?.pendingCart ?? [];
+    const offered = new Map(
+      (await this.catalog.listAddOns(await this.vendorsWithMain(cart))).map(
+        (addOn) => [addOn.id, addOn],
+      ),
+    );
+
+    const lines = [...cart];
+    const added: string[] = [];
+    for (const pick of picked) {
+      const addOn = offered.get(pick.productId);
+      const quantity = Math.min(50, Math.floor(pick.quantity));
+      if (!addOn || !(quantity > 0)) continue;
+
+      const existing = lines.find((line) => line.productId === addOn.id);
+      if (existing) {
+        existing.quantity = Math.min(50, existing.quantity + quantity);
+      } else {
+        lines.push({
+          productId: addOn.id,
+          quantity,
+          expectedUnitPrice: addOn.price,
+        });
+      }
+      added.push(`${quantity} × ${addOn.name}`);
+    }
+
+    if (added.length > 0) {
+      await this.conversationService.mergeContext(conversation.id, {
+        pendingCart: lines,
+      });
+    }
+
+    return {
+      added: added.length > 0 ? added.join(', ') : null,
+      replies: await this.advanceFrom(
+        conversation,
+        ConversationState.COLLECTING_NAME,
+      ),
+    };
+  }
+
+  /**
+   * The question the buyer is on, asked again — after they asked something of their own.
+   * Nothing is recorded or advanced: their question was not an answer.
+   */
+  async repeatQuestion(conversation: Conversation): Promise<OutboundMessage[]> {
+    const fresh = await this.conversationService.findById(conversation.id);
+    const context = fresh?.context ?? {};
+    const state = fresh?.state ?? conversation.state;
+    const draft = context.addressDraft;
+
+    if (state === ConversationState.COLLECTING_ADDRESS && draft) {
+      if (draft.stage === 'LANDMARK') {
+        return [
+          {
+            text: 'Any landmark or bus stop near it, to help the rider find you?',
+            payload: choices('landmark', [{ id: 'skip', label: 'Skip' }]),
+          },
+        ];
+      }
+      const suggested = draft.suggestedAreaId
+        ? await this.locations.getAreaById(draft.suggestedAreaId)
+        : null;
+      return [
+        suggested
+          ? {
+              text: `Is ${draft.text} in ${suggested.name}?`,
+              payload: choices('area-confirm', [
+                { id: 'yes', label: `Yes, ${suggested.name}` },
+                { id: 'no', label: 'No, a different area' },
+              ]),
+            }
+          : { text: `Which area is ${draft.text} in?` },
+      ];
+    }
+
+    switch (state) {
+      case ConversationState.OFFERING_ADDONS: {
+        // A fresh card, not "the card above": the app retires a card once the buyer has
+        // typed anything after it, so the old one no longer has working buttons.
+        const offer = await this.addOnOffer(context.pendingCart ?? []);
+        const text =
+          'Would you like anything to go with it? Pick below, or tap No, thanks.';
+        return [offer ? { ...offer, text } : { text }];
+      }
+      case ConversationState.CONFIRMING_ORDER:
+        return [
+          {
+            text: 'Shall I go ahead with the order above?',
+            payload: confirmChoices(),
+          },
+        ];
+      case ConversationState.AWAITING_PAYMENT:
+        return [
+          {
+            text: "Your payment link is above — I'll confirm your order here as soon as it's paid.",
+          },
+        ];
+      case ConversationState.COLLECTING_NAME:
+      case ConversationState.COLLECTING_PHONE:
+      case ConversationState.COLLECTING_EMAIL:
+      case ConversationState.COLLECTING_FULFILLMENT:
+      case ConversationState.COLLECTING_ADDRESS: {
+        const prompt = promptFor(
+          state,
+          context.profile?.name,
+          context.lastDeliveryAddress,
+          this.ordering.pickupEnabled(),
+        );
+        // "Lovely." and "Thanks, Ada." belong to the first time it was asked.
+        return [
+          {
+            ...prompt,
+            text: prompt.text.replace(/^(Lovely|Thanks(, [^.]+)?)\. /, ''),
+          },
+        ];
+      }
+      default:
+        return [];
+    }
+  }
+
+  /** Every buyer message while a checkout is in progress. */
+  async handle(
+    conversation: Conversation,
+    text: string,
+  ): Promise<OutboundMessage[]> {
+    const answer = text.trim();
+
+    if (isAbandon(answer, FREE_TEXT_STATES.has(conversation.state))) {
+      await this.reset(conversation.id);
+      return [
+        {
+          text: "No problem — I've set that aside. Your cart is still here whenever you want it.",
+        },
+      ];
+    }
+
+    switch (conversation.state) {
+      case ConversationState.OFFERING_ADDONS:
+        return this.answerAddOnOffer(conversation, answer);
+      case ConversationState.COLLECTING_NAME:
+        return this.captureName(conversation, answer);
+      case ConversationState.COLLECTING_PHONE:
+        return this.capturePhone(conversation, answer);
+      case ConversationState.COLLECTING_EMAIL:
+        return this.captureEmail(conversation, answer);
+      case ConversationState.COLLECTING_FULFILLMENT:
+        return this.captureFulfillment(conversation, answer);
+      case ConversationState.COLLECTING_ADDRESS:
+        return this.captureAddress(conversation, answer);
+      case ConversationState.CONFIRMING_ORDER:
+        return this.confirm(conversation, answer);
+      case ConversationState.AWAITING_PAYMENT:
+        return [
+          {
+            text: "I'm still waiting for the payment to go through. Once it does I'll confirm your order here.",
+          },
+        ];
+      default:
+        // Unreachable via the engine, but a stale state must not strand anyone.
+        await this.reset(conversation.id);
+        return [{ text: "Let's start again — what would you like to order?" }];
+    }
+  }
+
+  // ─── Steps ──────────────────────────────────────────────────────────────────
+
+  private async captureName(
+    conversation: Conversation,
+    answer: string,
+  ): Promise<OutboundMessage[]> {
+    if (answer.length < 2) {
+      return [{ text: 'Sorry, what name should I put on the order?' }];
+    }
+
+    await this.conversationService.mergeContext(conversation.id, {
+      profile: { name: answer },
+    });
+    return this.advanceFrom(conversation, ConversationState.COLLECTING_PHONE);
+  }
+
+  private async capturePhone(
+    conversation: Conversation,
+    answer: string,
+  ): Promise<OutboundMessage[]> {
+    const phone = toE164(answer);
+
+    if (!phone) {
+      // Re-ask rather than advance — checkout requires strict E.164 and would reject it.
+      return [
+        {
+          text: "That doesn't look like a complete phone number. Something like 0801 234 5678?",
+        },
+      ];
+    }
+
+    await this.conversationService.mergeContext(conversation.id, {
+      profile: { phone },
+    });
+    return this.advanceFrom(conversation, ConversationState.COLLECTING_EMAIL);
+  }
+
+  /**
+   * The receipt email is entered and verified in the card, over the account events — a
+   * typed message here is either a skip, or an address to put in the card.
+   */
+  private async captureEmail(
+    conversation: Conversation,
+    answer: string,
+  ): Promise<OutboundMessage[]> {
+    if (isSkip(answer)) {
+      await this.conversationService.mergeContext(conversation.id, {
+        receiptEmailSkipped: true,
+      });
+      return this.advanceFrom(
+        conversation,
+        ConversationState.COLLECTING_FULFILLMENT,
+      );
+    }
+
+    const typed = answer.match(EMAIL)?.[0];
+    return [
+      {
+        text: typed
+          ? "Tap Send code below and I'll email you a code to confirm it — or skip it for now."
+          : 'Pop your email in below for the receipt, or skip it for now.',
+        payload: emailCapture(typed),
+      },
+    ];
+  }
+
+  /**
+   * The buyer just verified their email in the receipt card. Move the checkout on, as if
+   * they had answered — signing in happened beside the conversation, not in it.
+   */
+  async continueAfterSignIn(
+    conversation: Conversation,
+  ): Promise<OutboundMessage[]> {
+    if (conversation.state !== ConversationState.COLLECTING_EMAIL) return [];
+    return this.advanceFrom(
+      conversation,
+      ConversationState.COLLECTING_FULFILLMENT,
+    );
+  }
+
+  private async captureFulfillment(
+    conversation: Conversation,
+    answer: string,
+  ): Promise<OutboundMessage[]> {
+    const lastAddress = conversation.context?.lastDeliveryAddress;
+    if (lastAddress)
+      return this.captureReturning(conversation, answer, lastAddress);
+
+    // Pickup switched off: there is nothing to choose. Only reached by a checkout that
+    // was already waiting on this question when pickup was turned off.
+    if (!this.ordering.pickupEnabled()) {
+      await this.conversationService.mergeContext(conversation.id, {
+        profile: { fulfillmentType: 'DELIVERY' },
+      });
+      await this.conversationService.setState(
+        conversation.id,
+        ConversationState.COLLECTING_ADDRESS,
+      );
+      return [
+        {
+          text:
+            readFulfillment(answer) === 'PICKUP'
+              ? `${PICKUP_UNAVAILABLE} ${ASK_ADDRESS}`
+              : ASK_ADDRESS,
+        },
+      ];
+    }
+
+    const choice = readFulfillment(answer);
+
+    if (!choice) {
+      return [
+        {
+          text: 'Would you like it delivered, or will you pick it up?',
+          payload: fulfillmentChoices(),
+        },
+      ];
+    }
+
+    await this.conversationService.mergeContext(conversation.id, {
+      profile: { fulfillmentType: choice },
+    });
+
+    return this.advanceFrom(
+      conversation,
+      choice === 'DELIVERY'
+        ? ConversationState.COLLECTING_ADDRESS
+        : ConversationState.CONFIRMING_ORDER,
+    );
+  }
+
+  /**
+   * A returning buyer's one question: the same address as last time, a new one, or
+   * pickup. Only their last *paid* delivery is offered — never an address typed into a
+   * checkout that was then abandoned.
+   */
+  private async captureReturning(
+    conversation: Conversation,
+    answer: string,
+    lastAddress: string,
+  ): Promise<OutboundMessage[]> {
+    const choice = readReturning(answer);
+    const pickup = this.ordering.pickupEnabled();
+
+    if (!choice) {
+      return [
+        promptFor(
+          ConversationState.COLLECTING_FULFILLMENT,
+          undefined,
+          lastAddress,
+          pickup,
+        ),
+      ];
+    }
+
+    if (choice === 'PICKUP' && !pickup) {
+      return [
+        {
+          text: `${PICKUP_UNAVAILABLE} Should we deliver to ${lastAddress} again?`,
+          payload: returningChoices(false),
+        },
+      ];
+    }
+
+    if (choice === 'PICKUP') {
+      await this.conversationService.mergeContext(conversation.id, {
+        profile: { fulfillmentType: 'PICKUP' },
+      });
+      return this.advanceFrom(conversation, ConversationState.CONFIRMING_ORDER);
+    }
+
+    if (choice === 'SAME') {
+      await this.conversationService.mergeContext(conversation.id, {
+        profile: { fulfillmentType: 'DELIVERY', address: lastAddress },
+      });
+      return this.advanceFrom(conversation, ConversationState.CONFIRMING_ORDER);
+    }
+
+    // A new address: asked for next, used for this order, and — once it is paid for —
+    // the one offered back next time.
+    await this.conversationService.mergeContext(conversation.id, {
+      profile: { fulfillmentType: 'DELIVERY', address: undefined },
+    });
+    await this.conversationService.setState(
+      conversation.id,
+      ConversationState.COLLECTING_ADDRESS,
+    );
+    return [{ text: ASK_NEW_ADDRESS }];
+  }
+
+  /**
+   * The delivery address, in up to three short steps — all within COLLECTING_ADDRESS:
+   * the address itself (with a house number and street), the area if it did not name
+   * one, then an optional landmark. The area must be one we cover *and* one every vendor
+   * in the cart delivers to: a rider should never be sent somewhere no one agreed to go.
+   */
+  private async captureAddress(
+    conversation: Conversation,
+    answer: string,
+  ): Promise<OutboundMessage[]> {
+    const fresh = await this.conversationService.findById(conversation.id);
+    const context = fresh?.context ?? conversation.context ?? {};
+    const draft = context.addressDraft;
+
+    if (draft?.stage === 'LANDMARK') {
+      return this.finishAddress(
+        conversation,
+        isSkip(answer) ? draft.text : `${draft.text} (${answer})`,
+      );
+    }
+    if (draft?.stage === 'AREA') {
+      return this.answerArea(conversation, draft, answer);
+    }
+
+    if (answer.length < 5) {
+      return [{ text: ADDRESS_TOO_SHORT }];
+    }
+
+    // "I'll pick it up" is not an address — and while pickup is off, not an option.
+    if (
+      !this.ordering.pickupEnabled() &&
+      readFulfillment(answer) === 'PICKUP'
+    ) {
+      return [{ text: `${PICKUP_UNAVAILABLE} ${ASK_ADDRESS}` }];
+    }
+
+    // Asked once for the house number and street. Asked twice, the buyer may simply not
+    // have one — "the yellow house behind the mosque" — and is never locked out.
+    if (!hasStreetPart(answer) && !context.addressRetried) {
+      await this.conversationService.mergeContext(conversation.id, {
+        addressRetried: true,
+      });
+      return [{ text: ADD_STREET }];
+    }
+
+    const named = await this.areasIn(answer);
+    const area =
+      named.length === 1
+        ? named[0]
+        : named.find((candidate) => candidate.id === fresh?.areaId);
+
+    if (area) return this.checkArea(conversation, answer, area);
+
+    // No area in it, or several it could be. Offer the one the chat already knows.
+    const known = fresh?.areaId
+      ? await this.locations.getAreaById(fresh.areaId)
+      : null;
+    await this.conversationService.mergeContext(conversation.id, {
+      addressDraft: {
+        text: answer,
+        stage: 'AREA',
+        suggestedAreaId: known?.id,
+      },
+    });
+
+    if (known) {
+      return [
+        {
+          text: `Is that in ${known.name}?`,
+          payload: choices('area-confirm', [
+            { id: 'yes', label: `Yes, ${known.name}` },
+            { id: 'no', label: 'No, a different area' },
+          ]),
+        },
+      ];
+    }
+    return [
+      named.length > 1
+        ? {
+            text: 'Which area is that in?',
+            payload: choices(
+              'area',
+              named.slice(0, 5).map((option) => ({
+                id: option.id,
+                label: option.name,
+              })),
+            ),
+          }
+        : { text: 'Which area is that in?' },
+    ];
+  }
+
+  /**
+   * The areas an address names, read from the end — where Nigerian addresses put the
+   * area ("12 Herbert Macaulay Way, Yaba"). The area search reads only a few words, so a
+   * long street part would otherwise hide the area. A part naming only a state ("Lagos")
+   * matches many areas and is passed over for a more specific one.
+   */
+  private async areasIn(address: string): Promise<AreaSummary[]> {
+    const parts = address
+      .split(',')
+      .map((part) => part.trim())
+      .filter(Boolean)
+      .reverse();
+    let fallback: AreaSummary[] = [];
+    for (const part of parts) {
+      const found = await this.locations.searchAreas(part);
+      if (found.length === 1) return found;
+      if (found.length > 1 && fallback.length === 0) fallback = found;
+    }
+    if (fallback.length > 0) return fallback;
+    // No commas to go by: the last few words.
+    return this.locations.searchAreas(address.split(/\s+/).slice(-5).join(' '));
+  }
+
+  /** The buyer said which area their address is in, or answered "Is that in Yaba?". */
+  private async answerArea(
+    conversation: Conversation,
+    draft: NonNullable<Conversation['context']['addressDraft']>,
+    answer: string,
+  ): Promise<OutboundMessage[]> {
+    const suggested = draft.suggestedAreaId
+      ? await this.locations.getAreaById(draft.suggestedAreaId)
+      : null;
+
+    if (suggested && /^(no|nope|not|different)\b/i.test(answer)) {
+      await this.conversationService.mergeContext(conversation.id, {
+        addressDraft: { text: draft.text, stage: 'AREA' },
+      });
+      return [{ text: 'Which area is it in?' }];
+    }
+
+    const named = await this.locations.searchAreas(answer);
+    const area =
+      named.length === 1
+        ? named[0]
+        : suggested && isAffirmative(answer.replace(/,.*$/, ''))
+          ? suggested
+          : null;
+
+    if (!area) {
+      if (named.length > 1) {
+        return [
+          {
+            text: 'Which of these is it?',
+            payload: choices(
+              'area',
+              named.slice(0, 5).map((option) => ({
+                id: option.id,
+                label: option.name,
+              })),
+            ),
+          },
+        ];
+      }
+      const served = await this.locations.listServedAreas();
+      return [
+        {
+          text: `I don't recognise that area. We deliver to ${listNames(served)} — which is it in?`,
+        },
+      ];
+    }
+
+    // Said separately, so it joins the address the rider will read.
+    return this.checkArea(conversation, `${draft.text}, ${area.name}`, area);
+  }
+
+  /**
+   * An area we cover, and every vendor in the cart delivers to — or the buyer is told
+   * why not, before anything is charged.
+   */
+  private async checkArea(
+    conversation: Conversation,
+    address: string,
+    area: AreaSummary,
+  ): Promise<OutboundMessage[]> {
+    const served = await this.locations.listServedAreas();
+    if (!served.some((candidate) => candidate.id === area.id)) {
+      await this.clearAddressDraft(conversation.id);
+      return [
+        {
+          text: `We don't deliver to ${area.name} yet — right now we cover ${listNames(served)}. Could you give an address in one of those?`,
+        },
+      ];
+    }
+
+    const vendors = await this.cartVendors(conversation.id);
+    const unserved = vendors.find(
+      (vendor) => !vendor.areas.some((candidate) => candidate.id === area.id),
+    );
+    if (unserved) {
+      await this.clearAddressDraft(conversation.id);
+      const theirs = unserved.areas.map((candidate) => candidate.name);
+      return [
+        {
+          text:
+            `${unserved.name} doesn't deliver to ${area.name}` +
+            (theirs.length ? ` — they deliver to ${listNames(theirs)}.` : '.') +
+            ' Could you give an address there, or say "cancel" to change your order?',
+        },
+      ];
+    }
+
+    await this.conversationService.mergeContext(conversation.id, {
+      addressDraft: { text: address, stage: 'LANDMARK' },
+    });
+    return [
+      {
+        text: 'Any landmark or bus stop near it, to help the rider find you?',
+        payload: choices('landmark', [{ id: 'skip', label: 'Skip' }]),
+      },
+    ];
+  }
+
+  private async finishAddress(
+    conversation: Conversation,
+    address: string,
+  ): Promise<OutboundMessage[]> {
+    await this.conversationService.mergeContext(conversation.id, {
+      profile: { address },
+      addressDraft: undefined,
+      addressRetried: undefined,
+    });
+    return this.advanceFrom(conversation, ConversationState.CONFIRMING_ORDER);
+  }
+
+  private async clearAddressDraft(conversationId: string): Promise<void> {
+    await this.conversationService.mergeContext(conversationId, {
+      addressDraft: undefined,
+    });
+  }
+
+  /** Every vendor with something in the cart, with the areas they deliver to. */
+  private async cartVendors(conversationId: string) {
+    const fresh = await this.conversationService.findById(conversationId);
+    const products = await Promise.all(
+      (fresh?.context?.pendingCart ?? []).map((line) =>
+        this.catalog.getProductById(line.productId),
+      ),
+    );
+    const vendorIds = [
+      ...new Set(
+        products
+          .filter(
+            (product): product is NonNullable<typeof product> => !!product,
+          )
+          .map((product) => product.vendorId),
+      ),
+    ];
+    const vendors = await Promise.all(
+      vendorIds.map((id) => this.catalog.getVendorById(id)),
+    );
+    return vendors.filter(
+      (vendor): vendor is NonNullable<typeof vendor> => !!vendor,
+    );
+  }
+
+  private async confirm(
+    conversation: Conversation,
+    answer: string,
+  ): Promise<OutboundMessage[]> {
+    if (isNegative(answer)) {
+      await this.reset(conversation.id);
+      return [
+        {
+          text: 'Fine — nothing has been charged. What would you like to change?',
+        },
+      ];
+    }
+
+    if (!isAffirmative(answer)) {
+      return [
+        {
+          text: 'Shall I go ahead with this order?',
+          payload: confirmChoices(),
+        },
+      ];
+    }
+
+    return this.placeOrder(conversation);
+  }
+
+  // ─── Placing the order ──────────────────────────────────────────────────────
+
+  private async placeOrder(
+    conversation: Conversation,
+  ): Promise<OutboundMessage[]> {
+    const fresh = await this.conversationService.findById(conversation.id);
+    const profile = fresh?.context?.profile;
+    const cart = fresh?.context?.pendingCart ?? [];
+
+    if (!profile?.name || !profile.phone || cart.length === 0) {
+      await this.reset(conversation.id);
+      return [
+        { text: "Something went missing there — let's start the order again." },
+      ];
+    }
+
+    try {
+      // The buyer's details become a real record only now, at the point of purchase.
+      const { buyerId } = await this.identity.upsertBuyer({
+        name: profile.name,
+        phone: profile.phone,
+        email: profile.email,
+        address: profile.address,
+      });
+
+      const placed = await this.ordering.placeCheckout({
+        lines: cart,
+        buyerId,
+        buyerName: profile.name,
+        buyerPhone: profile.phone,
+        buyerEmail: profile.email,
+        fulfillmentType:
+          profile.fulfillmentType === 'DELIVERY' ? 'DELIVERY' : 'PICKUP',
+        deliveryAddress: profile.address,
+      });
+
+      // Recorded whether or not the payment succeeds. An abandoned checkout still
+      // belongs to this device, and the Orders tab showing it as unpaid is more use
+      // than it vanishing — that is how a buyer finds the payment they never finished.
+      const history = fresh?.context?.orderReferences ?? [];
+
+      await this.conversationService.mergeContext(conversation.id, {
+        pendingCheckoutId: placed.checkoutId,
+        pendingPaymentReference: placed.reference,
+        orderReferences: [...history, placed.reference],
+      });
+      await this.conversationService.setState(
+        conversation.id,
+        ConversationState.AWAITING_PAYMENT,
+      );
+
+      return [
+        {
+          text: `That's ${formatNaira(placed.totalAmount)} altogether. Tap below to pay — you won't leave this chat.`,
+          payload: {
+            kind: 'payment_link',
+            data: {
+              reference: placed.reference,
+              // Inline payment opens over the conversation instead of navigating away.
+              accessCode: placed.accessCode,
+              publicKey: placed.paystackPublicKey,
+              // Redirect fallback for any client that cannot open inline.
+              authorizationUrl: placed.authorizationUrl,
+              goodsTotal: placed.goodsTotal,
+              deliveryFee: placed.deliveryFee,
+              totalAmount: placed.totalAmount,
+            },
+          },
+        },
+      ];
+    } catch (error) {
+      if (error instanceof CartChangedError) {
+        await this.reset(conversation.id);
+        return [{ text: describeCartChanges(error) }];
+      }
+
+      this.logger.error(
+        `Checkout failed for conversation ${conversation.id}: ${
+          error instanceof Error ? error.message : 'unknown error'
+        }`,
+      );
+      await this.reset(conversation.id);
+      return [
+        {
+          text: "I couldn't set up the payment just then. Nothing has been charged — shall we try again?",
+        },
+      ];
+    }
+  }
+
+  // ─── State movement ─────────────────────────────────────────────────────────
+
+  /**
+   * Move to `target`, skipping any step already answered, and ask for whatever the new
+   * state needs. Skipping is what makes a second order in the same conversation quick.
+   */
+  private async advanceFrom(
+    conversation: Conversation,
+    target: ConversationState,
+  ): Promise<OutboundMessage[]> {
+    const fresh = await this.conversationService.findById(conversation.id);
+    const profile = fresh?.context?.profile ?? {};
+    let state = target;
+
+    if (state === ConversationState.COLLECTING_NAME && profile.name) {
+      state = ConversationState.COLLECTING_PHONE;
+    }
+    if (state === ConversationState.COLLECTING_PHONE && profile.phone) {
+      state = ConversationState.COLLECTING_EMAIL;
+    }
+    // Asked once: never of a signed-in buyer, whose email is verified already, of one
+    // who has said no, or of a returning buyer — who is asked nothing but the address.
+    if (
+      state === ConversationState.COLLECTING_EMAIL &&
+      (fresh?.accountId ||
+        fresh?.context?.receiptEmailSkipped ||
+        fresh?.context?.lastPaidAt)
+    ) {
+      state = ConversationState.COLLECTING_FULFILLMENT;
+    }
+    // The address is never reused silently. A returning buyer is asked about their last
+    // paid delivery address at the fulfilment step; anyone else gives one here.
+
+    // Pickup switched off: delivery is the only way, so nobody is asked to choose — a
+    // first-time buyer goes straight to the address. Recorded, because an unset
+    // fulfilment would otherwise be read as pickup further on.
+    const pickup = this.ordering.pickupEnabled();
+    const lastAddress = fresh?.context?.lastDeliveryAddress;
+    if (
+      state === ConversationState.COLLECTING_FULFILLMENT &&
+      !pickup &&
+      !lastAddress
+    ) {
+      await this.conversationService.mergeContext(conversation.id, {
+        profile: { fulfillmentType: 'DELIVERY' },
+      });
+      state = ConversationState.COLLECTING_ADDRESS;
+    }
+
+    await this.conversationService.setState(conversation.id, state);
+
+    return state === ConversationState.CONFIRMING_ORDER
+      ? this.summarise(fresh ?? conversation)
+      : [promptFor(state, profile.name, lastAddress, pickup)];
+  }
+
+  /** Read the order back before charging for it, priced from the database. */
+  private async summarise(
+    conversation: Conversation,
+  ): Promise<OutboundMessage[]> {
+    const cart = conversation.context?.pendingCart ?? [];
+    const profile = conversation.context?.profile ?? {};
+
+    const lines = await Promise.all(
+      cart.map(async (line) => {
+        const product = await this.catalog.getProductById(line.productId);
+        return product
+          ? {
+              name: product.name,
+              vendorName: product.vendorName,
+              quantity: line.quantity,
+              unitPrice: product.price,
+              lineTotal: round2(product.price * line.quantity),
+            }
+          : null;
+      }),
+    );
+
+    const items = lines.filter(
+      (line): line is NonNullable<typeof line> => !!line,
+    );
+    const goodsTotal = round2(
+      items.reduce((sum, item) => sum + item.lineTotal, 0),
+    );
+
+    const fulfillmentType =
+      profile.fulfillmentType === 'DELIVERY' ? 'DELIVERY' : 'PICKUP';
+
+    // Quoted from the platform's own rule, so what the card shows is what the buyer is
+    // about to be charged. `placeCheckout` recomputes it the same way a moment later.
+    const deliveryFee = this.ordering.deliveryFeeFor(fulfillmentType);
+    const totalAmount = round2(goodsTotal + deliveryFee);
+
+    const readable = items
+      .map((item) => `${item.quantity} × ${item.name}`)
+      .join(', ');
+
+    return [
+      {
+        text:
+          `So that's ${readable}, ${goodsTotal ? `${formatNaira(goodsTotal)} for the items` : ''}` +
+          `${fulfillmentType === 'DELIVERY' ? `, delivered to ${profile.address ?? 'your address'}` : ', for pickup'}` +
+          `. That comes to ${formatNaira(totalAmount)}. Shall I go ahead?`,
+        payload: {
+          kind: 'order_summary',
+          data: {
+            status: 'PENDING_CONFIRMATION',
+            items,
+            goodsTotal,
+            deliveryFee,
+            totalAmount,
+            fulfillmentType,
+            deliveryAddress: profile.address ?? null,
+            buyerName: profile.name ?? null,
+            buyerPhone: profile.phone ? formatForDisplay(profile.phone) : null,
+          },
+        },
+      },
+    ];
+  }
+
+  /** Clear the flow without losing the profile — a second order shouldn't re-ask. */
+  /**
+   * A typed answer to the add-on offer. Extras are picked in the card; in words, a no
+   * moves on, and anything else points back to the card rather than guessing an item.
+   */
+  private async answerAddOnOffer(
+    conversation: Conversation,
+    answer: string,
+  ): Promise<OutboundMessage[]> {
+    if (isNoThanks(answer)) {
+      return this.advanceFrom(conversation, ConversationState.COLLECTING_NAME);
+    }
+
+    const offer = await this.addOnOffer(
+      conversation.context?.pendingCart ?? [],
+    );
+    if (!offer) {
+      return this.advanceFrom(conversation, ConversationState.COLLECTING_NAME);
+    }
+    return [
+      {
+        ...offer,
+        text: 'Pick any extras in the card below, or tap "No, thanks" to carry on.',
+      },
+    ];
+  }
+
+  /** The add-on card for this cart, or null when no vendor in it has any. */
+  private async addOnOffer(
+    cart: PendingCartLine[],
+  ): Promise<OutboundMessage | null> {
+    const addOns = await this.catalog.listAddOns(
+      await this.vendorsWithMain(cart),
+    );
+    if (addOns.length === 0) return null;
+
+    const byVendor = new Map<
+      string,
+      {
+        vendorId: string;
+        vendorName: string | null;
+        items: {
+          productId: string;
+          name: string;
+          price: number;
+          imageUrl: string | null;
+        }[];
+      }
+    >();
+    for (const addOn of addOns) {
+      const group = byVendor.get(addOn.vendorId) ?? {
+        vendorId: addOn.vendorId,
+        vendorName: addOn.vendorName,
+        items: [],
+      };
+      group.items.push({
+        productId: addOn.id,
+        name: addOn.name,
+        price: addOn.price,
+        imageUrl: addOn.imageUrl,
+      });
+      byVendor.set(addOn.vendorId, group);
+    }
+
+    return {
+      text: 'Anything to go with it?',
+      payload: {
+        kind: 'addon_offer',
+        data: { vendors: [...byVendor.values()] },
+      },
+    };
+  }
+
+  /**
+   * Vendors with a main (non-add-on) item in the cart. Only their add-ons are offered:
+   * an extra always rides with a meal from its own kitchen.
+   */
+  private async vendorsWithMain(cart: PendingCartLine[]): Promise<string[]> {
+    const products = await Promise.all(
+      cart.map((line) => this.catalog.getProductById(line.productId)),
+    );
+    return [
+      ...new Set(
+        products
+          .filter((product) => product && !product.isAddOn)
+          .map((product) => product!.vendorId),
+      ),
+    ];
+  }
+
+  private async reset(conversationId: string): Promise<void> {
+    await this.conversationService.mergeContext(conversationId, {
+      pendingCart: [],
+      // A new order is offered extras again.
+      addOnsOffered: false,
+      addressDraft: undefined,
+      addressRetried: undefined,
+    });
+    await this.conversationService.setState(
+      conversationId,
+      ConversationState.DISCOVERY,
+    );
+  }
+}
+
+// ─── Wording and parsing ──────────────────────────────────────────────────────
+
+const ASK_ADDRESS =
+  "What's the full delivery address? House number, street and area.";
+const ASK_NEW_ADDRESS =
+  "What's the new address? House number, street and area.";
+const ADDRESS_TOO_SHORT =
+  'I need a bit more of the address than that — house number, street and area?';
+const ADD_STREET =
+  'Could you add the house number and street, so the rider can find you?';
+
+/**
+ * Whether an address has something a rider can find: a number ("12", "Plot 5", "Block
+ * C3") or a word for a street. Lagos addresses vary too much for more than that.
+ */
+function hasStreetPart(address: string): boolean {
+  return (
+    /\d/.test(address) ||
+    /\b(street|st|road|rd|close|avenue|ave|way|crescent|cres|lane|ln|drive|dr|estate|layout|boulevard|expressway|highway|plot|block|flat|house|off)\b/i.test(
+      address,
+    )
+  );
+}
+
+/** "Yaba, Ikeja and Lekki" — for telling a buyer where we, or a vendor, deliver. */
+function listNames(items: (string | { name: string })[]): string {
+  const names = items.map((item) =>
+    typeof item === 'string' ? item : item.name,
+  );
+  if (names.length <= 1) return names[0] ?? 'nowhere yet';
+  const shown = names.slice(0, 8);
+  const rest = names.length - shown.length;
+  if (rest > 0) return `${shown.join(', ')} and ${rest} more`;
+  return `${shown.slice(0, -1).join(', ')} and ${shown[shown.length - 1]}`;
+}
+
+function choices(purpose: string, options: { id: string; label: string }[]) {
+  return { kind: 'choices' as const, data: { purpose, options } };
+}
+
+function promptFor(
+  state: ConversationState,
+  name?: string,
+  lastAddress?: string,
+  pickup = true,
+): OutboundMessage {
+  switch (state) {
+    case ConversationState.COLLECTING_NAME:
+      return { text: 'Lovely. What name should I put on the order?' };
+    case ConversationState.COLLECTING_PHONE:
+      return {
+        text: `Thanks${name ? `, ${name.split(' ')[0]}` : ''}. What number can we reach you on about the order?`,
+      };
+    case ConversationState.COLLECTING_EMAIL:
+      return {
+        text: 'Where should we send your receipt? Adding your email also keeps this chat on any phone.',
+        payload: emailCapture(),
+      };
+    case ConversationState.COLLECTING_FULFILLMENT:
+      return lastAddress
+        ? {
+            text: `Should we deliver to ${lastAddress} again?`,
+            payload: returningChoices(pickup),
+          }
+        : {
+            text: 'Would you like it delivered, or will you pick it up?',
+            payload: fulfillmentChoices(),
+          };
+    case ConversationState.COLLECTING_ADDRESS:
+      return { text: ASK_ADDRESS };
+    default:
+      return { text: 'Shall I go ahead?' };
+  }
+}
+
+function fulfillmentChoices() {
+  return {
+    kind: 'choices' as const,
+    data: {
+      purpose: 'fulfillment',
+      options: [
+        { id: 'DELIVERY', label: 'Deliver to me' },
+        { id: 'PICKUP', label: "I'll pick it up" },
+      ],
+    },
+  };
+}
+
+/** The receipt card. `email` pre-fills it when the buyer typed one into the chat. */
+function emailCapture(email?: string) {
+  return {
+    kind: 'email_capture' as const,
+    data: email ? { email } : {},
+  };
+}
+
+const EMAIL = /[^\s@]+@[^\s@]+\.[^\s@]+/;
+
+/** "No, thanks" from the add-on card, or a typed no or "just that". */
+function isNoThanks(answer: string): boolean {
+  return /^(no|nope|nah|no,? thanks?|no thank you|skip|none|nothing|that'?s all|just that|continue|i'?m good|i'?m fine)\b/i.test(
+    answer.trim(),
+  );
+}
+
+/** "Skip for now" from the card, or a typed no. */
+function isSkip(answer: string): boolean {
+  return /^(skip|no|nope|not now|later|none|no email|no thanks|i don'?t have (one|an email))\b/i.test(
+    answer.trim(),
+  );
+}
+
+/** Pickup is offered only while it is switched on (`PICKUP_ENABLED`). */
+function returningChoices(pickup = true) {
+  return {
+    kind: 'choices' as const,
+    data: {
+      purpose: 'fulfillment',
+      options: [
+        { id: 'SAME', label: 'Yes, same address' },
+        { id: 'NEW', label: 'New address' },
+        ...(pickup ? [{ id: 'PICKUP', label: "I'll pick it up" }] : []),
+      ],
+    },
+  };
+}
+
+const PICKUP_UNAVAILABLE =
+  "Pickup isn't available just yet — we'll deliver it to you.";
+
+/**
+ * The returning buyer's answer, tapped or typed. A new address is checked for first —
+ * "no, a different one" must not read as a yes — then pickup, then anything that agrees.
+ * A bare "no" or "not the same" is never a yes, and could mean a new address or pickup,
+ * so it is asked again. Unclear is never guessed: guessing sends food to the wrong door.
+ */
+function readReturning(answer: string): 'SAME' | 'NEW' | 'PICKUP' | null {
+  const text = answer.toLowerCase();
+  if (/\b(new|different|another|change|other)\b/.test(text)) return 'NEW';
+  if (readFulfillment(text) === 'PICKUP') return 'PICKUP';
+  if (/\b(no|not|nope|don'?t)\b/.test(text)) return null;
+  if (
+    /\b(same|yes|yeah|yep|yup|ok|okay|sure|correct)\b/.test(text) ||
+    readFulfillment(text) === 'DELIVERY'
+  ) {
+    return 'SAME';
+  }
+  return null;
+}
+
+function confirmChoices() {
+  return {
+    kind: 'choices' as const,
+    data: {
+      purpose: 'confirm',
+      options: [
+        { id: 'yes', label: 'Yes, go ahead' },
+        { id: 'no', label: 'Not yet' },
+      ],
+    },
+  };
+}
+
+/**
+ * Buyers mostly tap the `choices` buttons, so this is the fallback for those who type.
+ * It has to cope with "I'll pick it up" and "come carry am" as readily as "pickup" —
+ * anything it cannot read is re-asked rather than guessed, because guessing here means
+ * sending a delivery to someone who meant to collect it.
+ */
+function readFulfillment(answer: string): 'DELIVERY' | 'PICKUP' | null {
+  const text = answer.toLowerCase();
+
+  if (/\b(deliver|delivery|bring|send|drop\s*(it)?\s*off)\b/.test(text)) {
+    return 'DELIVERY';
+  }
+  if (
+    /\bpick\s*(it|them|am)?\s*up\b|\bpickup\b|\bcollect\b|\bmyself\b|\bcome\s+(and\s+)?(get|carry|take|pick)\b/.test(
+      text,
+    )
+  ) {
+    return 'PICKUP';
+  }
+  return null;
+}
+
+function isAffirmative(answer: string): boolean {
+  return /^(yes|yeah|yep|ok|okay|sure|go ahead|please do|confirm|y)\b/i.test(
+    answer.trim(),
+  );
+}
+
+function isNegative(answer: string): boolean {
+  return /^(no|nope|not yet|wait|hold on|n)\b/i.test(answer.trim());
+}
+
+/**
+ * Steps whose answer is the buyer's own words, stored as given. There, a cancel word is
+ * far more often part of the answer than a request — Lagos addresses are given by bus
+ * stop ("opposite Ojuelegba bus stop") — so only a reply that is nothing *but* a cancel
+ * phrase counts.
+ */
+const FREE_TEXT_STATES = new Set<ConversationState>([
+  ConversationState.COLLECTING_NAME,
+  ConversationState.COLLECTING_ADDRESS,
+]);
+
+const ABANDON_PHRASE =
+  /\b(cancel|stop|forget it|never mind|nevermind|add (more|something))\b/i;
+
+const ABANDON_REPLY =
+  /^\s*(please\s+)?(cancel|stop|forget it|never ?mind|add (more|something))(\s+(else|it|that|this|the order|my order|please))*\s*[.!]*\s*$/i;
+
+function isAbandon(answer: string, freeText: boolean): boolean {
+  return (freeText ? ABANDON_REPLY : ABANDON_PHRASE).test(answer);
+}
+
+/** Turn a rejected cart into something a buyer can act on. */
+function describeCartChanges(error: CartChangedError): string {
+  const parts = error.rejection.changes.map((change) => {
+    const name = change.productName ?? 'An item';
+    switch (change.reason) {
+      case 'PRICE_CHANGED':
+        return `${name} is now ${formatNaira(change.currentUnitPrice ?? 0)}`;
+      case 'VENDOR_CLOSED':
+        return `${name} — that vendor has closed`;
+      case 'UNAVAILABLE':
+        return `${name} has sold out`;
+      case 'ADDON_WITHOUT_MAIN':
+        return `${name} is an extra, so it needs a meal from the same vendor`;
+      default:
+        return `${name} is no longer available`;
+    }
+  });
+
+  return `Something changed while we were talking: ${parts.join('; ')}. Nothing has been charged — shall we sort the cart out?`;
+}
+
+function round2(value: number): number {
+  return Math.round(value * 100) / 100;
+}

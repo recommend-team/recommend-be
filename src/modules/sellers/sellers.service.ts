@@ -14,13 +14,8 @@ import {
   UpdateRegisteredKycDto,
   UpdateNonRegisteredKycDto,
 } from './dto/update-kyc.dto';
-import { UpdatePayoutDto } from './dto/update-payout.dto';
-
-type PayoutFields =
-  | 'bankName'
-  | 'bankCode'
-  | 'bankAccountNumber'
-  | 'bankAccountName';
+import { LocationsService } from '../locations/locations.service';
+import { uniqueSlug } from '../../common/utils/slug.util';
 
 export interface VendorProfileResponse {
   id: string;
@@ -38,7 +33,7 @@ export interface VendorProfileResponse {
   businessAddress: string | null;
   businessDescription: string | null;
   businessCategory: string | null;
-  businessAreas: string[] | null;
+  serviceAreas: { id: string; name: string; stateId: string }[];
   businessLogoUrl: string | null;
   businessBannerUrl: string | null;
   whatsappNumber: string | null;
@@ -76,6 +71,7 @@ export class SellersService {
     private readonly usersRepository: Repository<User>,
     @InjectRepository(Order)
     private readonly ordersRepository: Repository<Order>,
+    private readonly locationsService: LocationsService,
   ) {}
 
   // ─── Profile ───────────────────────────────────────────────────────────────
@@ -101,7 +97,9 @@ export class SellersService {
       vendor.businessName = dto.businessName;
       // Auto-generate slug on first businessName set only
       if (!vendor.slug) {
-        vendor.slug = await this.generateUniqueSlug(dto.businessName);
+        vendor.slug = await uniqueSlug(dto.businessName, (slug) =>
+          this.usersRepository.exists({ where: { slug } }),
+        );
       }
     }
     if (dto.businessAddress !== undefined)
@@ -110,8 +108,13 @@ export class SellersService {
       vendor.businessDescription = dto.businessDescription;
     if (dto.businessCategory !== undefined)
       vendor.businessCategory = dto.businessCategory;
-    if (dto.businessAreas !== undefined)
-      vendor.businessAreas = dto.businessAreas;
+    // Sending areaIds replaces coverage wholesale. Unknown or deactivated ids are
+    // rejected by the service rather than silently dropped.
+    if (dto.areaIds !== undefined) {
+      vendor.serviceAreas = await this.locationsService.findActiveAreasByIds(
+        dto.areaIds,
+      );
+    }
     if (dto.businessLogoUrl !== undefined)
       vendor.businessLogoUrl = dto.businessLogoUrl;
     if (dto.businessBannerUrl !== undefined)
@@ -203,34 +206,8 @@ export class SellersService {
     };
   }
 
-  // ─── Payout details ────────────────────────────────────────────────────────
-
-  async updatePayout(
-    userId: string,
-    dto: UpdatePayoutDto,
-  ): Promise<{
-    message: string;
-    data: Pick<User, PayoutFields>;
-  }> {
-    const vendor = await this.findVendor(userId);
-
-    vendor.bankName = dto.bankName;
-    vendor.bankCode = dto.bankCode;
-    vendor.bankAccountNumber = dto.bankAccountNumber;
-    vendor.bankAccountName = dto.bankAccountName;
-
-    const saved = await this.usersRepository.save(vendor);
-
-    return {
-      message: 'Payout details updated successfully',
-      data: {
-        bankName: saved.bankName,
-        bankCode: saved.bankCode,
-        bankAccountNumber: saved.bankAccountNumber,
-        bankAccountName: saved.bankAccountName,
-      },
-    };
-  }
+  // Payout details moved to `accounts` — see WalletPlan §5 and AccountsService. The four
+  // bank columns still on `users` are the un-dropped remains of the old model.
 
   // ─── Orders dashboard ──────────────────────────────────────────────────────
 
@@ -240,7 +217,15 @@ export class SellersService {
   ): Promise<{
     message: string;
     data: {
-      items: Order[];
+      /** The order, with the checkout narrowed to what a vendor may see. */
+      items: (Omit<Order, 'checkout'> & {
+        checkout: {
+          id: string;
+          reference: string;
+          /** Who is collecting it, so the vendor knows who to hand it to. */
+          rider: { name: string; phone: string | null } | null;
+        } | null;
+      })[];
       total: number;
       page: number;
       limit: number;
@@ -254,12 +239,42 @@ export class SellersService {
     const where: Record<string, unknown> = { vendorId };
     if (query.status) where['status'] = query.status;
 
-    const [items, total] = await this.ordersRepository.findAndCount({
+    const [rows, total] = await this.ordersRepository.findAndCount({
       where,
-      relations: ['product'],
+      relations: ['items', 'items.product', 'checkout', 'checkout.rider'],
       order: { createdAt: 'DESC' },
       skip,
       take: limit,
+    });
+
+    /**
+     * The payment reference, and nothing else from the checkout.
+     *
+     * The reference is the one identifier the buyer, the vendor and admin all hold, so
+     * a vendor on the phone about an order needs it. The rest of the checkout does not
+     * belong to them: `goodsTotal` and `totalAmount` cover the *whole* basket, which on
+     * a multi-vendor order would let one seller read another's share.
+     *
+     * The assigned rider's name and phone are theirs to see: that is who will come to
+     * collect. Nothing else about the rider's account.
+     */
+    const items = rows.map((order) => {
+      const rider = order.checkout?.rider;
+      return {
+        ...order,
+        checkout: order.checkout
+          ? {
+              id: order.checkout.id,
+              reference: order.checkout.reference,
+              rider: rider
+                ? {
+                    name: `${rider.firstName} ${rider.lastName}`.trim(),
+                    phone: rider.phoneNumber ?? null,
+                  }
+                : null,
+            }
+          : null,
+      };
     });
 
     return {
@@ -268,9 +283,13 @@ export class SellersService {
     };
   }
 
-  // ─── Earnings dashboard ────────────────────────────────────────────────────
+  // ─── Sales ─────────────────────────────────────────────────────────────────
 
-  async getEarnings(vendorId: string): Promise<{
+  /**
+   * What a vendor has sold. Counts `PAID` as well as `COMPLETED`, so it deliberately
+   * differs from the wallet balance, which only counts orders confirmed received.
+   */
+  async getSales(vendorId: string): Promise<{
     message: string;
     data: {
       grossTotal: number;
@@ -325,7 +344,7 @@ export class SellersService {
       .map(([month, { gross, net }]) => ({ month, gross, net }));
 
     return {
-      message: 'Earnings retrieved successfully',
+      message: 'Sales retrieved successfully',
       data: {
         grossTotal: parseFloat(grossTotal.toFixed(2)),
         netTotal: parseFloat(netTotal.toFixed(2)),
@@ -340,6 +359,7 @@ export class SellersService {
   private async findVendor(userId: string): Promise<User> {
     const vendor = await this.usersRepository.findOne({
       where: { id: userId },
+      relations: ['serviceAreas'],
     });
     if (!vendor) throw new NotFoundException('Vendor not found');
     return vendor;
@@ -365,7 +385,11 @@ export class SellersService {
       businessAddress: vendor.businessAddress,
       businessDescription: vendor.businessDescription,
       businessCategory: vendor.businessCategory,
-      businessAreas: vendor.businessAreas,
+      serviceAreas: (vendor.serviceAreas ?? []).map((area) => ({
+        id: area.id,
+        name: area.name,
+        stateId: area.stateId,
+      })),
       businessLogoUrl: vendor.businessLogoUrl,
       businessBannerUrl: vendor.businessBannerUrl,
       whatsappNumber: vendor.whatsappNumber,
@@ -391,28 +415,6 @@ export class SellersService {
   }
 
   /**
-   * Generates a unique kebab-case slug from a business name.
-   * Appends -2, -3, etc. if the base slug is already taken.
-   */
-  private async generateUniqueSlug(businessName: string): Promise<string> {
-    const base = businessName
-      .toLowerCase()
-      .replace(/[^a-z0-9]+/g, '-')
-      .replace(/^-|-$/g, '')
-      .slice(0, 60);
-
-    let slug = base;
-    let counter = 2;
-
-    while (await this.usersRepository.findOne({ where: { slug } })) {
-      slug = `${base}-${counter}`;
-      counter++;
-    }
-
-    return slug;
-  }
-
-  /**
    * Computes a 0–100 completeness score based on key profile fields.
    * Helps vendors know what's still missing before admin review.
    */
@@ -421,6 +423,7 @@ export class SellersService {
       !!vendor.businessName,
       !!vendor.businessAddress,
       !!vendor.businessCategory,
+      (vendor.serviceAreas?.length ?? 0) > 0,
       !!vendor.businessLogoUrl,
       !!vendor.whatsappNumber,
       !!vendor.bankAccountNumber,

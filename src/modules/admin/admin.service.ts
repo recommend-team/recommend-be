@@ -5,15 +5,25 @@ import {
   ConflictException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository, In } from 'typeorm';
+import { Repository, In, ILike } from 'typeorm';
 import { User } from '../auth/entities/auth.entity';
 import { Product } from '../products/entities/product.entity';
 import { Order } from '../orders/entities/order.entity';
+import { Checkout } from '../orders/entities/checkout.entity';
+import { OrdersService } from '../orders/orders.service';
+import { OrderLifecycleService } from '../orders/order-lifecycle.service';
+import {
+  OrderStatusEvent,
+  StatusActor,
+} from '../orders/entities/order-status-event.entity';
 import { SellerStatus } from '../../common/enums/seller-status.enum';
 import { Role } from '../../common/enums/roles.enum';
 import { OrderStatus } from '../../common/enums/order-status.enum';
 import { EmailService } from '../../common/services/email.service';
 import { CreateAdminDto } from './dto/create-admin.dto';
+import type { CreateRiderDto } from './dto/rider.dto';
+import { FulfillmentType } from '../../common/enums/fulfillment-type.enum';
+import { RiderType } from '../../common/enums/rider-type.enum';
 
 export interface PaginatedResult<T> {
   items: T[];
@@ -22,6 +32,118 @@ export interface PaginatedResult<T> {
   limit: number;
   totalPages: number;
 }
+
+/** One payment, with the vendor orders it paid for. */
+export interface TransactionSummary {
+  id: string;
+  reference: string;
+  status: OrderStatus;
+  buyerName: string;
+  buyerPhone: string;
+  buyerEmail: string | null;
+  fulfillmentType: string;
+  deliveryAddress: string | null;
+  goodsTotal: number;
+  deliveryFee: number;
+  totalAmount: number;
+  paidAt: string | null;
+  createdAt: string;
+  deliveryCode: string | null;
+  createdByAdminId: string | null;
+  /** Who is carrying it. Null on a pickup, and on a delivery with no rider yet. */
+  rider: { id: string; name: string; phone: string | null } | null;
+  riderAssignedAt: string | null;
+  vendors: {
+    orderId: string;
+    vendorId: string;
+    vendorName: string | null;
+    status: OrderStatus;
+    subtotal: number;
+    vendorAmount: number;
+    items: { name: string; quantity: number; lineTotal: number }[];
+  }[];
+}
+
+function toTransactionSummary(checkout: Checkout): TransactionSummary {
+  return {
+    id: checkout.id,
+    reference: checkout.reference,
+    status: checkout.status,
+    buyerName: checkout.buyerName,
+    buyerPhone: checkout.buyerPhone,
+    buyerEmail: checkout.buyerEmail,
+    fulfillmentType: checkout.fulfillmentType,
+    deliveryAddress: checkout.deliveryAddress,
+    // Postgres hands decimals back as strings; the client should not have to know that.
+    goodsTotal: Number(checkout.goodsTotal),
+    deliveryFee: Number(checkout.deliveryFee),
+    totalAmount: Number(checkout.totalAmount),
+    paidAt: checkout.paidAt ? checkout.paidAt.toISOString() : null,
+    createdAt: checkout.createdAt.toISOString(),
+    deliveryCode: checkout.deliveryCode ?? null,
+    createdByAdminId: checkout.createdByAdminId ?? null,
+    rider: checkout.rider
+      ? {
+          id: checkout.rider.id,
+          name: `${checkout.rider.firstName} ${checkout.rider.lastName}`.trim(),
+          phone: checkout.rider.phoneNumber ?? null,
+        }
+      : null,
+    riderAssignedAt: checkout.riderAssignedAt
+      ? checkout.riderAssignedAt.toISOString()
+      : null,
+    vendors: (checkout.orders ?? []).map((order) => ({
+      orderId: order.id,
+      vendorId: order.vendorId,
+      vendorName: order.vendor?.businessName ?? null,
+      status: order.status,
+      subtotal: Number(order.totalAmount),
+      vendorAmount: Number(order.vendorAmount),
+      items: (order.items ?? []).map((item) => ({
+        name: item.productName,
+        quantity: item.quantity,
+        lineTotal: Number(item.lineTotal),
+      })),
+    })),
+  };
+}
+
+/** A rider as the admin panel lists them. */
+export interface RiderRow {
+  id: string;
+  firstName: string;
+  lastName: string;
+  /** Null when the rider gave none. */
+  email: string | null;
+  phoneNumber: string | null;
+  riderType: RiderType | null;
+  riderNote: string | null;
+  status: SellerStatus;
+  createdAt: Date;
+  /** Assigned and not yet delivered: paid, ready, or on its way. */
+  activeDeliveries: number;
+  completedDeliveries: number;
+}
+
+const RIDER_FIELDS: (keyof User)[] = [
+  'id',
+  'firstName',
+  'lastName',
+  'email',
+  'phoneNumber',
+  'riderType',
+  'riderNote',
+  'status',
+  'createdAt',
+];
+
+/**
+ * Every account needs a unique email; a rider an admin adds may have none. Non-routable,
+ * like a chat buyer's (`@buyers.recommend.ng`), and never shown as an address.
+ */
+const SYNTHETIC_RIDER_EMAIL_DOMAIN = '@riders.recommend.ng';
+const syntheticRiderEmail = (phoneE164: string) =>
+  `${phoneE164.replace('+', '')}${SYNTHETIC_RIDER_EMAIL_DOMAIN}`;
 
 /** Roles that should never appear in buyer/vendor listings for regular admins */
 const ADMIN_ROLES = [Role.ADMIN, Role.SUPER_ADMIN];
@@ -35,6 +157,12 @@ export class AdminService {
     private readonly productsRepo: Repository<Product>,
     @InjectRepository(Order)
     private readonly ordersRepo: Repository<Order>,
+    @InjectRepository(Checkout)
+    private readonly checkoutsRepo: Repository<Checkout>,
+    private readonly ordersService: OrdersService,
+    private readonly lifecycle: OrderLifecycleService,
+    @InjectRepository(OrderStatusEvent)
+    private readonly statusEvents: Repository<OrderStatusEvent>,
     private readonly emailService: EmailService,
   ) {}
 
@@ -338,7 +466,7 @@ export class AdminService {
     if (buyer.phoneNumber) {
       [orders, orderCount] = await this.ordersRepo.findAndCount({
         where: { buyerPhone: buyer.phoneNumber },
-        relations: ['product'],
+        relations: ['items', 'items.product'],
         order: { createdAt: 'DESC' },
         take: 50,
       });
@@ -356,6 +484,8 @@ export class AdminService {
   async getAllProducts(query: {
     vendorId?: string;
     isAvailable?: boolean;
+    /** Product name, matched loosely. Blank is the same as not searching. */
+    search?: string;
     page?: number;
     limit?: number;
   }): Promise<PaginatedResult<Product>> {
@@ -368,6 +498,11 @@ export class AdminService {
     if (query.isAvailable !== undefined)
       where['isAvailable'] = query.isAvailable;
 
+    // `ILike` rather than a full-text index: this list is browsed by an admin looking
+    // for a product they can already half-name, not searched by buyers at volume.
+    const term = query.search?.trim();
+    if (term) where['name'] = ILike(`%${term}%`);
+
     const [items, total] = await this.productsRepo.findAndCount({
       where,
       relations: ['vendor'],
@@ -379,6 +514,7 @@ export class AdminService {
         price: true,
         imageUrl: true,
         isAvailable: true,
+        isAddOn: true,
         createdAt: true,
         updatedAt: true,
         vendor: {
@@ -416,25 +552,37 @@ export class AdminService {
 
     const [items, total] = await this.ordersRepo.findAndCount({
       where,
-      relations: ['product', 'vendor'],
+      relations: ['items', 'vendor', 'checkout'],
       select: {
         id: true,
         buyerName: true,
         buyerPhone: true,
         buyerEmail: true,
-        quantity: true,
-        unitPrice: true,
         totalAmount: true,
         platformFee: true,
         vendorAmount: true,
         fulfillmentType: true,
         status: true,
-        paymentReference: true,
         deliveryAddress: true,
         notes: true,
         paidAt: true,
         createdAt: true,
-        product: { id: true, name: true },
+        // Line items replace the old single product/quantity/unitPrice columns.
+        items: {
+          id: true,
+          productId: true,
+          productName: true,
+          unitPrice: true,
+          quantity: true,
+          lineTotal: true,
+        },
+        // The payment reference now lives on the parent checkout.
+        checkout: {
+          id: true,
+          reference: true,
+          totalAmount: true,
+          deliveryFee: true,
+        },
         vendor: {
           id: true,
           firstName: true,
@@ -448,6 +596,350 @@ export class AdminService {
     });
 
     return { items, total, page, limit, totalPages: Math.ceil(total / limit) };
+  }
+
+  // ─── Transactions ──────────────────────────────────────────────────────────
+
+  /**
+   * One row per payment, which is what an admin reconciling against Paystack needs.
+   *
+   * `getAllOrders` lists the *vendor's* slice of each basket — the right unit for
+   * fulfilment, the wrong one for money. A ₦17,950 basket split across two vendors shows
+   * there as two rows totalling ₦16,450, with the delivery fee nowhere and nothing tying
+   * them to the single charge the buyer actually saw. This is that charge.
+   */
+  async getTransactions(query: {
+    status?: OrderStatus;
+    search?: string;
+    /** One rider's deliveries — what the rider page lists. */
+    riderId?: string;
+    /** Deliveries paid for or ready with nobody assigned yet — the dispatch queue. */
+    needsRider?: boolean;
+    page?: number;
+    limit?: number;
+  }): Promise<PaginatedResult<TransactionSummary>> {
+    const page = Math.max(1, query.page ?? 1);
+    const limit = Math.min(100, Math.max(1, query.limit ?? 20));
+
+    const qb = this.checkoutsRepo
+      .createQueryBuilder('checkout')
+      .leftJoinAndSelect('checkout.orders', 'order')
+      .leftJoinAndSelect('order.items', 'item')
+      .leftJoinAndSelect('order.vendor', 'vendor')
+      // Only what the summary shows — never the rider's account fields.
+      .leftJoin('checkout.rider', 'rider')
+      .addSelect([
+        'rider.id',
+        'rider.firstName',
+        'rider.lastName',
+        'rider.phoneNumber',
+      ])
+      .orderBy('checkout.createdAt', 'DESC')
+      .skip((page - 1) * limit)
+      .take(limit);
+
+    if (query.status) {
+      qb.andWhere('checkout.status = :status', { status: query.status });
+    }
+
+    if (query.riderId) {
+      qb.andWhere('checkout.riderId = :riderId', { riderId: query.riderId });
+    }
+
+    if (query.needsRider) {
+      qb.andWhere('checkout.riderId IS NULL')
+        .andWhere('checkout.fulfillmentType = :delivery', {
+          delivery: FulfillmentType.DELIVERY,
+        })
+        .andWhere('checkout.status IN (:...waiting)', {
+          waiting: [OrderStatus.PAID, OrderStatus.READY],
+        });
+    }
+
+    if (query.search?.trim()) {
+      // Reference, buyer name or phone — whichever the admin happens to be holding.
+      const term = `%${query.search.trim().replace(/[%_]/g, '')}%`;
+      qb.andWhere(
+        '(checkout.reference ILIKE :term OR checkout.buyerName ILIKE :term OR checkout.buyerPhone ILIKE :term)',
+        { term },
+      );
+    }
+
+    const [rows, total] = await qb.getManyAndCount();
+
+    return {
+      items: rows.map((checkout) => toTransactionSummary(checkout)),
+      total,
+      page,
+      limit,
+      totalPages: Math.ceil(total / limit),
+    };
+  }
+
+  /**
+   * Ask Paystack about one transaction, by hand.
+   *
+   * The sweep already does this on a timer, but an admin looking at a payment a buyer is
+   * asking about should not have to wait up to ten minutes for a scheduler — nor go to
+   * the Paystack dashboard and reconcile by eye. Same code path as everything else that
+   * settles a payment, so a recovery here confirms the buyer and notifies the vendors
+   * exactly as the webhook would have.
+   */
+  async verifyTransaction(reference: string): Promise<TransactionSummary> {
+    await this.ordersService.confirmByReference(reference);
+
+    const checkout = await this.checkoutsRepo.findOne({
+      where: { reference },
+      relations: ['orders', 'orders.items', 'orders.vendor', 'rider'],
+    });
+    if (!checkout) throw new NotFoundException('Transaction not found');
+
+    return toTransactionSummary(checkout);
+  }
+
+  // ─── Order lifecycle ───────────────────────────────────────────────────────
+
+  /** A rider has collected everything and left. */
+  async dispatch(
+    reference: string,
+    adminId: string,
+  ): Promise<TransactionSummary> {
+    await this.lifecycle.markDispatched(reference, {
+      type: StatusActor.ADMIN,
+      id: adminId,
+    });
+    return this.verifyless(reference);
+  }
+
+  /**
+   * The buyer has their order.
+   *
+   * Recorded as `RIDER` rather than `ADMIN`: until the rider app exists an admin is
+   * doing this on a rider's behalf, and the audit trail should say what actually
+   * happened rather than who happened to press the button. `actorId` still carries the
+   * admin, so it is never anonymous.
+   */
+  async complete(
+    reference: string,
+    adminId: string,
+  ): Promise<TransactionSummary> {
+    await this.lifecycle.markCompleted(reference, {
+      type: StatusActor.RIDER,
+      id: adminId,
+    });
+    return this.verifyless(reference);
+  }
+
+  async overrideStatus(
+    reference: string,
+    status: OrderStatus,
+    adminId: string,
+    note?: string,
+  ): Promise<TransactionSummary> {
+    if (!status || !Object.values(OrderStatus).includes(status)) {
+      throw new BadRequestException('A valid status is required');
+    }
+    await this.lifecycle.overrideCheckout(reference, status, adminId, note);
+    return this.verifyless(reference);
+  }
+
+  /** Every status change on one order, oldest first. */
+  async getStatusHistory(reference: string): Promise<OrderStatusEvent[]> {
+    const checkout = await this.checkoutsRepo.findOne({
+      where: { reference },
+      select: ['id'],
+    });
+    if (!checkout) throw new NotFoundException('Transaction not found');
+
+    return this.statusEvents.find({
+      where: [{ checkoutId: checkout.id }],
+      order: { createdAt: 'ASC' },
+    });
+  }
+
+  /** The transaction as it stands now, without asking Paystack anything. */
+  private async verifyless(reference: string): Promise<TransactionSummary> {
+    const checkout = await this.checkoutsRepo.findOne({
+      where: { reference },
+      relations: ['orders', 'orders.items', 'orders.vendor', 'rider'],
+    });
+    if (!checkout) throw new NotFoundException('Transaction not found');
+    return toTransactionSummary(checkout);
+  }
+
+  // ─── Riders ────────────────────────────────────────────────────────────────
+  //
+  // Until riders have an app, admin runs delivery: adds riders they have vetted, assigns
+  // one to each delivery, and reaches them by phone. A rider's deliveries are the
+  // transactions list filtered by `riderId`.
+
+  /** A rider admin has vetted — approved at once, with no password to sign in with yet. */
+  async createRider(
+    dto: CreateRiderDto,
+  ): Promise<{ message: string; data: RiderRow }> {
+    const clash = await this.usersRepo.findOne({
+      where: [
+        { phoneNumber: dto.phoneNumber },
+        ...(dto.email ? [{ email: dto.email }] : []),
+      ],
+      select: ['id', 'email', 'phoneNumber', 'role'],
+    });
+    if (clash) {
+      throw new ConflictException(
+        clash.phoneNumber === dto.phoneNumber
+          ? `${dto.phoneNumber} already belongs to an account`
+          : `${dto.email} already belongs to an account`,
+      );
+    }
+
+    const rider = await this.usersRepo.save(
+      this.usersRepo.create({
+        firstName: dto.firstName,
+        lastName: dto.lastName,
+        phoneNumber: dto.phoneNumber,
+        email: dto.email ?? syntheticRiderEmail(dto.phoneNumber),
+        password: null,
+        role: Role.RIDER,
+        riderType: dto.riderType,
+        riderNote: dto.note ?? null,
+        status: SellerStatus.APPROVED,
+        isEmailVerified: false,
+      }),
+    );
+
+    const [row] = await this.riderRows([rider]);
+    return { message: `${rider.fullName} added as a rider`, data: row };
+  }
+
+  async getRiders(query: {
+    status?: SellerStatus;
+    search?: string;
+    page?: number;
+    limit?: number;
+  }): Promise<PaginatedResult<RiderRow>> {
+    const page = Math.max(1, query.page ?? 1);
+    const limit = Math.min(100, Math.max(1, query.limit ?? 20));
+
+    const base: Record<string, unknown> = { role: Role.RIDER };
+    if (query.status) base['status'] = query.status;
+
+    // Name, phone or email — whichever the admin has.
+    const term = query.search?.trim().replace(/[%_]/g, '');
+    const where = term
+      ? ['firstName', 'lastName', 'phoneNumber', 'email'].map((field) => ({
+          ...base,
+          [field]: ILike(`%${term}%`),
+        }))
+      : base;
+
+    const [riders, total] = await this.usersRepo.findAndCount({
+      where,
+      select: RIDER_FIELDS,
+      skip: (page - 1) * limit,
+      take: limit,
+      order: { createdAt: 'DESC' },
+    });
+
+    return {
+      items: await this.riderRows(riders),
+      total,
+      page,
+      limit,
+      totalPages: Math.ceil(total / limit),
+    };
+  }
+
+  /** One rider with their delivery counts. Their deliveries: transactions by `riderId`. */
+  async getRider(id: string): Promise<RiderRow> {
+    const rider = await this.usersRepo.findOne({
+      where: { id, role: Role.RIDER },
+      select: RIDER_FIELDS,
+    });
+    if (!rider) throw new NotFoundException('Rider not found');
+    const [row] = await this.riderRows([rider]);
+    return row;
+  }
+
+  /**
+   * Put a rider on a delivery, or replace the one on it. Only an approved rider — a
+   * suspended or rejected one is refused, as is anyone who is not a rider at all.
+   */
+  async assignRider(
+    reference: string,
+    riderId: string,
+    adminId: string,
+  ): Promise<TransactionSummary> {
+    const rider = await this.usersRepo.findOne({
+      where: { id: riderId, role: Role.RIDER },
+      select: ['id', 'firstName', 'lastName', 'phoneNumber', 'status'],
+    });
+    if (!rider) throw new NotFoundException('Rider not found');
+    if (rider.status !== SellerStatus.APPROVED) {
+      throw new BadRequestException(
+        `${rider.firstName} ${rider.lastName} is not an approved rider`,
+      );
+    }
+
+    await this.lifecycle.assignRider(
+      reference,
+      {
+        id: rider.id,
+        name: `${rider.firstName} ${rider.lastName}`.trim(),
+        phone: rider.phoneNumber,
+      },
+      { type: StatusActor.ADMIN, id: adminId },
+    );
+    return this.verifyless(reference);
+  }
+
+  /**
+   * Riders as the admin panel shows them: profile plus how many deliveries each is
+   * carrying now and has completed — counted in one grouped query, not one per rider.
+   */
+  private async riderRows(riders: User[]): Promise<RiderRow[]> {
+    if (riders.length === 0) return [];
+
+    const counts: {
+      riderId: string;
+      active: string;
+      completed: string;
+    }[] = await this.checkoutsRepo
+      .createQueryBuilder('checkout')
+      .select('checkout.riderId', 'riderId')
+      .addSelect(
+        `COUNT(*) FILTER (WHERE checkout.status IN (:...active))`,
+        'active',
+      )
+      .addSelect(
+        `COUNT(*) FILTER (WHERE checkout.status = :completed)`,
+        'completed',
+      )
+      .where('checkout.riderId IN (:...ids)', { ids: riders.map((r) => r.id) })
+      .setParameters({
+        active: [OrderStatus.PAID, OrderStatus.READY, OrderStatus.DISPATCHED],
+        completed: OrderStatus.COMPLETED,
+      })
+      .groupBy('checkout.riderId')
+      .getRawMany();
+
+    const byRider = new Map(counts.map((row) => [row.riderId, row]));
+
+    return riders.map((rider) => ({
+      id: rider.id,
+      firstName: rider.firstName,
+      lastName: rider.lastName,
+      // A placeholder made up for a rider with no email is not an address to show.
+      email: rider.email?.endsWith(SYNTHETIC_RIDER_EMAIL_DOMAIN)
+        ? null
+        : rider.email,
+      phoneNumber: rider.phoneNumber,
+      riderType: rider.riderType,
+      riderNote: rider.riderNote,
+      status: rider.status,
+      createdAt: rider.createdAt,
+      activeDeliveries: Number(byRider.get(rider.id)?.active ?? 0),
+      completedDeliveries: Number(byRider.get(rider.id)?.completed ?? 0),
+    }));
   }
 
   // ─── General user management (kept from previous version) ──────────────────

@@ -22,6 +22,12 @@ export class HttpExceptionFilter implements ExceptionFilter {
     let message = 'An unexpected error occurred';
     let error = 'Internal Server Error';
     let errors: ValidationError[] | undefined;
+    /**
+     * Anything a thrower attached beyond the standard fields — e.g. the checkout's
+     * `code` and `changes`, which tell the client exactly which cart items moved.
+     * Without this the buyer gets "some items changed" and no way to see which.
+     */
+    let details: Record<string, unknown> | undefined;
 
     if (exception instanceof HttpException) {
       statusCode = exception.getStatus();
@@ -35,6 +41,16 @@ export class HttpExceptionFilter implements ExceptionFilter {
         exceptionResponse !== null
       ) {
         const body = exceptionResponse as Record<string, unknown>;
+
+        // Preserve custom fields the thrower added. Nest's own keys are handled
+        // below; everything else is domain detail the client needs.
+        const passthrough = Object.fromEntries(
+          Object.entries(body).filter(
+            ([key]) =>
+              !['message', 'error', 'statusCode', 'errors'].includes(key),
+          ),
+        );
+        if (Object.keys(passthrough).length > 0) details = passthrough;
 
         // Zod / custom validation errors: { message, errors: [{field, message}] }
         if (body.errors && Array.isArray(body.errors)) {
@@ -75,6 +91,10 @@ export class HttpExceptionFilter implements ExceptionFilter {
 
     if (errors) {
       responseBody.errors = errors;
+    }
+
+    if (details) {
+      Object.assign(responseBody, details);
     }
 
     response.status(statusCode).json(responseBody);

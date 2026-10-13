@@ -19,7 +19,7 @@ export type ResetPasswordDto = z.infer<typeof resetPasswordSchema>;
 export class ResetPasswordRequestDto {
   @ApiProperty({ example: 'abc123-reset-token' })
   @IsString()
-  token: string;
+  token!: string;
 
   @ApiProperty({ example: 'NewStrongPass123!' })
   @IsString()
@@ -29,5 +29,5 @@ export class ResetPasswordRequestDto {
     message:
       'Password must contain at least one uppercase letter, one lowercase letter, one number, and one special character',
   })
-  password: string;
+  password!: string;
 }

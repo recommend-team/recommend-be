@@ -1,4 +1,8 @@
-import { Injectable, InternalServerErrorException } from '@nestjs/common';
+import {
+  Injectable,
+  InternalServerErrorException,
+  Logger,
+} from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import * as brevo from '@getbrevo/brevo';
 
@@ -9,10 +13,12 @@ export interface EmailOptions {
   html?: string;
   template?: string;
   context?: Record<string, any>;
+  replyTo?: { email: string; name?: string };
 }
 
 @Injectable()
 export class EmailService {
+  private readonly logger = new Logger(EmailService.name);
   private apiInstance: brevo.TransactionalEmailsApi;
 
   constructor(private readonly configService: ConfigService) {
@@ -22,6 +28,14 @@ export class EmailService {
       this.apiInstance.setApiKey(
         brevo.TransactionalEmailsApiApiKeys.apiKey,
         apiKey,
+      );
+    }
+
+    if (!apiKey || !this.configService.get<string>('BREVO_SENDER_EMAIL')) {
+      this.logger.error(
+        'BREVO_API_KEY or BREVO_SENDER_EMAIL is not set — NO EMAIL WILL BE SENT. ' +
+          'Vendors will not be told about orders, and payout verification codes will ' +
+          'not arrive.',
       );
     }
   }
@@ -66,6 +80,7 @@ export class EmailService {
 
     sendSmtpEmail.to = [{ email: options.to }];
     sendSmtpEmail.subject = options.subject;
+    if (options.replyTo) sendSmtpEmail.replyTo = options.replyTo;
 
     const htmlContent =
       options.html ||
@@ -120,6 +135,14 @@ export class EmailService {
           <p>This code will expire in 5 minutes.</p>
           <p>If you didn't create an account, you can ignore this email.</p>
         `;
+      case 'chat-sign-in-code':
+        return `
+          <h1>Your Recommend sign-in code</h1>
+          <p>Enter this code in the Recommend chat to keep your chats and orders on any device:</p>
+          <h2 style="background-color: #f0f0f0; padding: 10px; text-align: center; font-size: 24px; letter-spacing: 5px;">${context.code}</h2>
+          <p>This code will expire in ${context.minutes} minutes.</p>
+          <p>If you didn't ask for this, you can ignore this email — nobody can sign in without the code.</p>
+        `;
       case 'password-reset':
         return `
           <h1>Reset your password</h1>
@@ -153,6 +176,30 @@ export class EmailService {
           <p>Unfortunately, after reviewing your application, we are unable to approve your account at this time.</p>
           ${context.reason ? `<p><strong>Reason:</strong> ${context.reason}</p>` : ''}
           <p>If you believe this is an error or would like to reapply with updated documents, please contact our support team.</p>
+        `;
+      case 'payout-account-code':
+        return `
+          <h1>Confirm your payout account</h1>
+          <p>Hello ${context.name},</p>
+          <p>Use this code to confirm <strong>${context.bankName} ${context.masked}</strong> (${context.accountName}) as a payout account:</p>
+          <h2 style="background-color: #f0f0f0; padding: 10px; text-align: center; font-size: 24px; letter-spacing: 5px;">${context.code}</h2>
+          <p>This code expires in ${context.minutes} minutes.</p>
+          <p><strong>If you did not add this account, do not enter the code.</strong> Someone may be trying to redirect your earnings — change your password and contact support.</p>
+        `;
+      case 'payout-account-changed':
+        return `
+          <h1>Your payout accounts changed</h1>
+          <p>Hello ${context.name},</p>
+          <p><strong>${context.bankName} ${context.masked}</strong> was ${context.action} ${context.action === 'added' ? 'to' : 'from'} your Recommend payout accounts.</p>
+          <p><strong>If this was not you, contact support immediately</strong> — this is how earnings get redirected.</p>
+        `;
+      case 'withdrawal-requested':
+        return `
+          <h1>Your withdrawal is on its way</h1>
+          <p>Hello ${context.name},</p>
+          <p><strong>₦${context.amountSent}</strong> is on its way to your bank, after a ₦${context.feeAmount} transfer fee.</p>
+          <p>Reference: ${context.reference}</p>
+          <p><strong>If you did not request this, contact support immediately.</strong></p>
         `;
       default:
         return '<p>Email from Recommend</p>';

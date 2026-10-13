@@ -12,11 +12,11 @@ export type LoginDto = z.infer<typeof loginSchema>;
 export class LoginRequestDto {
   @ApiProperty({ example: 'seller@example.com' })
   @IsEmail()
-  email: string;
+  email!: string;
 
   @ApiProperty({ example: 'StrongPass123!' })
   @IsString()
   @MinLength(1)
   @MaxLength(50)
-  password: string;
+  password!: string;
 }

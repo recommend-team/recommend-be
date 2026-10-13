@@ -54,7 +54,7 @@ export class AuthController {
   @ApiOperation({
     summary: 'Register a vendor',
     description:
-      'Register as a vendor (seller). vendorType REGISTERED = has CAC/TIN (unlimited orders). NON_REGISTERED = informal vendor (20 orders/month cap). Both require admin KYC approval before login is allowed.',
+      'Register as a vendor (seller). vendorType REGISTERED = has CAC/TIN (unlimited orders). NON_REGISTERED = informal vendor (20 orders/month cap). Vendors can log in and access their dashboard immediately after verifying email; admin KYC approval is required before products can be listed.',
   })
   @ApiBody({ type: RegisterVendorRequestDto })
   @ApiResponse({
@@ -81,7 +81,7 @@ export class AuthController {
   @ApiOperation({
     summary: 'Register a rider',
     description:
-      'Register as a delivery rider. riderType: INDIVIDUAL or COMPANY. Requires admin KYC approval before login is allowed.',
+      'Register as a delivery rider. riderType: INDIVIDUAL or COMPANY. Riders can log in and access their dashboard immediately after verifying email; admin KYC approval is required before they can accept deliveries.',
   })
   @ApiBody({ type: RegisterRiderRequestDto })
   @ApiResponse({
@@ -135,7 +135,7 @@ export class AuthController {
   @ApiResponse({
     status: 401,
     description:
-      'Invalid credentials / account not approved / account suspended',
+      'Invalid credentials / email not verified / account suspended or deactivated',
   })
   async login(
     @Body(new ZodValidationPipe(loginSchema)) loginDto: LoginRequestDto,
@@ -172,7 +172,7 @@ export class AuthController {
   @ApiResponse({
     status: 200,
     description:
-      'Email verified. Vendors/riders will await admin KYC approval.',
+      'Email verified. Vendors/riders can now log in. KYC approval is still required before listing products or accepting deliveries.',
   })
   @ApiResponse({
     status: 400,

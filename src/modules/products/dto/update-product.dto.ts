@@ -8,6 +8,7 @@ export const updateProductSchema = z
     price: z.number().positive().multipleOf(0.01).optional(),
     imageUrl: z.string().url().optional(),
     isAvailable: z.boolean().optional(),
+    isAddOn: z.boolean().optional(),
   })
   .refine((data) => Object.keys(data).length > 0, {
     message: 'At least one field must be provided',
@@ -32,4 +33,10 @@ export class UpdateProductRequestDto {
 
   @ApiPropertyOptional({ example: false })
   isAvailable?: boolean;
+
+  @ApiPropertyOptional({
+    example: true,
+    description: 'Sold only with a main item from this vendor.',
+  })
+  isAddOn?: boolean;
 }

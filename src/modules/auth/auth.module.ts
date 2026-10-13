@@ -11,6 +11,7 @@ import { PendingUser } from './entities/pending-user.entity';
 import { JwtStrategy } from './strategies/jwt.strategy';
 import { JwtRefreshStrategy } from './strategies/jwt-refresh.strategy';
 import { EmailService } from '../../common/services/email.service';
+import { WelcomeEmailService } from '../../common/services/welcome-email.service';
 import { User } from './entities/auth.entity';
 import { PendingUserCleanupProcessor } from './processors/pending-user-cleanup.processor';
 import { GoogleAuthModule } from './google-auth.module';
@@ -40,6 +41,7 @@ import { GoogleAuthModule } from './google-auth.module';
     JwtStrategy,
     JwtRefreshStrategy,
     EmailService,
+    WelcomeEmailService,
     PendingUserCleanupProcessor,
   ],
   exports: [AuthService, JwtStrategy, PassportModule, TypeOrmModule],

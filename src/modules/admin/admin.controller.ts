@@ -2,6 +2,7 @@ import {
   Controller,
   Get,
   Patch,
+  Post,
   Param,
   Body,
   Query,
@@ -16,9 +17,21 @@ import {
   ApiBearerAuth,
   ApiParam,
   ApiQuery,
+  ApiBody,
 } from '@nestjs/swagger';
 import { AdminService } from './admin.service';
+import { ZodValidationPipe } from '../../common/pipes/zod-validation.pipes';
+import {
+  assignRiderSchema,
+  AssignRiderSwaggerDto,
+  createRiderSchema,
+  CreateRiderSwaggerDto,
+  type AssignRiderDto,
+  type CreateRiderDto,
+} from './dto/rider.dto';
 import { Roles } from '../auth/decorators/roles.decorator';
+import { CurrentUser } from '../auth/decorators/current-user.decorator';
+import { User } from '../auth/entities/auth.entity';
 import { Role } from '../../common/enums/roles.enum';
 import { SellerStatus } from '../../common/enums/seller-status.enum';
 import { OrderStatus } from '../../common/enums/order-status.enum';
@@ -155,6 +168,12 @@ export class AdminController {
     description: 'Filter by vendor UUID',
   })
   @ApiQuery({ name: 'isAvailable', required: false, type: Boolean })
+  @ApiQuery({
+    name: 'search',
+    required: false,
+    type: String,
+    description: 'Product name, matched loosely',
+  })
   @ApiQuery({ name: 'page', required: false, type: Number })
   @ApiQuery({ name: 'limit', required: false, type: Number })
   @ApiResponse({
@@ -164,6 +183,7 @@ export class AdminController {
   getAllProducts(
     @Query('vendorId') vendorId?: string,
     @Query('isAvailable') isAvailable?: string,
+    @Query('search') search?: string,
     @Query('page') page?: number,
     @Query('limit') limit?: number,
   ) {
@@ -176,6 +196,7 @@ export class AdminController {
     return this.adminService.getAllProducts({
       vendorId,
       isAvailable: available,
+      search,
       page,
       limit,
     });
@@ -197,6 +218,231 @@ export class AdminController {
     @Query('limit') limit?: number,
   ) {
     return this.adminService.getAllOrders({ status, vendorId, page, limit });
+  }
+
+  // ─── Transactions ──────────────────────────────────────────────────────────
+
+  @Get('transactions')
+  @ApiOperation({
+    summary: 'One row per payment, with the vendor orders it covers',
+    description:
+      'The money view. `orders` lists each vendor’s slice of a basket, which is the ' +
+      'right unit for fulfilment and the wrong one for reconciling against Paystack — ' +
+      'a two-vendor basket appears there as two rows, with the delivery fee nowhere.',
+  })
+  @ApiQuery({ name: 'status', enum: OrderStatus, required: false })
+  @ApiQuery({
+    name: 'search',
+    required: false,
+    type: String,
+    description: 'Reference, buyer name or phone',
+  })
+  @ApiQuery({
+    name: 'riderId',
+    required: false,
+    type: String,
+    description: 'One rider’s deliveries',
+  })
+  @ApiQuery({
+    name: 'needsRider',
+    required: false,
+    type: Boolean,
+    description: 'Paid or ready deliveries with no rider yet',
+  })
+  @ApiQuery({ name: 'page', required: false, type: Number })
+  @ApiQuery({ name: 'limit', required: false, type: Number })
+  @ApiResponse({ status: 200, description: 'Paginated transaction list' })
+  getTransactions(
+    @Query('status') status?: OrderStatus,
+    @Query('search') search?: string,
+    @Query('riderId', new ParseUUIDPipe({ optional: true })) riderId?: string,
+    @Query('needsRider') needsRider?: string,
+    @Query('page') page?: number,
+    @Query('limit') limit?: number,
+  ) {
+    return this.adminService.getTransactions({
+      status,
+      search,
+      riderId,
+      needsRider: needsRider === 'true',
+      page,
+      limit,
+    });
+  }
+
+  @Post('transactions/:reference/rider')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    summary: 'Assign a rider to a delivery, or replace the one on it',
+    description:
+      'Until riders have an app, admin chooses the rider and reaches them by phone; this ' +
+      'records who is carrying it. Allowed from payment until delivery, and required ' +
+      'before dispatch. Every assignment is written to the order’s history.',
+  })
+  @ApiParam({ name: 'reference', example: 'REC-9A3F2B7C1D4E' })
+  @ApiBody({ type: AssignRiderSwaggerDto })
+  @ApiResponse({ status: 200, description: 'The transaction, with its rider' })
+  @ApiResponse({
+    status: 400,
+    description: 'A pickup, a finished order, or a rider who is not approved',
+  })
+  assignRider(
+    @CurrentUser() admin: User,
+    @Param('reference') reference: string,
+    @Body(new ZodValidationPipe(assignRiderSchema)) body: AssignRiderDto,
+  ) {
+    return this.adminService.assignRider(reference, body.riderId, admin.id);
+  }
+
+  @Post('transactions/:reference/verify')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    summary: 'Ask Paystack about one transaction now',
+    description:
+      'For a payment a buyer is asking about, rather than waiting up to ten minutes ' +
+      'for the scheduled sweep. Runs the same path every other confirmation runs, so a ' +
+      'recovery here also messages the buyer and notifies the vendors.',
+  })
+  @ApiParam({ name: 'reference', example: 'REC-9A3F2B7C1D4E' })
+  @ApiResponse({ status: 200, description: 'The transaction after checking' })
+  @ApiResponse({ status: 404, description: 'Transaction not found' })
+  verifyTransaction(@Param('reference') reference: string) {
+    return this.adminService.verifyTransaction(reference);
+  }
+
+  @Post('transactions/:reference/dispatch')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    summary: 'A rider has collected everything and left',
+    description:
+      'Checkout-level, and admin’s alone: with one rider carrying the whole basket, no ' +
+      'individual vendor knows collection has finished. Requires every vendor to be ' +
+      'ready first, and is what tells the buyer their order is on its way. Meaningless ' +
+      'on a pickup order, which is rejected.',
+  })
+  @ApiParam({ name: 'reference', example: 'REC-9A3F2B7C1D4E' })
+  @ApiResponse({ status: 200, description: 'Marked dispatched' })
+  @ApiResponse({
+    status: 400,
+    description: 'Not every vendor is ready, or it is a pickup',
+  })
+  async dispatchTransaction(
+    @CurrentUser() admin: User,
+    @Param('reference') reference: string,
+  ) {
+    return this.adminService.dispatch(reference, admin.id);
+  }
+
+  @Post('transactions/:reference/complete')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    summary: 'The buyer has their order',
+    description:
+      'Normally the rider who handed it over, or the buyer. Admin does it on their ' +
+      'behalf — there is no rider app yet, and buyers forget. Never automatic: a timer ' +
+      'marking orders delivered would manufacture a record of deliveries that may never ' +
+      'have happened, and that record is what vendor payouts key off.',
+  })
+  @ApiParam({ name: 'reference', example: 'REC-9A3F2B7C1D4E' })
+  @ApiResponse({ status: 200, description: 'Marked complete' })
+  async completeTransaction(
+    @CurrentUser() admin: User,
+    @Param('reference') reference: string,
+  ) {
+    return this.adminService.complete(reference, admin.id);
+  }
+
+  @Patch('transactions/:reference/status')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    summary: 'Force an order to any status',
+    description:
+      'The escape hatch, and admin’s alone. It exists for the orders the ordinary rules ' +
+      'have stranded — a vendor who never marked ready, a rider who never reported ' +
+      'back, a decline handled over the phone. Every use is written to the audit trail ' +
+      'with whoever did it; `note` is worth filling in, because on an override the ' +
+      'reason is the whole point.',
+  })
+  @ApiParam({ name: 'reference', example: 'REC-9A3F2B7C1D4E' })
+  @ApiResponse({ status: 200, description: 'Status forced' })
+  async overrideTransaction(
+    @CurrentUser() admin: User,
+    @Param('reference') reference: string,
+    @Body() body: { status: OrderStatus; note?: string },
+  ) {
+    return this.adminService.overrideStatus(
+      reference,
+      body?.status,
+      admin.id,
+      body?.note,
+    );
+  }
+
+  @Get('transactions/:reference/history')
+  @ApiOperation({
+    summary: 'Every status change on one order',
+    description:
+      'Who moved it, from what to what, when, and why. A disputed delivery with no ' +
+      'history is unarguable.',
+  })
+  @ApiParam({ name: 'reference', example: 'REC-9A3F2B7C1D4E' })
+  @ApiResponse({ status: 200, description: 'Status history, oldest first' })
+  getTransactionHistory(@Param('reference') reference: string) {
+    return this.adminService.getStatusHistory(reference);
+  }
+
+  // ─── Riders ────────────────────────────────────────────────────────────────
+
+  @Post('riders')
+  @ApiOperation({
+    summary: 'Add a rider',
+    description:
+      'Someone admin has vetted and can reach by phone. Approved at once, with no ' +
+      'password — until riders have an app there is nothing to sign in to. Email is ' +
+      'optional; the phone is normalised and must not belong to another account.',
+  })
+  @ApiBody({ type: CreateRiderSwaggerDto })
+  @ApiResponse({ status: 201, description: 'Rider created' })
+  @ApiResponse({ status: 409, description: 'Phone or email already in use' })
+  createRider(
+    @Body(new ZodValidationPipe(createRiderSchema)) body: CreateRiderDto,
+  ) {
+    return this.adminService.createRider(body);
+  }
+
+  @Get('riders')
+  @ApiOperation({
+    summary: 'Every rider, with deliveries in progress and completed',
+    description:
+      'The roster — approved, pending, suspended and rejected alike (filter by status). ' +
+      'A rider’s deliveries are `GET /admin/transactions?riderId=`.',
+  })
+  @ApiQuery({ name: 'status', enum: SellerStatus, required: false })
+  @ApiQuery({
+    name: 'search',
+    required: false,
+    type: String,
+    description: 'Name, phone or email',
+  })
+  @ApiQuery({ name: 'page', required: false, type: Number })
+  @ApiQuery({ name: 'limit', required: false, type: Number })
+  @ApiResponse({ status: 200, description: 'Paginated rider list' })
+  getRiders(
+    @Query('status') status?: SellerStatus,
+    @Query('search') search?: string,
+    @Query('page') page?: number,
+    @Query('limit') limit?: number,
+  ) {
+    return this.adminService.getRiders({ status, search, page, limit });
+  }
+
+  @Get('riders/:id')
+  @ApiOperation({ summary: 'One rider, with their delivery counts' })
+  @ApiParam({ name: 'id', type: String, description: 'Rider user UUID' })
+  @ApiResponse({ status: 200, description: 'The rider' })
+  @ApiResponse({ status: 404, description: 'Not a rider' })
+  getRider(@Param('id', ParseUUIDPipe) id: string) {
+    return this.adminService.getRider(id);
   }
 
   // ─── General user management ───────────────────────────────────────────────

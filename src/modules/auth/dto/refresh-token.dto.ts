@@ -11,5 +11,5 @@ export type RefreshTokenDto = z.infer<typeof refreshTokenSchema>;
 export class RefreshTokenRequestDto {
   @ApiProperty({ example: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...' })
   @IsString()
-  refreshToken: string;
+  refreshToken!: string;
 }

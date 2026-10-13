@@ -18,14 +18,14 @@ export type CreateAdminDto = z.infer<typeof CreateAdminSchema>;
 
 export class CreateAdminSwaggerDto {
   @ApiProperty({ example: 'Jane' })
-  firstName: string;
+  firstName!: string;
 
   @ApiProperty({ example: 'Doe' })
-  lastName: string;
+  lastName!: string;
 
   @ApiProperty({ example: 'jane.doe@recommend.app' })
-  email: string;
+  email!: string;
 
   @ApiProperty({ example: 'SecurePass1', minLength: 8 })
-  password: string;
+  password!: string;
 }

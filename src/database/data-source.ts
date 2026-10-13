@@ -1,17 +1,12 @@
-import { DataSource, DataSourceOptions } from 'typeorm';
 import { config } from 'dotenv';
+import { DataSource } from 'typeorm';
+import { getTypeOrmConfig } from '../config/configuration';
 
+// Load .env before reading the config factory — the TypeORM CLI boots this file
+// directly, outside the Nest ConfigModule.
 config();
 
-export const dataSourceOptions: DataSourceOptions = {
-  type: 'postgres',
-  url: process.env.DATABASE_URL,
-  synchronize: process.env.DATABASE_SYNCHRONIZE === 'true',
-  logging: process.env.DATABASE_LOGGING === 'true',
-  entities: ['dist/**/*.entity{.ts,.js}'],
-  migrations: ['dist/database/migrations/*{.ts,.js}'],
-  subscribers: [],
-};
+export const dataSourceOptions = getTypeOrmConfig();
 
 const dataSource = new DataSource(dataSourceOptions);
 export default dataSource;

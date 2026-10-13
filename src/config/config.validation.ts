@@ -1,9 +1,12 @@
 import { plainToInstance } from 'class-transformer';
 import {
   IsEnum,
+  IsIn,
   IsNumber,
   IsString,
   IsOptional,
+  Max,
+  Min,
   validateSync,
 } from 'class-validator';
 
@@ -15,13 +18,13 @@ enum Environment {
 
 class EnvironmentVariables {
   @IsEnum(Environment)
-  NODE_ENV: Environment;
+  NODE_ENV!: Environment;
 
   @IsNumber()
-  PORT: number;
+  PORT!: number;
 
   @IsString()
-  DATABASE_URL: string;
+  DATABASE_URL!: string;
 
   @IsOptional()
   @IsString()
@@ -31,11 +34,20 @@ class EnvironmentVariables {
   @IsString()
   DATABASE_LOGGING?: string;
 
+  @IsOptional()
   @IsString()
-  JWT_SECRET: string;
+  DATABASE_SSL?: string;
+
+  /** A managed Postgres's CA certificate (PEM). Its shape is checked in configuration.ts. */
+  @IsOptional()
+  @IsString()
+  DATABASE_CA_CERT?: string;
 
   @IsString()
-  JWT_REFRESH_SECRET: string;
+  JWT_SECRET!: string;
+
+  @IsString()
+  JWT_REFRESH_SECRET!: string;
 
   @IsOptional()
   @IsString()
@@ -44,6 +56,10 @@ class EnvironmentVariables {
   @IsOptional()
   @IsString()
   JWT_REFRESH_EXPIRES_IN?: string;
+
+  @IsOptional()
+  @IsString()
+  REDIS_URL?: string;
 
   @IsOptional()
   @IsString()
@@ -100,6 +116,62 @@ class EnvironmentVariables {
   @IsOptional()
   @IsString()
   SENDGRID_API_KEY?: string;
+
+  @IsOptional()
+  @IsNumber()
+  CHAT_MAX_HISTORY_MESSAGES?: number;
+
+  @IsOptional()
+  @IsNumber()
+  CHAT_MAX_TOOL_ROUNDS?: number;
+
+  @IsOptional()
+  @IsString()
+  CONTACT_INBOX?: string;
+
+  @IsOptional()
+  @IsString()
+  WEBSITE_URL?: string;
+
+  @IsOptional()
+  @IsString()
+  CUSTOMER_APP_URL?: string;
+
+  @IsOptional()
+  @IsNumber()
+  CONTACT_MAX_PER_SENDER_PER_HOUR?: number;
+
+  @IsOptional()
+  @IsNumber()
+  CONTACT_MAX_PER_HOUR?: number;
+
+  /** Flat delivery fee in naira, charged once per checkout on DELIVERY orders. */
+  @IsOptional()
+  @IsNumber()
+  DELIVERY_FEE_NGN?: number;
+
+  /** "true" lets buyers choose pickup. Anything but "true" or "false" is a typo. */
+  @IsOptional()
+  @IsIn(['true', 'false'])
+  PICKUP_ENABLED?: string;
+
+  @IsOptional()
+  @IsNumber()
+  @Min(0)
+  @Max(100)
+  PLATFORM_FEE_PERCENT?: number;
+
+  @IsOptional()
+  @IsString()
+  VAPID_PUBLIC_KEY?: string;
+
+  @IsOptional()
+  @IsString()
+  VAPID_PRIVATE_KEY?: string;
+
+  @IsOptional()
+  @IsString()
+  VAPID_SUBJECT?: string;
 }
 
 export function validate(config: Record<string, unknown>) {
