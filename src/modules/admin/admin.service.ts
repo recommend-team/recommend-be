@@ -466,10 +466,19 @@ export class AdminService {
     if (buyer.phoneNumber) {
       [orders, orderCount] = await this.ordersRepo.findAndCount({
         where: { buyerPhone: buyer.phoneNumber },
-        relations: ['items', 'items.product'],
+        relations: ['items', 'items.product', 'vendor'],
         order: { createdAt: 'DESC' },
         take: 50,
       });
+    }
+
+    // The vendor is a whole User row — password hash included — so only what the
+    // page shows goes out.
+    for (const order of orders) {
+      if (order.vendor) {
+        const { id, firstName, lastName, businessName } = order.vendor;
+        order.vendor = { id, firstName, lastName, businessName } as User;
+      }
     }
 
     return {
