@@ -10,8 +10,9 @@ import { WithdrawalsService } from './withdrawals.service';
  * a vendor whose ledger balance is entirely correct can still be told there is no money
  * to send. Retrying keeps "withdraw anytime" honest without us parking capital there.
  *
- * Safe because every attempt reuses the withdrawal's own reference, which Paystack
- * deduplicates — a retry either completes the original or is ignored.
+ * Each one is looked up on Paystack first and sent again only if Paystack has nothing
+ * under its reference. Sending blind once paid a vendor twice: Paystack refused the
+ * repeat as a duplicate, and the refusal was read as a failure and refunded.
  */
 @Injectable()
 export class WithdrawalRetryService {
@@ -65,7 +66,7 @@ export class WithdrawalRetryService {
 
     for (const withdrawal of due) {
       try {
-        await this.withdrawals.send(withdrawal);
+        await this.withdrawals.reconcile(withdrawal);
       } catch (error) {
         // One stuck withdrawal must not stop the rest of the queue.
         this.logger.error(

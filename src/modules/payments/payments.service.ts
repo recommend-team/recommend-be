@@ -33,9 +33,7 @@ export class AccountResolutionError extends Error {}
  */
 export class InsufficientPaystackBalanceError extends Error {}
 
-/** Paystack will never accept this transfer. Retrying cannot help. */
 export class TransferRejectedError extends Error {}
-export class TransferOtpRequiredError extends Error {}
 
 /**
  * Our own Paystack account is not allowed to pay out — an unupgraded "starter business",
@@ -52,6 +50,17 @@ export interface TransferResult {
   /** Paystack's own word: `success`, `pending`, `otp`, … */
   status: string;
 }
+
+/** What Paystack has under one of our transfer references. */
+export type TransferLookup =
+  | { found: false }
+  | {
+      found: true;
+      /** `success`, `pending`, `otp`, `failed`, `reversed`, `abandoned`, … */
+      status: string;
+      transferCode: string | null;
+      reason: string | null;
+    };
 
 @Injectable()
 export class PaymentsService {
@@ -303,17 +312,66 @@ export class PaymentsService {
       throw new TransferRejectedError(message);
     }
 
-    if (json.data.status === 'otp') {
-      throw new TransferOtpRequiredError(
-        'Paystack is requiring an OTP for transfers. Disable Transfers OTP in the ' +
-          'Paystack dashboard — no withdrawal can complete until it is off.',
-      );
-    }
-
+    // `otp` is returned as a status, not an error: the transfer exists on Paystack and goes
+    // out as soon as someone enters the OTP. Treating it as a failure once refunded money
+    // that then arrived anyway.
     return {
       transferCode: json.data.transfer_code ?? '',
       status: json.data.status ?? 'pending',
     };
+  }
+
+  /**
+   * What Paystack actually did with one of our transfer references.
+   *
+   * The only reliable answer to "did the money go?" — a refusal from the transfer call
+   * is not one, since a duplicate reference is refused precisely because it already went.
+   * `{ found: false }` means Paystack has no transfer under this reference at all.
+   * Anything we cannot read as an answer throws, so callers never mistake "could not ask"
+   * for "it was not sent".
+   */
+  async verifyTransfer(reference: string): Promise<TransferLookup> {
+    let response: Response;
+    try {
+      response = await fetch(
+        `${this.baseUrl}/transfer/verify/${encodeURIComponent(reference)}`,
+        { headers: { Authorization: `Bearer ${this.secretKey}` } },
+      );
+    } catch (err) {
+      this.logger.error(`Paystack network error verifying ${reference}`, err);
+      throw new InternalServerErrorException(
+        'Could not reach the payment gateway to check that transfer.',
+      );
+    }
+
+    const json = (await response.json().catch(() => null)) as {
+      status?: boolean;
+      message?: string;
+      data?: {
+        status?: string;
+        transfer_code?: string | null;
+        reason?: string | null;
+      };
+    } | null;
+
+    if (response.ok && json?.status && json.data?.status) {
+      return {
+        found: true,
+        status: json.data.status.toLowerCase(),
+        transferCode: json.data.transfer_code ?? null,
+        reason: json.data.reason ?? null,
+      };
+    }
+
+    const message = json?.message ?? `HTTP ${response.status}`;
+    if (response.status === 404 || /not found/i.test(message)) {
+      return { found: false };
+    }
+
+    this.logger.warn(`Paystack could not verify ${reference}: ${message}`);
+    throw new InternalServerErrorException(
+      `Paystack could not say what happened to that transfer: ${message}`,
+    );
   }
 
   // ─── Transport ──────────────────────────────────────────────────────────────

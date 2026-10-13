@@ -13,7 +13,6 @@ import {
   InsufficientPaystackBalanceError,
   PaymentsService,
   TransferNotPermittedError,
-  TransferOtpRequiredError,
   TransferRejectedError,
 } from '../payments/payments.service';
 import { EmailService } from '../../common/services/email.service';
@@ -30,6 +29,9 @@ const CONFIG: Record<string, unknown> = {
   ],
 };
 
+const DUPLICATE =
+  'Please provide a unique reference. Reference already exists on a transfer';
+
 const user = { id: 'u1', email: 'ada@example.com', firstName: 'Ada' } as User;
 
 describe('WithdrawalsService', () => {
@@ -44,7 +46,7 @@ describe('WithdrawalsService', () => {
     save: jest.Mock;
   };
   let accounts: { findOne: jest.Mock };
-  let payments: { initiateTransfer: jest.Mock };
+  let payments: { initiateTransfer: jest.Mock; verifyTransfer: jest.Mock };
   let email: { sendEmail: jest.Mock };
   /** Whether the advisory lock was taken, and when relative to reading the balance. */
   let lockOrder: string[];
@@ -74,6 +76,26 @@ describe('WithdrawalsService', () => {
       attempts: 1,
       ...over,
     }) as Withdrawal;
+
+  /** The debit `request` made, which every withdrawal row in these tests has behind it. */
+  const debited = (): void => {
+    ledger.push({
+      userId: 'u1',
+      type: WalletEntryType.WITHDRAWAL,
+      amount: -4800,
+      idempotencyKey: 'withdrawal:w1',
+      withdrawalId: 'w1',
+    });
+  };
+
+  /** Ledger total for the withdrawal: -4800 while debited, 0 once refunded. */
+  const net = (): number =>
+    ledger
+      .filter((e) => e.withdrawalId === 'w1')
+      .reduce((sum, e) => sum + e.amount, 0);
+
+  const refunds = (): NewEntry[] =>
+    ledger.filter((e) => e.type === WalletEntryType.WITHDRAWAL_REVERSED);
 
   beforeEach(async () => {
     ledger = [];
@@ -109,9 +131,12 @@ describe('WithdrawalsService', () => {
       initiateTransfer: jest
         .fn()
         .mockResolvedValue({ transferCode: 'TRF_1', status: 'pending' }),
+      verifyTransfer: jest.fn().mockResolvedValue({ found: false }),
     };
     email = { sendEmail: jest.fn().mockResolvedValue(undefined) };
 
+    // Behaves like the real ledger: keys are unique, and a withdrawal's net is the sum
+    // of its own entries.
     const wallet = {
       balanceOf: jest.fn(() => {
         lockOrder.push('balance');
@@ -124,6 +149,13 @@ describe('WithdrawalsService', () => {
           }
         }
         return Promise.resolve(rows.length);
+      }),
+      withdrawalNet: jest.fn((_m: EntityManager, withdrawalId: string) => {
+        const own = ledger.filter((e) => e.withdrawalId === withdrawalId);
+        return Promise.resolve({
+          net: own.reduce((sum, e) => sum + e.amount, 0),
+          count: own.length,
+        });
       }),
     };
 
@@ -196,7 +228,7 @@ describe('WithdrawalsService', () => {
 
       // Order is the whole point. Reading the balance first and locking afterwards would
       // let two concurrent requests both see the same money and both spend it.
-      expect(lockOrder).toEqual(['lock', 'balance']);
+      expect(lockOrder.slice(0, 2)).toEqual(['lock', 'balance']);
     });
 
     it('refuses more than the balance', async () => {
@@ -232,6 +264,14 @@ describe('WithdrawalsService', () => {
 
       expect(saved[0].recipientCode).toBe('RCP_1');
     });
+
+    it('accepted by Paystack: processing, still debited, nothing refunded', async () => {
+      const result = await service.request(user, 'acc1', 4800);
+
+      expect(result.status).toBe(WithdrawalStatus.PROCESSING);
+      expect(result.transferCode).toBe('TRF_1');
+      expect(net()).toBe(-4800);
+    });
   });
 
   describe('when Paystack has not settled yet', () => {
@@ -240,34 +280,35 @@ describe('WithdrawalsService', () => {
         new InsufficientPaystackBalanceError('Your balance is not enough'),
       );
 
-      await service.request(user, 'acc1', 4800);
+      const result = await service.request(user, 'acc1', 4800);
 
-      const [row] = withdrawals.save.mock.calls.flat() as Withdrawal[];
-      expect(row.status).toBe(WithdrawalStatus.PROCESSING);
+      expect(result.status).toBe(WithdrawalStatus.PROCESSING);
       // Not reversed — reversing here would show the vendor their money bouncing back
       // and forth for something that is merely slow.
-      expect(ledger.filter((e) => e.amount > 0)).toHaveLength(0);
+      expect(refunds()).toHaveLength(0);
     });
 
     it('gives up and returns the money once attempts run out', async () => {
+      debited();
       payments.initiateTransfer.mockRejectedValue(
         new InsufficientPaystackBalanceError('Your balance is not enough'),
       );
 
-      await service.send(withdrawal({ attempts: 7 }));
+      const row = withdrawal({ attempts: 7 });
+      await service.send(row);
 
-      expect(ledger).toContainEqual(
-        expect.objectContaining({
-          type: WalletEntryType.WITHDRAWAL_REVERSED,
-          amount: 4800,
-          idempotencyKey: 'reversal:w1',
-        }),
-      );
+      expect(row.status).toBe(WithdrawalStatus.FAILED);
+      expect(refunds()).toEqual([
+        expect.objectContaining({ amount: 4800, withdrawalId: 'w1' }),
+      ]);
+      expect(net()).toBe(0);
     });
   });
 
-  describe('when Paystack refuses outright', () => {
-    it('fails immediately rather than retrying against a wall', async () => {
+  describe('when the transfer call errors', () => {
+    beforeEach(debited);
+
+    it('refunds a refusal only once Paystack confirms it has no such transfer', async () => {
       payments.initiateTransfer.mockRejectedValue(
         new TransferRejectedError('Recipient account is frozen'),
       );
@@ -275,24 +316,80 @@ describe('WithdrawalsService', () => {
       const row = withdrawal();
       await service.send(row);
 
+      expect(payments.verifyTransfer).toHaveBeenCalledWith('WDR-ABC');
       expect(row.status).toBe(WithdrawalStatus.FAILED);
-      expect(ledger).toContainEqual(
-        expect.objectContaining({
-          type: WalletEntryType.WITHDRAWAL_REVERSED,
-          amount: 4800,
-        }),
-      );
+      expect(net()).toBe(0);
     });
 
-    it('treats an OTP requirement as terminal, since it blocks every transfer', async () => {
+    it('does not refund a refusal when Paystack shows the money went', async () => {
       payments.initiateTransfer.mockRejectedValue(
-        new TransferOtpRequiredError('Disable Transfers OTP'),
+        new TransferRejectedError('Something odd'),
       );
+      payments.verifyTransfer.mockResolvedValue({
+        found: true,
+        status: 'success',
+        transferCode: 'TRF_9',
+        reason: null,
+      });
 
       const row = withdrawal();
       await service.send(row);
 
-      expect(row.status).toBe(WithdrawalStatus.FAILED);
+      expect(row.status).toBe(WithdrawalStatus.SETTLED);
+      expect(refunds()).toHaveLength(0);
+      expect(net()).toBe(-4800);
+    });
+
+    it('never refunds a duplicate-reference refusal, which means the money already went', async () => {
+      // What production did: the sweep re-sent a paid transfer, Paystack refused the
+      // repeat, and the refusal was refunded on top of the payment.
+      payments.initiateTransfer.mockRejectedValue(
+        new TransferRejectedError(DUPLICATE),
+      );
+      payments.verifyTransfer.mockResolvedValue({
+        found: true,
+        status: 'success',
+        transferCode: 'TRF_1',
+        reason: null,
+      });
+
+      const row = withdrawal();
+      await service.send(row);
+
+      expect(row.status).toBe(WithdrawalStatus.SETTLED);
+      expect(refunds()).toHaveLength(0);
+    });
+
+    it('keeps a duplicate refusal processing even if Paystack shows nothing, and says so', async () => {
+      payments.initiateTransfer.mockRejectedValue(
+        new TransferRejectedError(DUPLICATE),
+      );
+      const logged: string[] = [];
+      jest
+        .spyOn(Logger.prototype, 'error')
+        .mockImplementation((message: unknown) => {
+          logged.push(String(message));
+        });
+
+      const row = withdrawal();
+      await service.send(row);
+
+      expect(row.status).toBe(WithdrawalStatus.PROCESSING);
+      expect(refunds()).toHaveLength(0);
+      expect(logged.join(' ')).toMatch(/duplicate/i);
+    });
+
+    it('keeps it processing when Paystack cannot be asked', async () => {
+      payments.initiateTransfer.mockRejectedValue(
+        new TransferRejectedError('Recipient account is frozen'),
+      );
+      payments.verifyTransfer.mockRejectedValue(new Error('timeout'));
+
+      const row = withdrawal();
+      await service.send(row);
+
+      expect(row.status).toBe(WithdrawalStatus.PROCESSING);
+      expect(net()).toBe(-4800);
     });
 
     it('flags an account-level block as blocking everyone, not this vendor', async () => {
@@ -315,12 +412,7 @@ describe('WithdrawalsService', () => {
 
       expect(row.status).toBe(WithdrawalStatus.FAILED);
       expect(logged.join(' ')).toMatch(/BLOCKED FOR EVERY VENDOR/);
-      expect(ledger).toContainEqual(
-        expect.objectContaining({
-          type: WalletEntryType.WITHDRAWAL_REVERSED,
-          amount: 4800,
-        }),
-      );
+      expect(net()).toBe(0);
     });
 
     it('keeps a network failure retryable, since it may have landed', async () => {
@@ -330,11 +422,31 @@ describe('WithdrawalsService', () => {
       await service.send(row);
 
       expect(row.status).toBe(WithdrawalStatus.PROCESSING);
-      expect(ledger).toHaveLength(0);
+      expect(net()).toBe(-4800);
+    });
+  });
+
+  describe('a transfer waiting for an OTP', () => {
+    it('stays processing with the debit, because it goes out once the OTP is entered', async () => {
+      // The first production withdrawal was refunded here, and then paid.
+      debited();
+      payments.initiateTransfer.mockResolvedValue({
+        transferCode: 'TRF_1',
+        status: 'otp',
+      });
+
+      const row = withdrawal({ status: WithdrawalStatus.REQUESTED });
+      await service.send(row);
+
+      expect(row.status).toBe(WithdrawalStatus.PROCESSING);
+      expect(row.failureReason).toMatch(/OTP/);
+      expect(net()).toBe(-4800);
     });
   });
 
   describe('returning the money', () => {
+    beforeEach(debited);
+
     it('credits back exactly once however many times it is told', async () => {
       const row = withdrawal();
 
@@ -342,19 +454,15 @@ describe('WithdrawalsService', () => {
       await service.fail(row, 'second');
       await service.fail(row, 'third');
 
-      expect(
-        ledger.filter((e) => e.type === WalletEntryType.WITHDRAWAL_REVERSED),
-      ).toHaveLength(1);
+      expect(refunds()).toHaveLength(1);
+      expect(net()).toBe(0);
     });
 
     it('credits the full amount, fee included', async () => {
       // We were charged nothing for a transfer that never went out.
       await service.fail(withdrawal(), 'rejected');
 
-      const reversal = ledger.find(
-        (e) => e.type === WalletEntryType.WITHDRAWAL_REVERSED,
-      );
-      expect(reversal?.amount).toBe(4800);
+      expect(refunds()[0]?.amount).toBe(4800);
     });
 
     it('ignores a failure that arrives after the money already settled', async () => {
@@ -370,7 +478,7 @@ describe('WithdrawalsService', () => {
 
       // Settled means the bank has it. "It failed" is then a contradiction, and acting on
       // it would credit the vendor for money they already have.
-      expect(ledger).toHaveLength(0);
+      expect(refunds()).toHaveLength(0);
     });
 
     it('honours a reversal after settlement, because that one is real', async () => {
@@ -385,17 +493,15 @@ describe('WithdrawalsService', () => {
         WithdrawalStatus.REVERSED,
       );
 
-      expect(ledger).toContainEqual(
-        expect.objectContaining({
-          type: WalletEntryType.WITHDRAWAL_REVERSED,
-          amount: 4800,
-        }),
-      );
+      expect(refunds()).toEqual([expect.objectContaining({ amount: 4800 })]);
+      expect(net()).toBe(0);
     });
   });
 
   describe('settling', () => {
-    it('marks it settled and stops there', async () => {
+    beforeEach(debited);
+
+    it('marks it settled and leaves the ledger alone', async () => {
       const row = withdrawal();
       withdrawals.findOne.mockResolvedValue(row);
 
@@ -403,7 +509,7 @@ describe('WithdrawalsService', () => {
 
       expect(row.status).toBe(WithdrawalStatus.SETTLED);
       expect(row.settledAt).toBeInstanceOf(Date);
-      expect(ledger).toHaveLength(0);
+      expect(ledger).toHaveLength(1);
     });
 
     it('ignores a webhook for a reference we do not know', async () => {
@@ -411,24 +517,140 @@ describe('WithdrawalsService', () => {
 
       await expect(service.settle('WDR-NOPE')).resolves.toBeUndefined();
     });
+
+    it('takes back a refund when Paystack turns out to have paid it', async () => {
+      // Refunded on a misread refusal, then Paystack's success arrives.
+      const row = withdrawal();
+      await service.fail(row, 'misread refusal');
+      expect(net()).toBe(0);
+      withdrawals.findOne.mockResolvedValue(row);
+
+      await service.settle('WDR-ABC');
+
+      expect(row.status).toBe(WithdrawalStatus.SETTLED);
+      expect(net()).toBe(-4800);
+      expect(ledger[ledger.length - 1]).toMatchObject({
+        type: WalletEntryType.WITHDRAWAL,
+        amount: -4800,
+      });
+    });
+
+    it('takes it back only once, however many times success arrives', async () => {
+      const row = withdrawal();
+      await service.fail(row, 'misread refusal');
+      withdrawals.findOne.mockResolvedValue(row);
+
+      await service.settle('WDR-ABC');
+      await service.settle('WDR-ABC');
+      await service.settle('WDR-ABC');
+
+      expect(net()).toBe(-4800);
+    });
+
+    it('still refunds a genuine reversal after a refund was taken back', async () => {
+      // Fixed keys would have discarded this second refund as a repeat of the first.
+      const row = withdrawal();
+      await service.fail(row, 'misread refusal');
+      withdrawals.findOne.mockResolvedValue(row);
+      await service.settle('WDR-ABC');
+
+      await service.failByReference(
+        'WDR-ABC',
+        'bank returned it',
+        WithdrawalStatus.REVERSED,
+      );
+
+      expect(row.status).toBe(WithdrawalStatus.REVERSED);
+      expect(net()).toBe(0);
+    });
   });
 
-  describe('retrying', () => {
-    it('reuses the same reference, so Paystack cannot send twice', async () => {
-      await service.send(withdrawal({ attempts: 3 }));
+  describe('the retry sweep', () => {
+    beforeEach(debited);
+
+    it('sends again on the same reference only when Paystack has nothing under it', async () => {
+      const row = withdrawal({ attempts: 3 });
+
+      await service.reconcile(row);
 
       expect(payments.initiateTransfer).toHaveBeenCalledWith(
         expect.objectContaining({ reference: 'WDR-ABC' }),
       );
-    });
-
-    it('counts the attempt', async () => {
-      const row = withdrawal({ attempts: 3 });
-
-      await service.send(row);
-
       expect(row.attempts).toBe(4);
       expect(row.lastAttemptAt).toBeInstanceOf(Date);
+    });
+
+    it('does not send a transfer Paystack already has', async () => {
+      payments.verifyTransfer.mockResolvedValue({
+        found: true,
+        status: 'pending',
+        transferCode: 'TRF_1',
+        reason: null,
+      });
+
+      const row = withdrawal();
+      await service.reconcile(row);
+
+      expect(payments.initiateTransfer).not.toHaveBeenCalled();
+      expect(row.status).toBe(WithdrawalStatus.PROCESSING);
+      expect(net()).toBe(-4800);
+    });
+
+    it('settles one Paystack paid, without sending', async () => {
+      payments.verifyTransfer.mockResolvedValue({
+        found: true,
+        status: 'success',
+        transferCode: 'TRF_1',
+        reason: null,
+      });
+
+      const row = withdrawal();
+      await service.reconcile(row);
+
+      expect(payments.initiateTransfer).not.toHaveBeenCalled();
+      expect(row.status).toBe(WithdrawalStatus.SETTLED);
+    });
+
+    it('refunds one Paystack reports failed', async () => {
+      payments.verifyTransfer.mockResolvedValue({
+        found: true,
+        status: 'failed',
+        transferCode: 'TRF_1',
+        reason: 'Account closed',
+      });
+
+      const row = withdrawal();
+      await service.reconcile(row);
+
+      expect(row.status).toBe(WithdrawalStatus.FAILED);
+      expect(row.failureReason).toBe('Account closed');
+      expect(net()).toBe(0);
+    });
+
+    it('treats a status it does not know as still in flight', async () => {
+      payments.verifyTransfer.mockResolvedValue({
+        found: true,
+        status: 'some_new_status',
+        transferCode: 'TRF_1',
+        reason: null,
+      });
+
+      const row = withdrawal();
+      await service.reconcile(row);
+
+      expect(row.status).toBe(WithdrawalStatus.PROCESSING);
+      expect(net()).toBe(-4800);
+    });
+
+    it('does nothing it cannot undo when Paystack cannot be asked', async () => {
+      payments.verifyTransfer.mockRejectedValue(new Error('timeout'));
+
+      const row = withdrawal();
+      await service.reconcile(row);
+
+      expect(payments.initiateTransfer).not.toHaveBeenCalled();
+      expect(row.status).toBe(WithdrawalStatus.PROCESSING);
+      expect(net()).toBe(-4800);
     });
   });
 });

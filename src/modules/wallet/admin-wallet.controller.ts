@@ -100,16 +100,16 @@ export class AdminWalletController {
   @Post('withdrawals/:id/retry')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({
-    summary: 'Retry a withdrawal now',
+    summary: 'Retry an in-flight withdrawal now',
     description:
-      'Sends again on the same reference, which Paystack deduplicates — so this cannot ' +
-      'become a second payment even if the first is still in flight.',
+      'Looks the reference up on Paystack first and sends again only if Paystack has ' +
+      'nothing under it — so this cannot become a second payment.',
   })
   @ApiParam({ name: 'id', description: 'Withdrawal id' })
-  @ApiResponse({ status: 200, description: 'Attempted' })
+  @ApiResponse({ status: 200, description: 'Checked, and sent if needed' })
   @ApiResponse({
     status: 400,
-    description: 'Already settled or already failed',
+    description: 'Already settled or already refunded',
   })
   async retry(@Param('id', ParseUUIDPipe) id: string) {
     const withdrawal = await this.withdrawals.retryNow(id);
@@ -119,24 +119,53 @@ export class AdminWalletController {
     };
   }
 
+  @Post('withdrawals/:id/verify')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    summary: 'Check a withdrawal against Paystack',
+    description:
+      'Asks Paystack what happened to it and corrects ours to match. One refunded by ' +
+      'mistake but paid by Paystack is settled, and the refund taken back. Never sends.',
+  })
+  @ApiParam({ name: 'id', description: 'Withdrawal id' })
+  @ApiResponse({ status: 200, description: 'Checked' })
+  @ApiResponse({ status: 400, description: 'Paystack could not be reached' })
+  async verify(@Param('id', ParseUUIDPipe) id: string) {
+    const withdrawal = await this.withdrawals.verifyNow(id);
+    return {
+      message: `Checked with Paystack: ${withdrawal.status.toLowerCase()}`,
+      data: { status: withdrawal.status },
+    };
+  }
+
   @Post('withdrawals/:id/fail')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({
     summary: 'Give up on a withdrawal and return the money',
     description:
-      'The balance is credited back exactly once, whatever else has already tried to ' +
-      'fail it. Refused for one that has settled — the bank has that money.',
+      'Paystack is asked first. Refused while Paystack is still sending it; if Paystack ' +
+      'paid it, it is settled instead. Otherwise the balance is credited back once.',
   })
   @ApiParam({ name: 'id', description: 'Withdrawal id' })
   @ApiBody({ type: AbandonRequestDto })
-  @ApiResponse({ status: 200, description: 'Failed and reversed' })
+  @ApiResponse({
+    status: 200,
+    description: 'Failed and reversed, or found paid',
+  })
+  @ApiResponse({
+    status: 400,
+    description: 'Settled, still being sent, or Paystack could not be reached',
+  })
   async abandon(
     @Param('id', ParseUUIDPipe) id: string,
     @Body(new ZodValidationPipe(abandonSchema)) dto: AbandonRequestDto,
   ) {
     const withdrawal = await this.withdrawals.abandon(id, dto.reason);
     return {
-      message: 'Withdrawal failed and the balance returned',
+      message:
+        withdrawal.status === WithdrawalStatus.SETTLED
+          ? 'Paystack shows this withdrawal was paid, so it was marked settled and nothing was refunded'
+          : 'Withdrawal failed and the balance returned',
       data: { status: withdrawal.status },
     };
   }

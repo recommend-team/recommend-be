@@ -112,7 +112,8 @@ describe('admin controls', () => {
   describe('WithdrawalsService admin actions', () => {
     let service: WithdrawalsService;
     let rows: Withdrawal[];
-    let payments: { initiateTransfer: jest.Mock };
+    let ledger: NewEntry[];
+    let payments: { initiateTransfer: jest.Mock; verifyTransfer: jest.Mock };
 
     const withdrawal = (over: Partial<Withdrawal> = {}): Withdrawal =>
       ({
@@ -127,12 +128,42 @@ describe('admin controls', () => {
         ...over,
       }) as Withdrawal;
 
+    const found = (status: string) => ({
+      found: true,
+      status,
+      transferCode: 'TRF',
+      reason: null,
+    });
+
+    const net = (): number => ledger.reduce((sum, e) => sum + e.amount, 0);
+
+    const refunded = (): void => {
+      ledger.push({
+        userId: 'u1',
+        type: WalletEntryType.WITHDRAWAL_REVERSED,
+        amount: 4800,
+        idempotencyKey: 'reversal:w1',
+        withdrawalId: 'w1',
+      });
+    };
+
     beforeEach(async () => {
       rows = [];
+      // The debit `request` made.
+      ledger = [
+        {
+          userId: 'u1',
+          type: WalletEntryType.WITHDRAWAL,
+          amount: -4800,
+          idempotencyKey: 'withdrawal:w1',
+          withdrawalId: 'w1',
+        },
+      ];
       payments = {
         initiateTransfer: jest
           .fn()
           .mockResolvedValue({ transferCode: 'TRF', status: 'pending' }),
+        verifyTransfer: jest.fn().mockResolvedValue({ found: false }),
       };
 
       const withdrawals = {
@@ -141,15 +172,29 @@ describe('admin controls', () => {
         createQueryBuilder: jest.fn(),
       };
 
+      const wallet = {
+        balanceOf: jest.fn(),
+        append: jest.fn((_m: EntityManager, entries: NewEntry[]) => {
+          for (const entry of entries) {
+            if (
+              !ledger.some((e) => e.idempotencyKey === entry.idempotencyKey)
+            ) {
+              ledger.push(entry);
+            }
+          }
+          return Promise.resolve(entries.length);
+        }),
+        withdrawalNet: jest.fn(() =>
+          Promise.resolve({ net: net(), count: ledger.length }),
+        ),
+      };
+
       const module: TestingModule = await Test.createTestingModule({
         providers: [
           WithdrawalsService,
           { provide: getRepositoryToken(Withdrawal), useValue: withdrawals },
           { provide: getRepositoryToken(Account), useValue: {} },
-          {
-            provide: WalletService,
-            useValue: { balanceOf: jest.fn(), append: jest.fn() },
-          },
+          { provide: WalletService, useValue: wallet },
           { provide: PaymentsService, useValue: payments },
           { provide: EmailService, useValue: { sendEmail: jest.fn() } },
           { provide: EventEmitter2, useValue: { emit: jest.fn() } },
@@ -161,7 +206,10 @@ describe('admin controls', () => {
             provide: DataSource,
             useValue: {
               transaction: (work: (m: EntityManager) => Promise<unknown>) =>
-                work({ update: jest.fn() } as unknown as EntityManager),
+                work({
+                  update: jest.fn(),
+                  query: jest.fn(),
+                } as unknown as EntityManager),
             },
           },
         ],
@@ -170,7 +218,7 @@ describe('admin controls', () => {
       service = module.get(WithdrawalsService);
     });
 
-    it('retries on the same reference, so it cannot become a second payment', async () => {
+    it('retries on the same reference when Paystack has nothing under it', async () => {
       rows = [withdrawal()];
 
       await service.retryNow('w1');
@@ -178,6 +226,17 @@ describe('admin controls', () => {
       expect(payments.initiateTransfer).toHaveBeenCalledWith(
         expect.objectContaining({ reference: 'WDR-ABC' }),
       );
+    });
+
+    it('does not send again when Paystack already has the transfer', async () => {
+      rows = [withdrawal()];
+      payments.verifyTransfer.mockResolvedValue(found('success'));
+
+      const result = await service.retryNow('w1');
+
+      expect(payments.initiateTransfer).not.toHaveBeenCalled();
+      expect(result.status).toBe(WithdrawalStatus.SETTLED);
+      expect(net()).toBe(-4800);
     });
 
     it('refuses to retry something already settled', async () => {
@@ -189,6 +248,13 @@ describe('admin controls', () => {
       expect(payments.initiateTransfer).not.toHaveBeenCalled();
     });
 
+    it('refuses to retry one already refunded, which would pay it twice', async () => {
+      rows = [withdrawal({ status: WithdrawalStatus.FAILED })];
+
+      await expect(service.retryNow('w1')).rejects.toThrow(/Check Paystack/);
+      expect(payments.initiateTransfer).not.toHaveBeenCalled();
+    });
+
     it('404s rather than silently doing nothing', async () => {
       rows = [];
 
@@ -197,7 +263,7 @@ describe('admin controls', () => {
       );
     });
 
-    it('gives up on one by hand and returns the money', async () => {
+    it('gives up on one by hand once Paystack confirms it never had it', async () => {
       rows = [withdrawal()];
 
       const result = await service.abandon(
@@ -207,6 +273,62 @@ describe('admin controls', () => {
 
       expect(result.status).toBe(WithdrawalStatus.FAILED);
       expect(result.failureReason).toBe('Rider paid the vendor in cash');
+      expect(net()).toBe(0);
+    });
+
+    it('will not refund one Paystack is still sending', async () => {
+      rows = [withdrawal()];
+      payments.verifyTransfer.mockResolvedValue(found('pending'));
+
+      await expect(service.abandon('w1', 'Taking too long')).rejects.toThrow(
+        /still sending/,
+      );
+      expect(net()).toBe(-4800);
+    });
+
+    it('settles instead of refunding one Paystack paid', async () => {
+      rows = [withdrawal()];
+      payments.verifyTransfer.mockResolvedValue(found('success'));
+
+      const result = await service.abandon('w1', 'Vendor says not received');
+
+      expect(result.status).toBe(WithdrawalStatus.SETTLED);
+      expect(net()).toBe(-4800);
+    });
+
+    it('changes nothing when Paystack cannot be reached', async () => {
+      rows = [withdrawal()];
+      payments.verifyTransfer.mockRejectedValue(new Error('timeout'));
+
+      await expect(service.abandon('w1', 'Taking too long')).rejects.toThrow(
+        /nothing was changed/,
+      );
+      expect(rows[0].status).toBe(WithdrawalStatus.PROCESSING);
+      expect(net()).toBe(-4800);
+    });
+
+    it('settles a refunded withdrawal Paystack paid, taking the refund back', async () => {
+      // The production case: refunded on a misread refusal, but the money reached the bank.
+      refunded();
+      rows = [withdrawal({ status: WithdrawalStatus.FAILED })];
+      payments.verifyTransfer.mockResolvedValue(found('success'));
+
+      const result = await service.verifyNow('w1');
+
+      expect(result.status).toBe(WithdrawalStatus.SETTLED);
+      expect(net()).toBe(-4800);
+      expect(payments.initiateTransfer).not.toHaveBeenCalled();
+    });
+
+    it('leaves a refund alone when Paystack never had the transfer', async () => {
+      refunded();
+      rows = [withdrawal({ status: WithdrawalStatus.FAILED })];
+
+      const result = await service.verifyNow('w1');
+
+      expect(result.status).toBe(WithdrawalStatus.FAILED);
+      expect(net()).toBe(0);
+      expect(payments.initiateTransfer).not.toHaveBeenCalled();
     });
   });
 });

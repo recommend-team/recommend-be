@@ -123,6 +123,30 @@ export class WalletService {
     return result.identifiers.filter(Boolean).length;
   }
 
+  /**
+   * What one withdrawal has done to the balance so far, and how many entries it took.
+   *
+   * Read inside the caller's transaction, so a correction is computed from the ledger as
+   * it stands rather than from what the withdrawal's status claims happened.
+   */
+  async withdrawalNet(
+    manager: EntityManager,
+    withdrawalId: string,
+  ): Promise<{ net: number; count: number }> {
+    const row = await manager
+      .getRepository(WalletEntry)
+      .createQueryBuilder('entry')
+      .select('COALESCE(SUM(entry.amount), 0)', 'net')
+      .addSelect('COUNT(entry.id)', 'count')
+      .where('entry.withdrawalId = :withdrawalId', { withdrawalId })
+      .getRawOne<{ net: string; count: string }>();
+
+    return {
+      net: round2(Number(row?.net ?? 0)),
+      count: Number(row?.count ?? 0),
+    };
+  }
+
   async balanceOf(userId: string, manager?: EntityManager): Promise<number> {
     return (await this.summaryOf(userId, manager)).balance;
   }
