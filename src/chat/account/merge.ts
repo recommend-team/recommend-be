@@ -71,6 +71,11 @@ export function mergeConversations(
       ...(home.context?.orderReferences ?? []),
       ...(incoming.context?.orderReferences ?? []),
     ]),
+    // Kept from both, or signing in would tell the buyer again that an order is close.
+    etaNoticeSent: unique([
+      ...(home.context?.etaNoticeSent ?? []),
+      ...(incoming.context?.etaNoticeSent ?? []),
+    ]),
     pendingPaymentReference: pending?.pendingPaymentReference,
     pendingCheckoutId: pending?.pendingCheckoutId,
     // What a returning buyer is remembered by survives from whichever side has it —

@@ -30,6 +30,8 @@ export interface ConversationContext {
   pendingCheckoutId?: string;
   pendingPaymentReference?: string;
   orderReferences?: string[];
+  /** Orders the buyer has been told are close, after their expected time passed. */
+  etaNoticeSent?: string[];
   strugglingTurns?: number;
   /** Retired: a handover no longer expires. Still cleared, for conversations that have it. */
   unansweredHandoverAt?: string;

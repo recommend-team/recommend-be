@@ -224,6 +224,15 @@ export const chatConfig = registerAs('chat', () => ({
     process.env.CHAT_UNSTARTED_RETENTION_DAYS || '7',
     10,
   ),
+  /**
+   * How long a delivery is expected to take from payment. Drives the buyer's delivery
+   * timer, and when they are told their order is close. The same 20–30 minutes the
+   * assistant quotes.
+   */
+  deliveryEtaMinutes: Math.max(
+    1,
+    parseInt(process.env.DELIVERY_ETA_MINUTES || '30', 10) || 30,
+  ),
 }));
 
 export const contactConfig = registerAs('contact', () => ({

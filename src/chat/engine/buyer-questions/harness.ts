@@ -104,6 +104,8 @@ export const ORDER_ON_ITS_WAY: BuyerOrderSummary = {
   canComplete: true,
   handoverCode: '4821',
   rider: { name: 'Tunde Bakare', phone: '+2348000000000' },
+  expectedBy: '2026-10-10T09:31:00.000Z',
+  etaMinutes: 30,
   vendors: [
     {
       vendorName: "Mama's Kitchen",

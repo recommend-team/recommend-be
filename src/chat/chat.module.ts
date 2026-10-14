@@ -10,6 +10,7 @@ import { ConversationCleanupService } from './conversation/conversation-cleanup.
 import { SessionService } from './session/session.service';
 import { ChatRateLimitService } from './session/rate-limit.service';
 import { EngineService } from './engine/engine.service';
+import { DeliveryEtaNoticeService } from './engine/delivery-eta-notice.service';
 import { HandoverService } from './engine/handover.service';
 import { AdminOrderService } from './engine/admin-order.service';
 import { AdminCatalogService } from './engine/admin-catalog.service';
@@ -76,6 +77,7 @@ import { WelcomeEmailService } from '../common/services/welcome-email.service';
     SessionService,
     ChatRateLimitService,
     EngineService,
+    DeliveryEtaNoticeService,
     HandoverService,
     AdminOrderService,
     AdminCatalogService,

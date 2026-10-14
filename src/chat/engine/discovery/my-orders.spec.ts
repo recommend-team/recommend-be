@@ -15,6 +15,8 @@ const order = (over: Partial<BuyerOrderSummary> = {}): BuyerOrderSummary => ({
   canComplete: false,
   handoverCode: null,
   rider: null,
+  expectedBy: '2026-10-10T09:31:00.000Z',
+  etaMinutes: 30,
   vendors: [
     {
       vendorName: "Mama's Kitchen",

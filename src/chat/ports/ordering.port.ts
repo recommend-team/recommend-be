@@ -68,6 +68,13 @@ export interface BuyerOrderSummary {
   canComplete: boolean;
   handoverCode: string | null;
   rider: { name: string; phone: string | null } | null;
+  /**
+   * When a paid delivery is expected: payment plus `DELIVERY_ETA_MINUTES`. Null for a
+   * pickup or an unpaid order. What the buyer's delivery timer counts towards.
+   */
+  expectedBy: string | null;
+  /** The minutes behind `expectedBy`, so the timer knows its full length. */
+  etaMinutes: number;
   vendors: {
     vendorName: string | null;
     /** Where to collect from. Pickup orders only, and only once paid. */

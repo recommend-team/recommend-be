@@ -1,4 +1,5 @@
-import { ConflictException, Injectable } from '@nestjs/common';
+import { ConflictException, Injectable, Optional } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
 import { In, Repository } from 'typeorm';
 import { Checkout } from '../../modules/orders/entities/checkout.entity';
@@ -38,7 +39,13 @@ export class LocalOrderingAdapter implements OrderingPort {
     private readonly lifecycle: OrderLifecycleService,
     @InjectRepository(Checkout)
     private readonly checkouts: Repository<Checkout>,
+    @Optional() private readonly config?: ConfigService,
   ) {}
+
+  /** Minutes from payment to the expected delivery. See `DELIVERY_ETA_MINUTES`. */
+  private etaMinutes(): number {
+    return this.config?.get<number>('chat.deliveryEtaMinutes') ?? 30;
+  }
 
   deliveryFeeFor(fulfillmentType: 'PICKUP' | 'DELIVERY'): number {
     return this.checkoutService.deliveryFeeFor(
@@ -108,6 +115,8 @@ export class LocalOrderingAdapter implements OrderingPort {
       order: { createdAt: 'DESC' },
     });
 
+    const etaMinutes = this.etaMinutes();
+
     return checkouts.map((checkout) => ({
       reference: checkout.reference,
       status: checkout.status,
@@ -132,6 +141,14 @@ export class LocalOrderingAdapter implements OrderingPort {
               phone: checkout.rider.phoneNumber ?? null,
             }
           : null,
+      // Counted from payment, not from placing the order: an unpaid order is not coming.
+      expectedBy:
+        checkout.paidAt && checkout.fulfillmentType === FulfillmentType.DELIVERY
+          ? new Date(
+              checkout.paidAt.getTime() + etaMinutes * 60_000,
+            ).toISOString()
+          : null,
+      etaMinutes,
       vendors: (checkout.orders ?? []).map((order) => ({
         vendorName: order.vendor?.businessName ?? null,
         // Where to collect, once there is something paid for to collect. Not before:
