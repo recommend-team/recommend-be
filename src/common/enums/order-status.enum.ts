@@ -28,3 +28,15 @@ export enum OrderStatus {
   CANCELLED = 'CANCELLED',
   REFUNDED = 'REFUNDED',
 }
+
+/**
+ * Paid for and not called off: what counts as a sale. Everything from payment to
+ * delivery — an order does not stop being sold when the vendor marks it ready.
+ */
+export const SOLD_ORDER_STATUSES: readonly OrderStatus[] = [
+  OrderStatus.PAID,
+  OrderStatus.PROCESSING,
+  OrderStatus.READY,
+  OrderStatus.DISPATCHED,
+  OrderStatus.COMPLETED,
+];

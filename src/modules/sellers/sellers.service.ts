@@ -8,7 +8,10 @@ import { Repository } from 'typeorm';
 import { User } from '../auth/entities/auth.entity';
 import { Order } from '../orders/entities/order.entity';
 import { VendorType } from '../../common/enums/vendor-type.enum';
-import { OrderStatus } from '../../common/enums/order-status.enum';
+import {
+  OrderStatus,
+  SOLD_ORDER_STATUSES,
+} from '../../common/enums/order-status.enum';
 import { UpdateProfileDto } from './dto/update-profile.dto';
 import {
   UpdateRegisteredKycDto,
@@ -286,8 +289,11 @@ export class SellersService {
   // ─── Sales ─────────────────────────────────────────────────────────────────
 
   /**
-   * What a vendor has sold. Counts `PAID` as well as `COMPLETED`, so it deliberately
+   * What a vendor has sold: every order from payment to delivery, so it deliberately
    * differs from the wallet balance, which only counts orders confirmed received.
+   *
+   * Once only `PAID` and `COMPLETED` counted, so an order dropped out of "sold" the moment
+   * the vendor marked it ready, and came back only when the buyer confirmed it.
    */
   async getSales(vendorId: string): Promise<{
     message: string;
@@ -298,7 +304,7 @@ export class SellersService {
       monthlyBreakdown: { month: string; gross: number; net: number }[];
     };
   }> {
-    const paidStatuses = [OrderStatus.PAID, OrderStatus.COMPLETED];
+    const paidStatuses = SOLD_ORDER_STATUSES;
 
     const rows = await this.ordersRepository
       .createQueryBuilder('order')

@@ -18,7 +18,14 @@ import {
 } from '../orders/entities/order-status-event.entity';
 import { SellerStatus } from '../../common/enums/seller-status.enum';
 import { Role } from '../../common/enums/roles.enum';
-import { OrderStatus } from '../../common/enums/order-status.enum';
+import {
+  OrderStatus,
+  SOLD_ORDER_STATUSES,
+} from '../../common/enums/order-status.enum';
+import {
+  LagosPeriods,
+  lagosPeriodStarts,
+} from '../../common/utils/lagos-periods';
 import { EmailService } from '../../common/services/email.service';
 import { CreateAdminDto } from './dto/create-admin.dto';
 import type { CreateRiderDto } from './dto/rider.dto';
@@ -110,6 +117,24 @@ function toTransactionSummary(checkout: Checkout): TransactionSummary {
     })),
   };
 }
+
+/** Which period the vendor list is ranked by. */
+export type VendorOrderSort = 'today' | 'week' | 'month' | 'allTime';
+
+/** How many orders a vendor has sold in each period. */
+export interface VendorOrderCounts {
+  today: number;
+  week: number;
+  month: number;
+  allTime: number;
+}
+
+const NO_ORDERS: VendorOrderCounts = {
+  today: 0,
+  week: 0,
+  month: 0,
+  allTime: 0,
+};
 
 /** A payout account as the admin sees it — the whole number, no verification internals. */
 export interface AdminPayoutAccount {
@@ -438,44 +463,125 @@ export class AdminService {
     return { items, total, page, limit, totalPages: Math.ceil(total / limit) };
   }
 
+  /**
+   * Every vendor, with how many orders they have sold today, this week, this month and
+   * ever — sortable by any of the four, across all vendors, not just the page shown.
+   *
+   * An order is one vendor's share of a purchase, counted once paid and not called off,
+   * at the moment it was paid. Periods are Lagos calendar periods (weeks from Monday).
+   */
   async getVendors(query: {
     status?: SellerStatus;
     page?: number;
     limit?: number;
-  }): Promise<PaginatedResult<Partial<User>>> {
+    sort?: VendorOrderSort;
+  }): Promise<PaginatedResult<Partial<User> & { orders: VendorOrderCounts }>> {
     const page = Math.max(1, query.page ?? 1);
     const limit = Math.min(100, Math.max(1, query.limit ?? 20));
     const skip = (page - 1) * limit;
+    const periods = lagosPeriodStarts();
 
-    const where: Record<string, unknown> = { role: Role.SELLER };
-    if (query.status) where['status'] = query.status;
+    const qb = this.usersRepo
+      .createQueryBuilder('vendor')
+      .select(
+        [
+          'id',
+          'firstName',
+          'lastName',
+          'email',
+          'phoneNumber',
+          'role',
+          'status',
+          'vendorType',
+          'businessName',
+          'businessAddress',
+          'businessCategory',
+          'businessLogoUrl',
+          'slug',
+          'isOpen',
+          'isEmailVerified',
+          'createdAt',
+        ].map((field) => `vendor.${field}`),
+      )
+      .where('vendor.role = :role', { role: Role.SELLER })
+      .skip(skip)
+      .take(limit);
 
-    const [items, total] = await this.usersRepo.findAndCount({
-      where,
-      select: [
-        'id',
-        'firstName',
-        'lastName',
-        'email',
-        'phoneNumber',
-        'role',
-        'status',
-        'vendorType',
-        'businessName',
-        'businessAddress',
-        'businessCategory',
-        'businessLogoUrl',
-        'slug',
-        'isOpen',
-        'isEmailVerified',
-        'createdAt',
-      ],
-      skip,
-      take: limit,
-      order: { createdAt: 'DESC' },
-    });
+    if (query.status) {
+      qb.andWhere('vendor.status = :status', { status: query.status });
+    }
+
+    if (query.sort) {
+      // Ranked across every vendor, so "top this week" is the real top, not page one's.
+      const since = query.sort === 'allTime' ? null : periods[query.sort];
+      qb.orderBy(
+        `(SELECT COUNT(*) FROM orders o
+           WHERE o."vendorId" = vendor.id
+             AND o.status IN (:...sold)
+             AND o."paidAt" IS NOT NULL
+             ${since ? 'AND o."paidAt" >= :since' : ''})`,
+        'DESC',
+      )
+        .setParameter('sold', SOLD_ORDER_STATUSES)
+        .setParameter('since', since)
+        .addOrderBy('vendor.createdAt', 'DESC');
+    } else {
+      qb.orderBy('vendor.createdAt', 'DESC');
+    }
+
+    const [vendors, total] = await qb.getManyAndCount();
+    const counts = await this.vendorOrderCounts(
+      vendors.map((vendor) => vendor.id),
+      periods,
+    );
+
+    const items = vendors.map((vendor) => ({
+      ...vendor,
+      orders: counts.get(vendor.id) ?? NO_ORDERS,
+    }));
 
     return { items, total, page, limit, totalPages: Math.ceil(total / limit) };
+  }
+
+  /** The four counts for a page of vendors, in one query. */
+  private async vendorOrderCounts(
+    vendorIds: string[],
+    periods: LagosPeriods,
+  ): Promise<Map<string, VendorOrderCounts>> {
+    if (vendorIds.length === 0) return new Map();
+
+    const rows = await this.ordersRepo
+      .createQueryBuilder('o')
+      .select('o.vendorId', 'vendorId')
+      .addSelect('COUNT(*) FILTER (WHERE o.paidAt >= :today)', 'today')
+      .addSelect('COUNT(*) FILTER (WHERE o.paidAt >= :week)', 'week')
+      .addSelect('COUNT(*) FILTER (WHERE o.paidAt >= :month)', 'month')
+      .addSelect('COUNT(*)', 'allTime')
+      .where('o.vendorId IN (:...vendorIds)', { vendorIds })
+      .andWhere('o.status IN (:...sold)', { sold: SOLD_ORDER_STATUSES })
+      .andWhere('o.paidAt IS NOT NULL')
+      .setParameters(periods)
+      .groupBy('o.vendorId')
+      .getRawMany<{
+        vendorId: string;
+        today: string;
+        week: string;
+        month: string;
+        allTime: string;
+      }>();
+
+    // Postgres counts are bigints, which arrive as strings.
+    return new Map(
+      rows.map((row) => [
+        row.vendorId,
+        {
+          today: Number(row.today),
+          week: Number(row.week),
+          month: Number(row.month),
+          allTime: Number(row.allTime),
+        },
+      ]),
+    );
   }
 
   async getVendorDetail(id: string): Promise<{

@@ -19,7 +19,7 @@ import {
   ApiQuery,
   ApiBody,
 } from '@nestjs/swagger';
-import { AdminService } from './admin.service';
+import { AdminService, VendorOrderSort } from './admin.service';
 import { ZodValidationPipe } from '../../common/pipes/zod-validation.pipes';
 import {
   assignRiderSchema,
@@ -35,6 +35,8 @@ import { User } from '../auth/entities/auth.entity';
 import { Role } from '../../common/enums/roles.enum';
 import { SellerStatus } from '../../common/enums/seller-status.enum';
 import { OrderStatus } from '../../common/enums/order-status.enum';
+
+const VENDOR_SORTS: VendorOrderSort[] = ['today', 'week', 'month', 'allTime'];
 
 @ApiTags('Admin')
 @ApiBearerAuth()
@@ -107,18 +109,38 @@ export class AdminController {
 
   @Get('vendors')
   @ApiOperation({
-    summary: 'List all vendor accounts with optional status filter',
+    summary: 'List all vendor accounts, with their order counts',
+    description:
+      'Each vendor carries `orders: { today, week, month, allTime }` — orders paid for ' +
+      'and not cancelled or refunded, by Lagos calendar period (weeks from Monday). ' +
+      '`sort` ranks the whole list by one of them, most first.',
   })
   @ApiQuery({ name: 'status', enum: SellerStatus, required: false })
   @ApiQuery({ name: 'page', required: false, type: Number })
   @ApiQuery({ name: 'limit', required: false, type: Number })
+  @ApiQuery({
+    name: 'sort',
+    required: false,
+    enum: ['today', 'week', 'month', 'allTime'],
+    description:
+      'Rank by orders in this period. Omitted: newest vendors first.',
+  })
   @ApiResponse({ status: 200, description: 'Paginated vendor list' })
   getVendors(
     @Query('status') status?: SellerStatus,
     @Query('page') page?: number,
     @Query('limit') limit?: number,
+    @Query('sort') sort?: string,
   ) {
-    return this.adminService.getVendors({ status, page, limit });
+    return this.adminService.getVendors({
+      status,
+      page,
+      limit,
+      // Anything else is ignored rather than an error: the list still loads, unranked.
+      sort: VENDOR_SORTS.includes(sort as VendorOrderSort)
+        ? (sort as VendorOrderSort)
+        : undefined,
+    });
   }
 
   @Get('vendors/:id')
