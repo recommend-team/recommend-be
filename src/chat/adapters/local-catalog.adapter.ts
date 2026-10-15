@@ -1,6 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Brackets, In, Repository } from 'typeorm';
+import { Brackets, In, Repository, type WhereExpressionBuilder } from 'typeorm';
 import { User } from '../../modules/auth/entities/auth.entity';
 import { Product } from '../../modules/products/entities/product.entity';
 import { Role } from '../../common/enums/roles.enum';
@@ -146,18 +146,31 @@ export class LocalCatalogAdapter implements CatalogPort {
     // Every word must appear, in either field, but not necessarily adjacently. A single
     // contiguous LIKE would miss "phone charger" against "iPhone Fast Charger 20W" and
     // "chicken rice" against "Jollof Rice with Chicken" — both things buyers type.
-    tokenise(query.text).forEach((token, index) => {
-      const key = `t${index}`;
-      qb.andWhere(
-        new Brackets((where) => {
-          where
-            .where(`product.name ILIKE :${key}`, { [key]: `%${token}%` })
-            .orWhere(`product.description ILIKE :${key}`, {
-              [key]: `%${token}%`,
+    // With `matchAny`, one word is enough: the close matches offered when that finds
+    // nothing.
+    const tokens = tokenise(query.text);
+    const matches = (where: WhereExpressionBuilder, token: string, i: number) =>
+      where.orWhere(
+        new Brackets((field) => {
+          field
+            .where(`product.name ILIKE :t${i}`, { [`t${i}`]: `%${token}%` })
+            .orWhere(`product.description ILIKE :t${i}`, {
+              [`t${i}`]: `%${token}%`,
             });
         }),
       );
-    });
+
+    if (query.matchAny && tokens.length > 0) {
+      qb.andWhere(
+        new Brackets((where) => {
+          tokens.forEach((token, i) => matches(where, token, i));
+        }),
+      );
+    } else {
+      tokens.forEach((token, i) => {
+        qb.andWhere(new Brackets((where) => matches(where, token, i)));
+      });
+    }
 
     if (query.categories?.length) {
       qb.andWhere('vendor.businessCategory IN (:...categories)', {
@@ -224,9 +237,17 @@ function tokenise(text: string | undefined, maxTokens = 6): string[] {
     .replace(/[%_]/g, ' ')
     .split(/\s+/)
     .map((token) => token.trim())
-    .filter((token) => token.length > 1)
+    .filter(
+      (token) => token.length > 1 && !JOINING_WORDS.has(token.toLowerCase()),
+    )
     .slice(0, maxTokens);
 }
+
+/**
+ * Words that join what a buyer wants rather than name it. Required to match, "rice and
+ * beans" found nothing unless an item's name said "and" — "Rice & Beans" did not.
+ */
+const JOINING_WORDS = new Set(['and', 'with', 'or', 'of', 'the', 'some']);
 
 function toVendorSummary(vendor: User): VendorSummary {
   return {

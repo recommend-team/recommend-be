@@ -37,7 +37,11 @@ const product = (over: Partial<Record<string, unknown>> = {}) => ({
 describe('DiscoveryService (keyword fallback)', () => {
   let service: DiscoveryService;
   let catalog: { searchProducts: jest.Mock; searchVendors: jest.Mock };
-  let locations: { searchAreas: jest.Mock; listServedAreas: jest.Mock };
+  let locations: {
+    searchAreas: jest.Mock;
+    listServedAreas: jest.Mock;
+    getAreaById: jest.Mock;
+  };
   let ordering: {
     listOrders: jest.Mock;
     deliveryFeeFor: jest.Mock;
@@ -52,6 +56,7 @@ describe('DiscoveryService (keyword fallback)', () => {
     locations = {
       searchAreas: jest.fn().mockResolvedValue([]),
       listServedAreas: jest.fn().mockResolvedValue([YABA]),
+      getAreaById: jest.fn().mockResolvedValue(null),
     };
     ordering = {
       listOrders: jest.fn().mockResolvedValue([]),
@@ -409,7 +414,7 @@ describe('DiscoveryService (keyword fallback)', () => {
     });
 
     expect(result.messages[0].payload).toBeUndefined();
-    expect(result.messages[0].text).toContain('could not find');
+    expect(result.messages[0].text).toContain("couldn't find");
   });
 
   it('never states a price in its own prose', async () => {

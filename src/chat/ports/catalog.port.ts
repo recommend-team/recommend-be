@@ -44,6 +44,12 @@ export interface VendorSearchQuery {
 
 export interface ProductSearchQuery {
   text?: string;
+  /**
+   * Match items with *any* of the words rather than all of them — "rice and beans"
+   * then finds Jollof Rice and Beans & Plantain. For close matches when the exact search
+   * found nothing, never for the first search.
+   */
+  matchAny?: boolean;
   vendorId?: string;
   areaId?: string;
   categories?: string[];

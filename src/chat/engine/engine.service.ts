@@ -470,6 +470,7 @@ export class EngineService {
       signedIn: !!conversation.accountId,
       orderReferences: conversation.context?.orderReferences ?? [],
       history,
+      conversationId: conversation.id,
     });
 
     // Remember where the buyer is so we never ask twice.

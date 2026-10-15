@@ -1,4 +1,4 @@
-import { Inject, Injectable, Logger } from '@nestjs/common';
+import { Inject, Injectable, Logger, Optional } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import OpenAI from 'openai';
 import type {
@@ -30,10 +30,15 @@ import { buildDiscoveryPrompt } from './prompt';
 import {
   DISCOVERY_TOOLS,
   ToolHarvest,
+  UnmetSearchDraft,
   emptyHarvest,
   executeTool,
 } from './tools';
+import { UnmetSearchService } from './unmet-search.service';
 import { enforcePriceIntegrity } from './price-guard';
+import { alternativesLine, findAlternatives } from './alternatives';
+import { searchWithDishNames } from './dish-names';
+import { stripCardEcho } from './card-echo';
 import {
   areaChoicesPayload,
   productListPayload,
@@ -54,6 +59,8 @@ export interface DiscoveryRequest {
   orderReferences?: string[];
   /** Recent turns, oldest first. Trimmed to the configured window. */
   history: ChatMessage[];
+  /** Whose search this is, for the unmet-search log. */
+  conversationId?: string;
 }
 
 /** How long the covered areas are reused before being read again. */
@@ -69,6 +76,8 @@ export interface DiscoveryResult {
   handover: string | null;
   /** The buyer asked for a person in so many words — hand over without asking first. */
   buyerAskedForPerson: boolean;
+  /** Searches with no exact match, and what was offered instead. */
+  unmet?: UnmetSearchDraft[];
 }
 
 @Injectable()
@@ -86,6 +95,7 @@ export class DiscoveryService {
     @Inject(CATALOG_PORT) private readonly catalog: CatalogPort,
     @Inject(LOCATION_PORT) private readonly locations: LocationPort,
     @Inject(ORDERING_PORT) private readonly ordering: OrderingPort,
+    @Optional() private readonly unmetSearches?: UnmetSearchService,
   ) {
     const apiKey = this.configService.get<string>('openai.apiKey');
     this.model =
@@ -117,6 +127,17 @@ export class DiscoveryService {
   }
 
   async discover(request: DiscoveryRequest): Promise<DiscoveryResult> {
+    const result = await this.discoverInner(request);
+    // Recorded without holding up the reply; the log must never cost the buyer an answer.
+    if (result.unmet?.length) {
+      void this.unmetSearches?.record(result.unmet, request.conversationId);
+    }
+    return result;
+  }
+
+  private async discoverInner(
+    request: DiscoveryRequest,
+  ): Promise<DiscoveryResult> {
     if (!this.client) {
       return this.keywordFallback(request, false);
     }
@@ -462,8 +483,9 @@ export class DiscoveryService {
       return this.whoIsNear(areaId, areas, harvest, modelFailed);
     }
 
-    const products = await this.catalog.searchProducts({
-      text: query || undefined,
+    // In the buyer's words, then in vendors' — "ewa agoyin" is on menus as beans.
+    const products = await searchWithDishNames(this.catalog, {
+      text: query,
       areaId: areaId ?? undefined,
     });
     harvest.products.push(...products);
@@ -476,11 +498,39 @@ export class DiscoveryService {
     const unclear = looksUnclear(query);
 
     if (products.length === 0 && !asked && !unclear) {
+      // A vendor by that name — "Mama Put" — is still an exact answer.
       const vendors = await this.catalog.searchVendors({
         text: query || undefined,
         areaId: areaId ?? undefined,
       });
       harvest.vendors.push(...vendors);
+    }
+
+    if (
+      harvest.products.length === 0 &&
+      harvest.vendors.length === 0 &&
+      !asked &&
+      !unclear
+    ) {
+      // Nothing exact: the nearest thing that is available, rather than a dead end.
+      const found = await findAlternatives(this.catalog, {
+        text: query,
+        areaId,
+      });
+      harvest.unmet.push({ query, areaId, alternatives: found.kind });
+      harvest.products.push(...found.products);
+      harvest.prices.push(...found.products.map((product) => product.price));
+      harvest.vendors.push(...found.vendors);
+
+      const place = areaId
+        ? (areas.find((area) => area.id === areaId)?.name ??
+          (await this.locations.getAreaById(areaId))?.name ??
+          null)
+        : null;
+      return this.assemble(alternativesLine(found, query, place), harvest, {
+        usedFallback: true,
+        modelFailed,
+      });
     }
 
     const reply =
@@ -490,9 +540,7 @@ export class DiscoveryService {
           ? 'I could not match that exactly, but these vendors are near you:'
           : asked
             ? NOT_SURE
-            : unclear
-              ? DID_NOT_CATCH
-              : `I could not find anything matching "${query || request.text}". Try another search, or tell me which area you're in.`;
+            : DID_NOT_CATCH;
 
     return this.assemble(reply, harvest, { usedFallback: true, modelFailed });
   }
@@ -628,12 +676,14 @@ export class DiscoveryService {
       );
     }
 
+    const hasCards = harvest.products.length > 0 || harvest.vendors.length > 0;
     let text = guarded.text.trim();
+    // The cards show the items; the model's own list of them only repeats it.
+    if (hasCards && !usedFallback) text = stripCardEcho(text);
     if (!text) {
-      text =
-        harvest.products.length > 0 || harvest.vendors.length > 0
-          ? "Here's what I found:"
-          : 'Let me know what you are looking for and roughly where you are.';
+      text = hasCards
+        ? "Here's what I found:"
+        : 'Let me know what you are looking for and roughly where you are.';
     }
 
     const messages: OutboundMessage[] = [];
@@ -662,6 +712,7 @@ export class DiscoveryService {
         harvest.vendors.length === 0,
       handover: harvest.handoverReason,
       buyerAskedForPerson: harvest.buyerAskedForPerson,
+      unmet: harvest.unmet,
     };
   }
 

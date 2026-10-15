@@ -9,6 +9,12 @@ import type { OrderingPort } from '../../ports/ordering.port';
 import { orderForModel, orderPrices } from './my-orders';
 import { sanitizeUntrusted } from './sanitize';
 import { categoriesFor } from './synonyms';
+import {
+  AlternativeKind,
+  Alternatives,
+  findAlternatives,
+} from './alternatives';
+import { searchWithDishNames } from './dish-names';
 
 export const DISCOVERY_TOOLS = [
   {
@@ -151,6 +157,14 @@ export interface ToolHarvest {
    * something when it is true — small talk searches nothing.
    */
   searched: boolean;
+  /** Searches with no exact match this turn, and what was offered instead — for the log. */
+  unmet: UnmetSearchDraft[];
+}
+
+export interface UnmetSearchDraft {
+  query: string;
+  areaId: string | null;
+  alternatives: AlternativeKind;
 }
 
 export function emptyHarvest(): ToolHarvest {
@@ -163,6 +177,7 @@ export function emptyHarvest(): ToolHarvest {
     handoverReason: null,
     buyerAskedForPerson: false,
     searched: false,
+    unmet: [],
   };
 }
 
@@ -218,26 +233,32 @@ export async function executeTool(
     case 'search_products': {
       harvest.searched = true;
       const query = typeof args.query === 'string' ? args.query : '';
-      let products = await context.catalog.searchProducts({
+      // In the buyer's words, then in vendors' — "ewa agoyin" is on menus as beans.
+      const products = await searchWithDishNames(context.catalog, {
         text: query,
         areaId,
       });
 
-      if (products.length === 0) {
-        const categories = categoriesFor(query);
-        if (categories.length > 0) {
-          products = await context.catalog.searchProducts({
-            categories,
-            areaId,
-          });
-        }
+      if (products.length > 0) {
+        collectProducts(products, harvest);
+        return JSON.stringify(products.map(forModel));
       }
 
-      collectProducts(products, harvest);
+      // Nothing exact. Offer the nearest thing that is available rather than a dead end,
+      // and tell the model plainly that it is not what was asked for.
+      const found = await findAlternatives(context.catalog, {
+        text: query,
+        areaId,
+      });
+      harvest.unmet.push({
+        query,
+        areaId: areaId ?? null,
+        alternatives: found.kind,
+      });
+      collectProducts(found.products, harvest);
+      harvest.vendors.push(...found.vendors);
 
-      return products.length === 0
-        ? 'Nothing available matching that.'
-        : JSON.stringify(products.map(forModel));
+      return alternativesForModel(query, found);
     }
 
     case 'search_vendors': {
@@ -351,6 +372,47 @@ function collectProducts(
 ): void {
   harvest.products.push(...products);
   harvest.prices.push(...products.map((product) => product.price));
+}
+
+/**
+ * What the model is told when nothing matched exactly: that it did not, and what is
+ * being offered instead — so it says both, in that order, and never passes an
+ * alternative off as the thing asked for.
+ */
+function alternativesForModel(query: string, found: Alternatives): string {
+  const asked = sanitizeUntrusted(query, 80);
+
+  switch (found.kind) {
+    case 'similar':
+    case 'category':
+      return JSON.stringify({
+        exactMatch: false,
+        note:
+          `Nothing matches "${asked}" exactly. These are the closest available ` +
+          (found.kind === 'similar'
+            ? 'items (sharing some of the words). '
+            : `items of the same kind (${found.category ?? 'similar'}). `) +
+          'Say first that you could not find exactly what they asked for, then that ' +
+          'these are close. They are shown as cards.',
+        alternatives: found.products.map(forModel),
+      });
+    case 'vendors':
+      return JSON.stringify({
+        exactMatch: false,
+        note:
+          `Nothing matches "${asked}" exactly, and no similar items either. These ` +
+          'vendors serve the area. Say first that you could not find it, then suggest ' +
+          'they tap a vendor to see what they have. They are shown as cards.',
+        vendors: found.vendors.map((vendor) => ({
+          id: vendor.id,
+          name: sanitizeUntrusted(vendor.name, 80),
+          category: sanitizeUntrusted(vendor.category, 60),
+          isOpen: vendor.isOpen,
+        })),
+      });
+    case 'none':
+      return 'Nothing available matching that, and nothing similar nearby.';
+  }
 }
 
 /**

@@ -11,6 +11,8 @@ import { SessionService } from './session/session.service';
 import { ChatRateLimitService } from './session/rate-limit.service';
 import { EngineService } from './engine/engine.service';
 import { DeliveryEtaNoticeService } from './engine/delivery-eta-notice.service';
+import { UnmetSearch } from './engine/discovery/unmet-search.entity';
+import { UnmetSearchService } from './engine/discovery/unmet-search.service';
 import { HandoverService } from './engine/handover.service';
 import { AdminOrderService } from './engine/admin-order.service';
 import { AdminCatalogService } from './engine/admin-catalog.service';
@@ -65,6 +67,7 @@ import { WelcomeEmailService } from '../common/services/welcome-email.service';
       Product,
       Area,
       Checkout,
+      UnmetSearch,
     ]),
     JwtModule.register({}),
     OrdersModule,
@@ -90,6 +93,7 @@ import { WelcomeEmailService } from '../common/services/welcome-email.service';
     PwaGateway,
     AdminChatGateway,
     DiscoveryService,
+    UnmetSearchService,
     { provide: CATALOG_PORT, useClass: LocalCatalogAdapter },
     { provide: LOCATION_PORT, useClass: LocalLocationAdapter },
     { provide: ORDERING_PORT, useClass: LocalOrderingAdapter },
