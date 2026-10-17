@@ -29,6 +29,7 @@ import {
   VENDOR_ORDER_READY_EVENT,
   VendorOrderReadyEvent,
 } from '../../common/events/vendor-order-ready.event';
+import { toOrderLines } from './order-lines';
 
 /**
  * How far along the lifecycle a status is. Only these participate in the derivation;
@@ -463,9 +464,9 @@ export class OrderLifecycleService {
         from,
         to,
         (checkout.orders ?? []).flatMap((order) =>
-          (order.items ?? []).map((item) => ({
-            name: item.productName,
-            quantity: item.quantity,
+          toOrderLines(order.items ?? []).map((line) => ({
+            name: line.name,
+            quantity: line.quantity,
           })),
         ),
         (checkout.orders ?? [])

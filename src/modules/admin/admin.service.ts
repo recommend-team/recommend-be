@@ -39,6 +39,7 @@ import { Withdrawal } from '../wallet/entities/withdrawal.entity';
 import { WalletService } from '../wallet/wallet.service';
 import { CheckoutSource } from '../../common/enums/checkout-source.enum';
 import { DISPATCHED_AT_SQL } from '../orders/stuck-delivery.service';
+import { toOrderLines, type OrderLine } from '../orders/order-lines';
 
 export interface PaginatedResult<T> {
   items: T[];
@@ -148,10 +149,16 @@ function toTransactionSummary(
       status: order.status,
       subtotal: Number(order.totalAmount),
       vendorAmount: Number(order.vendorAmount),
-      items: (order.items ?? []).map((item) => ({
-        name: item.productName,
-        quantity: item.quantity,
-        lineTotal: Number(item.lineTotal),
+      items: toOrderLines(order.items ?? []).map((line) => ({
+        name: line.name,
+        quantity: line.quantity,
+        lineTotal: line.lineTotal,
+        productName: line.productName,
+        portions: line.portions,
+        packs: line.packs,
+        unit: line.unit,
+        choices: line.choices,
+        extras: line.extras,
       })),
     })),
   };
@@ -723,7 +730,7 @@ export class AdminService {
    */
   async getBuyerDetail(id: string): Promise<{
     buyer: Partial<User>;
-    orders: Order[];
+    orders: (Order & { lines: OrderLine[] })[];
     orderCount: number;
   }> {
     const buyer = await this.usersRepo.findOne({
@@ -754,7 +761,10 @@ export class AdminService {
 
     return {
       buyer: this.stripSensitive(buyer),
-      orders,
+      orders: orders.map((order) => ({
+        ...order,
+        lines: toOrderLines(order.items ?? []),
+      })),
       orderCount,
     };
   }
@@ -832,7 +842,7 @@ export class AdminService {
 
     const [items, total] = await this.ordersRepo.findAndCount({
       where,
-      relations: ['items', 'vendor', 'checkout'],
+      relations: ['items', 'items.choices', 'vendor', 'checkout'],
       select: {
         id: true,
         buyerName: true,
@@ -855,6 +865,12 @@ export class AdminService {
           unitPrice: true,
           quantity: true,
           lineTotal: true,
+          // What `toOrderLines` needs to read packs back whole.
+          packs: true,
+          unit: true,
+          isAddOn: true,
+          parentItemId: true,
+          choices: { id: true, groupName: true, optionName: true, priceDelta: true },
         },
         // The payment reference now lives on the parent checkout.
         checkout: {
@@ -875,7 +891,17 @@ export class AdminService {
       order: { createdAt: 'DESC' },
     });
 
-    return { items, total, page, limit, totalPages: Math.ceil(total / limit) };
+    return {
+      // Each order's items as built — dishes with their packs, choices and extras.
+      items: items.map((order) => ({
+        ...order,
+        lines: toOrderLines(order.items ?? []),
+      })),
+      total,
+      page,
+      limit,
+      totalPages: Math.ceil(total / limit),
+    };
   }
 
   // ─── Transactions ──────────────────────────────────────────────────────────

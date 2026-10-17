@@ -20,11 +20,27 @@ export interface CheckoutPaidVendorOrder {
   /** What this vendor is owed. */
   vendorAmount: number;
   /** Prices are the snapshots taken at purchase, not today's catalogue. */
+  /**
+   * One per dish as built — extras and choices folded into it (`toOrderLines`), so
+   * "${quantity} × ${name}" reads right everywhere. The structured parts are there for
+   * anything that lays a pack out in full.
+   */
   items: {
     name: string;
     quantity: number;
     unitPrice: number;
     lineTotal: number;
+    productName?: string;
+    portions?: number;
+    packs?: number;
+    unit?: string | null;
+    choices?: { group: string; option: string; priceDelta: number }[];
+    extras?: {
+      name: string;
+      quantity: number;
+      unitPrice: number;
+      lineTotal: number;
+    }[];
   }[];
 }
 

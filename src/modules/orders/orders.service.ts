@@ -11,6 +11,7 @@ import {
 } from '../../common/events/checkout-paid.event';
 import { PaymentsService } from '../payments/payments.service';
 import { liveHandoverCode } from './handover-code';
+import { toOrderLines, type OrderLine } from './order-lines';
 
 export interface PaginatedOrders {
   items: Order[];
@@ -176,12 +177,7 @@ export class OrdersService {
             vendorName: order.vendor?.businessName ?? null,
             subtotal: Number(order.totalAmount),
             vendorAmount: Number(order.vendorAmount),
-            items: (order.items ?? []).map((item) => ({
-              name: item.productName,
-              quantity: item.quantity,
-              unitPrice: Number(item.unitPrice),
-              lineTotal: Number(item.lineTotal),
-            })),
+            items: toOrderLines(order.items ?? []).map(eventLine),
           })),
           paidAt,
           checkout.source,
@@ -218,7 +214,7 @@ export class OrdersService {
     deliveryCode: string | null;
     vendors: {
       status: OrderStatus;
-      items: { name: string; quantity: number; unitPrice: number }[];
+      items: OrderStatusLine[];
     }[];
   }> {
     const checkout = await this.checkoutsRepository.findOne({
@@ -243,10 +239,17 @@ export class OrdersService {
       deliveryCode: liveHandoverCode(checkout),
       vendors: (checkout.orders ?? []).map((order) => ({
         status: order.status,
-        items: (order.items ?? []).map((item) => ({
-          name: item.productName,
-          quantity: item.quantity,
-          unitPrice: Number(item.unitPrice),
+        items: toOrderLines(order.items ?? []).map((line) => ({
+          name: line.name,
+          quantity: line.quantity,
+          unitPrice: line.unitPrice,
+          lineTotal: line.lineTotal,
+          productName: line.productName,
+          portions: line.portions,
+          packs: line.packs,
+          unit: line.unit,
+          choices: line.choices,
+          extras: line.extras,
         })),
       })),
     };
@@ -276,7 +279,11 @@ export class OrdersService {
     return {
       message: 'Orders retrieved successfully',
       data: {
-        items,
+        // Each order also read as packs — its dishes with their extras and choices.
+        items: items.map((order) => ({
+          ...order,
+          lines: toOrderLines(order.items ?? []),
+        })),
         total,
         page,
         limit,
@@ -346,4 +353,34 @@ export class OrdersService {
       },
     };
   }
+}
+
+/** A line on the buyer's order page — what was bought, with any pack laid out. */
+export interface OrderStatusLine {
+  name: string;
+  quantity: number;
+  unitPrice: number;
+  lineTotal: number;
+  productName: string;
+  portions: number;
+  packs: number;
+  unit: string | null;
+  choices: OrderLine['choices'];
+  extras: OrderLine['extras'];
+}
+
+/** A line as the paid event carries it. */
+function eventLine(line: OrderLine) {
+  return {
+    name: line.name,
+    quantity: line.quantity,
+    unitPrice: line.unitPrice,
+    lineTotal: line.lineTotal,
+    productName: line.productName,
+    portions: line.portions,
+    packs: line.packs,
+    unit: line.unit,
+    choices: line.choices,
+    extras: line.extras,
+  };
 }

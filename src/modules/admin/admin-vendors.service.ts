@@ -64,6 +64,10 @@ const FIELD_LABELS: Record<string, string> = {
   imageUrl: 'photo',
   isAvailable: 'available',
   isAddOn: 'extra',
+  unit: 'unit',
+  extraIds: 'extras',
+  dishIds: 'dishes it goes on',
+  choices: 'choices',
 };
 
 function labelled(fields: string[]): string {

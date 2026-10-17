@@ -21,6 +21,7 @@ import {
 } from './dto/update-kyc.dto';
 import { LocationsService } from '../locations/locations.service';
 import { uniqueSlug } from '../../common/utils/slug.util';
+import { toOrderLines } from '../orders/order-lines';
 
 export interface VendorProfileResponse {
   id: string;
@@ -268,6 +269,8 @@ export class SellersService {
       const rider = order.checkout?.rider;
       return {
         ...order,
+        // The order as built: each dish with its portions, packs, extras and choices.
+        lines: toOrderLines(order.items ?? []),
         checkout: order.checkout
           ? {
               id: order.checkout.id,
