@@ -66,6 +66,7 @@ describe('a checkout from the storefront', () => {
     service = new CheckoutService(
       { find: jest.fn().mockResolvedValue([product()]) } as never,
       { delete: jest.fn() } as never,
+      { find: jest.fn().mockResolvedValue([]) } as never,
       payments as never,
       {
         get: jest.fn((key: string) => {

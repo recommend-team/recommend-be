@@ -2,21 +2,76 @@ import { z } from 'zod';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { FulfillmentType } from '../../../common/enums/fulfillment-type.enum';
 
-export const checkoutLineSchema = z.object({
+/** Limits on one pack (PRODUCT_OPTIONS_PLAN.md). */
+export const MAX_PORTIONS_PER_PACK = 10;
+export const MAX_EXTRA_PER_PACK = 5;
+
+/** An extra added to a dish: how many in each pack. */
+export const checkoutExtraSchema = z.object({
   productId: z.string().uuid('productId must be a valid UUID'),
   quantity: z
-    .number({ required_error: 'Quantity is required' })
-    .int('Quantity must be a whole number')
-    .min(1, 'Quantity must be at least 1')
-    .max(50, 'Quantity must be 50 or fewer'),
-  /**
-   * What the client last saw this item cost. Optional, and never used for pricing —
-   * the server always recomputes from the database. Supplying it only lets us tell
-   * the buyer "this changed since you added it" instead of silently charging a
-   * different amount.
-   */
+    .number()
+    .int()
+    .min(1)
+    .max(
+      MAX_EXTRA_PER_PACK,
+      `At most ${MAX_EXTRA_PER_PACK} of each extra in a pack`,
+    ),
   expectedUnitPrice: z.number().nonnegative().optional(),
 });
+
+/** What the buyer picked for one of the dish's choices. */
+export const checkoutChoiceSchema = z.object({
+  groupId: z.string().uuid(),
+  optionIds: z.array(z.string().uuid()).min(1).max(10),
+});
+
+export const checkoutLineSchema = z
+  .object({
+    productId: z.string().uuid('productId must be a valid UUID'),
+    quantity: z
+      .number({ required_error: 'Quantity is required' })
+      .int('Quantity must be a whole number')
+      .min(1, 'Quantity must be at least 1')
+      .max(50, 'Quantity must be 50 or fewer'),
+    /**
+     * What the client last saw this item cost. Optional, and never used for pricing —
+     * the server always recomputes from the database. Supplying it only lets us tell
+     * the buyer "this changed since you added it" instead of silently charging a
+     * different amount.
+     */
+    expectedUnitPrice: z.number().nonnegative().optional(),
+    /**
+     * A dish built as a pack: `quantity` is portions per pack, `packs` how many identical
+     * packs, `extras` and `choices` what goes in each. Omitted by older clients, whose
+     * lines are read the old way (extras as their own lines, attached to a dish).
+     */
+    packs: z.number().int().min(1).max(50, 'At most 50 packs').optional(),
+    extras: z.array(checkoutExtraSchema).max(20).optional(),
+    choices: z.array(checkoutChoiceSchema).max(10).optional(),
+  })
+  .superRefine((line, ctx) => {
+    if (isPackLine(line) && line.quantity > MAX_PORTIONS_PER_PACK) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['quantity'],
+        message: `At most ${MAX_PORTIONS_PER_PACK} portions in a pack`,
+      });
+    }
+  });
+
+/** Built as a pack (the new shape), rather than a plain line from an older client. */
+export function isPackLine(line: {
+  packs?: number;
+  extras?: unknown[];
+  choices?: unknown[];
+}): boolean {
+  return (
+    line.packs !== undefined ||
+    (line.extras?.length ?? 0) > 0 ||
+    (line.choices?.length ?? 0) > 0
+  );
+}
 
 export const createCheckoutSchema = z
   .object({

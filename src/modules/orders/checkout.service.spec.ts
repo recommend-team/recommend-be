@@ -1,6 +1,7 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { ConfigService } from '@nestjs/config';
 import { getRepositoryToken } from '@nestjs/typeorm';
+import { ProductChoiceGroup } from '../products/entities/product-choice.entity';
 import { DataSource } from 'typeorm';
 import { ConflictException } from '@nestjs/common';
 import { CheckoutService } from './checkout.service';
@@ -119,12 +120,18 @@ describe('CheckoutService', () => {
         CheckoutService,
         { provide: getRepositoryToken(Product), useValue: products },
         { provide: getRepositoryToken(Checkout), useValue: checkouts },
+        {
+          provide: getRepositoryToken(ProductChoiceGroup),
+          useValue: { find: jest.fn().mockResolvedValue([]) },
+        },
         { provide: PaymentsService, useValue: payments },
         { provide: ConfigService, useValue: config },
         {
           provide: DataSource,
           useValue: {
             transaction: (cb: (m: unknown) => Promise<unknown>) => cb(manager),
+            // No dish has extras ticked unless a test says so.
+            query: jest.fn().mockResolvedValue([]),
           },
         },
       ],
