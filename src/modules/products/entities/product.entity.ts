@@ -4,10 +4,27 @@ import {
   PrimaryGeneratedColumn,
   ManyToOne,
   JoinColumn,
+  JoinTable,
+  ManyToMany,
+  OneToMany,
   CreateDateColumn,
   UpdateDateColumn,
 } from 'typeorm';
 import { User } from '../../auth/entities/auth.entity';
+import { ProductChoiceGroup } from './product-choice.entity';
+
+/** What the price is for — "₦1,000 per portion". Empty shows no unit. */
+export const PRODUCT_UNITS = [
+  'portion',
+  'plate',
+  'piece',
+  'pack',
+  'wrap',
+  'bottle',
+  'bowl',
+  'cup',
+] as const;
+export type ProductUnit = (typeof PRODUCT_UNITS)[number];
 
 @Entity('products')
 export class Product {
@@ -42,6 +59,25 @@ export class Product {
    */
   @Column({ type: 'boolean', default: false })
   isAddOn!: boolean;
+
+  @Column({ type: 'varchar', length: 16, nullable: true })
+  unit!: ProductUnit | null;
+
+  /**
+   * The vendor's extras that go with this dish — ticked on the dish, from the vendor's
+   * one extras list. Only on a dish (an extra has none of its own).
+   */
+  @ManyToMany(() => Product)
+  @JoinTable({
+    name: 'product_extras',
+    joinColumn: { name: 'productId', referencedColumnName: 'id' },
+    inverseJoinColumn: { name: 'extraId', referencedColumnName: 'id' },
+  })
+  extras?: Product[];
+
+  /** Questions on this dish — "Choose your protein". */
+  @OneToMany(() => ProductChoiceGroup, (group) => group.product)
+  choiceGroups?: ProductChoiceGroup[];
 
   @CreateDateColumn({ type: 'timestamptz' })
   createdAt!: Date;
