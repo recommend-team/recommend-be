@@ -20,6 +20,7 @@ import {
   ApiQuery,
 } from '@nestjs/swagger';
 import { z } from 'zod';
+import { cartLineSchema, type CartLineInput } from '../cart-line.schema';
 import { HandoverService } from '../../engine/handover.service';
 import { AdminOrderService } from '../../engine/admin-order.service';
 import { AdminCatalogService } from '../../engine/admin-catalog.service';
@@ -34,15 +35,8 @@ const messageSchema = z.object({
 });
 
 const typingSchema = z.object({ isTyping: z.boolean() });
-const orderLineSchema = z.object({
-  productId: z.string().uuid('productId must be a valid UUID'),
-  quantity: z
-    .number({ required_error: 'Quantity is required' })
-    .int('Quantity must be a whole number')
-    .min(1, 'Quantity must be at least 1')
-    .max(50, 'Quantity must be 50 or fewer'),
-  expectedUnitPrice: z.number().nonnegative().optional(),
-});
+/** A line of the admin's basket — packs built as a buyer builds them. */
+const orderLineSchema = cartLineSchema;
 
 /**
  * Every buyer detail is optional: the conversation usually knows them already, and the
@@ -92,7 +86,7 @@ class TypingDto {
 }
 
 class AdminOrderDto {
-  items!: { productId: string; quantity: number; expectedUnitPrice?: number }[];
+  items!: CartLineInput[];
   buyerName?: string;
   buyerPhone?: string;
   buyerEmail?: string;

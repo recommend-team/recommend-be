@@ -15,6 +15,17 @@ export interface CartLine {
    * tell the buyer "this changed since you added it" instead of quietly charging more.
    */
   expectedUnitPrice?: number;
+  /**
+   * A dish built as a pack (PRODUCT_OPTIONS_PLAN.md): `quantity` is portions per pack,
+   * `packs` identical packs, with these extras and choices in each. Absent from older apps.
+   */
+  packs?: number;
+  extras?: {
+    productId: string;
+    quantity: number;
+    expectedUnitPrice?: number;
+  }[];
+  choices?: { groupId: string; optionIds: string[] }[];
 }
 
 export interface PlaceCheckoutInput {
@@ -51,6 +62,9 @@ export interface CartRejection {
     reason: string;
     expectedUnitPrice?: number;
     currentUnitPrice?: number;
+    dishName?: string;
+    groupName?: string;
+    optionName?: string | null;
   }[];
 }
 
@@ -84,6 +98,19 @@ export interface BuyerOrderSummary {
   }[];
 }
 
+export interface CartQuote {
+  /** One per dish as built — "Rice and beans (2 portions, with Beef ×2)". */
+  lines: {
+    name: string;
+    vendorName: string | null;
+    /** Packs for a built dish; the count otherwise. */
+    quantity: number;
+    unitPrice: number;
+    lineTotal: number;
+  }[];
+  goodsTotal: number;
+}
+
 export interface OrderingPort {
   /** Prices are recomputed server-side; anything the client sent is untrusted. */
   placeCheckout(input: PlaceCheckoutInput): Promise<PlacedCheckout>;
@@ -99,6 +126,13 @@ export interface OrderingPort {
 
   /** "I have it." The buyer's one transition. */
   completeOrder(reference: string): Promise<void>;
+
+  /**
+   * The cart priced exactly as `placeCheckout` will price it — packs, choices, extras —
+   * without placing it, so the summary the buyer agrees to is what they're charged.
+   * Null when it can't be priced right now (a changed cart is caught at checkout).
+   */
+  quoteCart(lines: CartLine[]): Promise<CartQuote | null>;
 
   deliveryFeeFor(fulfillmentType: 'PICKUP' | 'DELIVERY'): number;
 

@@ -11,11 +11,14 @@ import { FulfillmentType } from '../../common/enums/fulfillment-type.enum';
 import { liveHandoverCode } from '../../modules/orders/handover-code';
 import {
   BuyerOrderSummary,
+  CartLine,
+  CartQuote,
   CartRejection,
   OrderingPort,
   PlaceCheckoutInput,
   PlacedCheckout,
 } from '../ports/ordering.port';
+import { toOrderLines } from '../../modules/orders/order-lines';
 
 /**
  * Thrown when the cart no longer matches reality. The flow catches this and explains
@@ -47,6 +50,23 @@ export class LocalOrderingAdapter implements OrderingPort {
     return this.config?.get<number>('chat.deliveryEtaMinutes') ?? 30;
   }
 
+  async quoteCart(lines: CartLine[]): Promise<CartQuote | null> {
+    try {
+      return await this.checkoutService.quote(
+        lines.map((line) => ({
+          productId: line.productId,
+          quantity: line.quantity,
+          expectedUnitPrice: line.expectedUnitPrice,
+          packs: line.packs,
+          extras: line.extras,
+          choices: line.choices,
+        })),
+      );
+    } catch {
+      return null;
+    }
+  }
+
   deliveryFeeFor(fulfillmentType: 'PICKUP' | 'DELIVERY'): number {
     return this.checkoutService.deliveryFeeFor(
       fulfillmentType === 'DELIVERY'
@@ -67,6 +87,9 @@ export class LocalOrderingAdapter implements OrderingPort {
             productId: line.productId,
             quantity: line.quantity,
             expectedUnitPrice: line.expectedUnitPrice,
+            packs: line.packs,
+            extras: line.extras,
+            choices: line.choices,
           })),
           buyerName: input.buyerName,
           buyerPhone: input.buyerPhone,
@@ -159,10 +182,10 @@ export class LocalOrderingAdapter implements OrderingPort {
             ? (order.vendor?.businessAddress ?? null)
             : null,
         status: order.status,
-        items: (order.items ?? []).map((item) => ({
-          name: item.productName,
-          quantity: item.quantity,
-          lineTotal: Number(item.lineTotal),
+        items: toOrderLines(order.items ?? []).map((line) => ({
+          name: line.name,
+          quantity: line.quantity,
+          lineTotal: line.lineTotal,
         })),
       })),
     }));

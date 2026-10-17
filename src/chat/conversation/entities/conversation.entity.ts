@@ -21,6 +21,17 @@ export interface PendingCartLine {
   quantity: number;
   /** What the client last displayed. Only used to detect drift, never to price. */
   expectedUnitPrice?: number;
+  /**
+   * A dish built as a pack (PRODUCT_OPTIONS_PLAN.md): `quantity` is portions per pack,
+   * `packs` identical packs, with these extras and choices in each. Absent from older apps.
+   */
+  packs?: number;
+  extras?: {
+    productId: string;
+    quantity: number;
+    expectedUnitPrice?: number;
+  }[];
+  choices?: { groupId: string; optionIds: string[] }[];
 }
 
 export interface ConversationContext {
@@ -56,6 +67,10 @@ export interface ConversationContext {
   lastDeliveryAddress?: string;
   /** Add-ons were offered for the cart now being checked out — never offered twice. */
   addOnsOffered?: boolean;
+  /** The cart was built in the app, pack by pack — its extras are already chosen. */
+  cartBuilt?: boolean;
+  /** A dish's required choice being asked (SELECTING_ITEM): which cart line, which choice. */
+  choosing?: { line: number; groupId: string };
   /**
    * A delivery address being taken in steps, all within COLLECTING_ADDRESS: the buyer
    * is asked which area it is in (AREA), then for a landmark (LANDMARK). `text` is the

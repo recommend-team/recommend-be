@@ -19,7 +19,11 @@ import { ChatRateLimitService } from '../../session/rate-limit.service';
 import { allowedOrigins } from '../../../config/cors';
 import { BuyerPushService } from '../../engine/buyer-push.service';
 import { AccountService } from '../../account/account.service';
-import type { Conversation } from '../../conversation/entities/conversation.entity';
+import type {
+  Conversation,
+  PendingCartLine,
+} from '../../conversation/entities/conversation.entity';
+import { cartLineSchema, isPackLine } from '../cart-line.schema';
 
 /** Buyer-facing wording for each sign-in failure. The sheet shows it as it is. */
 const ACCOUNT_ERRORS: Record<string, string> = {
@@ -264,6 +268,9 @@ export class PwaGateway implements OnGatewayInit, OnGatewayConnection {
         productId?: string;
         quantity?: number;
         expectedUnitPrice?: number;
+        packs?: number;
+        extras?: unknown[];
+        choices?: unknown[];
       }[];
       text?: string;
     },
@@ -287,22 +294,39 @@ export class PwaGateway implements OnGatewayInit, OnGatewayConnection {
       return;
     }
 
-    const cart = (body?.items ?? [])
-      .filter(
-        (item) =>
-          typeof item?.productId === 'string' &&
-          Number.isInteger(item?.quantity) &&
-          (item.quantity ?? 0) > 0,
-      )
-      .slice(0, 50)
-      .map((item) => ({
-        productId: item.productId as string,
-        quantity: Math.min(50, item.quantity as number),
-        expectedUnitPrice:
-          typeof item.expectedUnitPrice === 'number'
-            ? item.expectedUnitPrice
-            : undefined,
-      }));
+    const cart: PendingCartLine[] = [];
+    for (const item of (body?.items ?? []).slice(0, 50)) {
+      if (item && isPackLine(item)) {
+        // A dish built as a pack is checked whole, with the same limits as checkout:
+        // dropping half of it quietly would bill the buyer for something they didn't build.
+        const parsed = cartLineSchema.safeParse(item);
+        if (!parsed.success) {
+          socket.emit('chat:error', {
+            code: 'INVALID_CART',
+            message:
+              parsed.error.issues[0]?.message ??
+              "Something in your cart isn't right. Check it and try again.",
+          });
+          return;
+        }
+        cart.push(parsed.data);
+        continue;
+      }
+      if (
+        typeof item?.productId === 'string' &&
+        Number.isInteger(item?.quantity) &&
+        (item.quantity ?? 0) > 0
+      ) {
+        cart.push({
+          productId: item.productId,
+          quantity: Math.min(50, item.quantity as number),
+          expectedUnitPrice:
+            typeof item.expectedUnitPrice === 'number'
+              ? item.expectedUnitPrice
+              : undefined,
+        });
+      }
+    }
 
     const conversation = await this.conversationService.findById(
       data.conversationId,
