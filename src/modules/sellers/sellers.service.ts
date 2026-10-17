@@ -2,7 +2,9 @@ import {
   Injectable,
   NotFoundException,
   BadRequestException,
+  Optional,
 } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { User } from '../auth/entities/auth.entity';
@@ -75,6 +77,7 @@ export class SellersService {
     @InjectRepository(Order)
     private readonly ordersRepository: Repository<Order>,
     private readonly locationsService: LocationsService,
+    @Optional() private readonly config?: ConfigService,
   ) {}
 
   // ─── Profile ───────────────────────────────────────────────────────────────
@@ -372,7 +375,12 @@ export class SellersService {
   }
 
   private buildProfileResponse(vendor: User): VendorProfileResponse {
-    const storefrontUrl = vendor.slug ? `/store/${vendor.slug}` : null;
+    // The whole link, ready to paste into a bio or a WhatsApp status — the website's
+    // address (`WEBSITE_URL`) plus the vendor's shop.
+    const websiteUrl = this.config?.get<string>('brand.websiteUrl') ?? '';
+    const storefrontUrl = vendor.slug
+      ? `${websiteUrl}/store/${vendor.slug}`
+      : null;
 
     return {
       id: vendor.id,

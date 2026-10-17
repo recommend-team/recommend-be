@@ -36,8 +36,8 @@ export interface StorefrontResponse {
   }[];
   /** What delivery costs, so the cart shows the true total before checkout. */
   deliveryFee: number;
-  /** Whether a buyer may collect instead (`PICKUP_ENABLED`). */
   pickupEnabled: boolean;
+  deliveryEtaMinutes: number;
 }
 
 export interface PaginatedResult<T> {
@@ -174,6 +174,8 @@ export class StoreService {
           100,
         pickupEnabled:
           this.config.get<boolean>('delivery.pickupEnabled') ?? false,
+        deliveryEtaMinutes:
+          this.config.get<number>('chat.deliveryEtaMinutes') ?? 30,
       },
     };
   }
