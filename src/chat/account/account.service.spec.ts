@@ -110,9 +110,7 @@ describe('AccountService', () => {
   });
 
   describe('the welcome email', () => {
-    const account = { id: 'account-1', email: 'ada@example.com' };
-
-    beforeEach(() => {
+    const signInAs = (account: Record<string, unknown>) => {
       codes.check.mockResolvedValue({ ok: true });
       manager.findOneOrFail
         .mockResolvedValueOnce(account)
@@ -120,9 +118,10 @@ describe('AccountService', () => {
           conversation({ id: 'mine', context: { profile: { name: 'Ada' } } }),
         );
       manager.findOne.mockResolvedValue(null);
-    });
+    };
 
     it('is sent, by name, when this sign-in made the account', async () => {
+      signInAs({ id: 'account-1', email: 'ada@example.com' });
       execute.mockResolvedValue({ raw: [{ id: 'account-1' }] });
 
       await service.verify('ada@example.com', '482916', 'mine');
@@ -131,11 +130,30 @@ describe('AccountService', () => {
     });
 
     it('is not sent again to an account that already existed', async () => {
+      signInAs({
+        id: 'account-1',
+        email: 'ada@example.com',
+        lastSignedInAt: new Date('2026-10-01'),
+      });
       execute.mockResolvedValue({ raw: [] });
 
       await service.verify('ada@example.com', '482916', 'mine');
 
       expect(email.sendWelcome).not.toHaveBeenCalled();
+    });
+
+    it('is sent on the first sign-in to an account made to hold a storefront order', async () => {
+      // Made when they paid on a vendor's page, never signed into until now.
+      signInAs({
+        id: 'account-1',
+        email: 'ada@example.com',
+        lastSignedInAt: null,
+      });
+      execute.mockResolvedValue({ raw: [] });
+
+      await service.verify('ada@example.com', '482916', 'mine');
+
+      expect(email.sendWelcome).toHaveBeenCalledWith('ada@example.com', 'Ada');
     });
   });
 

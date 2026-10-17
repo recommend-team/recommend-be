@@ -17,6 +17,7 @@ import { CreateCheckoutDto } from './dto/create-checkout.dto';
 import { OrderStatus } from '../../common/enums/order-status.enum';
 import { FulfillmentType } from '../../common/enums/fulfillment-type.enum';
 import { SellerStatus } from '../../common/enums/seller-status.enum';
+import { CheckoutSource } from '../../common/enums/checkout-source.enum';
 
 const FALLBACK_PLATFORM_FEE_RATE = 0.2;
 
@@ -108,7 +109,33 @@ export class CheckoutService {
   async createCheckout(
     dto: CreateCheckoutDto,
     createdByAdminId: string | null = null,
+    /** Where it is placed. Omitted: by an admin if `createdByAdminId` is set, else the chat. */
+    source: CheckoutSource = createdByAdminId
+      ? CheckoutSource.ADMIN
+      : CheckoutSource.CHAT,
   ): Promise<CheckoutResult> {
+    const storefront = source === CheckoutSource.STOREFRONT;
+
+    // A storefront buyer may never open the chat; email is how the receipt and the
+    // delivery code reach them, and how their order finds its way into the chat.
+    if (storefront && !dto.buyerEmail) {
+      throw new BadRequestException({
+        code: 'EMAIL_REQUIRED',
+        message:
+          'Please give an email — your receipt and delivery code go there.',
+      });
+    }
+    if (
+      storefront &&
+      dto.fulfillmentType === FulfillmentType.DELIVERY &&
+      !dto.areaId
+    ) {
+      throw new BadRequestException({
+        code: 'AREA_REQUIRED',
+        message: 'Please choose the area we are delivering to.',
+      });
+    }
+
     // Enforced here, where every checkout passes — chat, website and admin alike — so
     // no client can place a pickup order while pickup is switched off.
     if (
@@ -135,6 +162,12 @@ export class CheckoutService {
     }
 
     const grouped = this.groupByVendor(dto, products);
+
+    // Refused before payment, not discovered after it: the vendor must deliver there.
+    if (dto.areaId && dto.fulfillmentType === FulfillmentType.DELIVERY) {
+      await this.assertDeliversTo(dto.areaId, grouped, products);
+    }
+
     const goodsTotal = round2(
       [...grouped.values()].reduce((sum, group) => sum + group.subtotal, 0),
     );
@@ -151,7 +184,16 @@ export class CheckoutService {
       deliveryFee,
       totalAmount,
       createdByAdminId,
+      source,
     });
+
+    // A storefront buyer paying on Paystack's own page comes back to their order on the
+    // website. The chat pays in a popup and never leaves, so it needs no return address.
+    const websiteUrl = this.configService.get<string>('app.websiteUrl');
+    const callbackUrl =
+      storefront && websiteUrl
+        ? `${websiteUrl}/order/${encodeURIComponent(reference)}`
+        : undefined;
 
     let authorizationUrl: string;
     let accessCode: string;
@@ -165,7 +207,9 @@ export class CheckoutService {
           buyerName: dto.buyerName,
           buyerPhone: dto.buyerPhone,
           vendorCount: grouped.size,
+          source,
         },
+        callbackUrl,
       });
       authorizationUrl = payment.authorizationUrl;
       accessCode = payment.accessCode;
@@ -290,6 +334,40 @@ export class CheckoutService {
     return changes;
   }
 
+  /**
+   * Every vendor in the basket must deliver to the buyer's area. Refused with the
+   * vendors that do not, so the buyer can be told by name.
+   */
+  private async assertDeliversTo(
+    areaId: string,
+    grouped: Map<string, VendorGroup>,
+    products: Map<string, Product>,
+  ): Promise<void> {
+    const vendorIds = [...grouped.keys()];
+    const rows: { vendorId: string }[] = await this.dataSource.query(
+      `SELECT "vendorId" FROM vendor_service_areas
+        WHERE "areaId" = $1 AND "vendorId" = ANY($2::uuid[])`,
+      [areaId, vendorIds],
+    );
+    const serving = new Set(rows.map((row) => row.vendorId));
+
+    const notServing = vendorIds.filter((id) => !serving.has(id));
+    if (notServing.length === 0) return;
+
+    const names = notServing.map(
+      (id) =>
+        [...products.values()].find((product) => product.vendorId === id)
+          ?.vendor?.businessName ?? 'This vendor',
+    );
+    throw new BadRequestException({
+      code: 'AREA_NOT_SERVED',
+      message: `${names.join(' and ')} ${
+        names.length === 1 ? "doesn't" : "don't"
+      } deliver to that area. Please choose one of their delivery areas.`,
+      vendors: notServing,
+    });
+  }
+
   // ─── Grouping and money ─────────────────────────────────────────────────────
 
   private groupByVendor(
@@ -351,6 +429,7 @@ export class CheckoutService {
       deliveryFee: number;
       totalAmount: number;
       createdByAdminId: string | null;
+      source: CheckoutSource;
     },
   ): Promise<Checkout> {
     return this.dataSource.transaction(async (manager) => {
@@ -372,6 +451,7 @@ export class CheckoutService {
         // afterwards would leave a window in which an admin-created order is
         // attributed to nobody.
         createdByAdminId: totals.createdByAdminId,
+        source: totals.source,
       });
       const savedCheckout = await manager.save(checkout);
 

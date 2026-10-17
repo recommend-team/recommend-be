@@ -1,6 +1,9 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, Optional } from '@nestjs/common';
 import { OnEvent } from '@nestjs/event-emitter';
 import { ConversationService } from '../conversation/conversation.service';
+import { Conversation } from '../conversation/entities/conversation.entity';
+import { AccountService } from '../account/account.service';
+import { CheckoutSource } from '../../common/enums/checkout-source.enum';
 import { ConversationState } from '../enums/chat.enums';
 import { ChannelRegistry } from '../transport/channel.registry';
 import { BuyerPushService } from './buyer-push.service';
@@ -21,18 +24,16 @@ export class PaymentConfirmationListener {
     private readonly conversationService: ConversationService,
     private readonly channelRegistry: ChannelRegistry,
     private readonly buyerPush: BuyerPushService,
+    @Optional() private readonly accounts?: AccountService,
   ) {}
 
   @OnEvent(CHECKOUT_PAID_EVENT)
   async onCheckoutPaid(event: CheckoutPaidEvent): Promise<void> {
     try {
-      const conversation = await this.conversationService.findForCheckout(
-        event.reference,
-        event.buyerPhone,
-      );
+      const conversation = await this.conversationFor(event);
 
-      // A checkout placed from the storefront rather than the chat has no thread to
-      // post into. Not an error — there is simply nobody listening.
+      // Nowhere to post: a storefront order without a usable email. Not an error — the
+      // team follows those up by phone.
       if (!conversation) {
         this.logger.debug(
           `No conversation found for checkout ${event.reference} — nothing to confirm`,
@@ -131,6 +132,53 @@ export class PaymentConfirmationListener {
         }`,
       );
     }
+  }
+
+  /**
+   * The chat this order belongs in.
+   *
+   * A storefront order is put into the chat for the email it was paid with — made if
+   * the buyer has none — so it is waiting there, with every update after it, when they
+   * sign in. A chat order is already in the chat it was placed from.
+   */
+  private async conversationFor(
+    event: CheckoutPaidEvent,
+  ): Promise<Conversation | null> {
+    if (
+      event.source === CheckoutSource.STOREFRONT &&
+      event.buyerEmail &&
+      this.accounts
+    ) {
+      const chat = await this.accounts.chatForEmail(event.buyerEmail, {
+        name: event.buyerName,
+        phone: event.buyerPhone,
+      });
+
+      if (chat) {
+        const held = chat.context?.orderReferences ?? [];
+        const profile = chat.context?.profile ?? {};
+        return (
+          (await this.conversationService.mergeContext(chat.id, {
+            // What the Orders tab lists and "I've received it" checks — and what
+            // `findForCheckout` matches every later update by.
+            orderReferences: held.includes(event.reference)
+              ? held
+              : [...held, event.reference],
+            // Filled in, never overwritten: what the buyer told the chat stands.
+            profile: {
+              name: profile.name ?? event.buyerName,
+              phone: profile.phone ?? event.buyerPhone,
+              email: profile.email ?? event.buyerEmail,
+            },
+          })) ?? chat
+        );
+      }
+    }
+
+    return this.conversationService.findForCheckout(
+      event.reference,
+      event.buyerPhone,
+    );
   }
 }
 

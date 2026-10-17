@@ -42,6 +42,11 @@ export const createCheckoutSchema = z
       .min(5, 'Delivery address must be at least 5 characters')
       .optional(),
     notes: z.string().max(500).optional(),
+    /**
+     * The area the delivery goes to, from the vendor's own areas. Required for a
+     * storefront delivery, so a buyer outside them is told before paying, not after.
+     */
+    areaId: z.string().uuid('areaId must be a valid UUID').optional(),
   })
   .refine(
     (data) =>
@@ -98,4 +103,12 @@ export class CreateCheckoutRequestDto {
 
   @ApiPropertyOptional({ example: 'Extra spicy please' })
   notes?: string;
+
+  @ApiPropertyOptional({
+    example: '0536c260-0497-4ed7-90ca-179ee12ce90e',
+    description:
+      'Where the delivery goes, from the vendor’s service areas (GET /store/:slug). ' +
+      'Required for a delivery from the storefront.',
+  })
+  areaId?: string;
 }

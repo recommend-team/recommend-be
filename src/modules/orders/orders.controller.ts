@@ -22,6 +22,7 @@ import {
   CreateCheckoutRequestDto,
   createCheckoutSchema,
 } from './dto/create-checkout.dto';
+import { CheckoutSource } from '../../common/enums/checkout-source.enum';
 
 @ApiTags('Checkout')
 @Controller('checkout')
@@ -93,7 +94,13 @@ export class OrdersController {
     @Body(new ZodValidationPipe(createCheckoutSchema))
     dto: CreateCheckoutRequestDto,
   ) {
-    const data = await this.checkoutService.createCheckout(dto as never);
+    // Only the website calls this route — the chat and admin check out in-process — so
+    // everything arriving here was placed on a vendor's storefront.
+    const data = await this.checkoutService.createCheckout(
+      dto as never,
+      null,
+      CheckoutSource.STOREFRONT,
+    );
     return {
       message: 'Checkout created. Complete payment to confirm your order.',
       data,

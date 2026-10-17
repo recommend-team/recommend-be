@@ -1,4 +1,5 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, Not, IsNull } from 'typeorm';
 import { User } from '../auth/entities/auth.entity';
@@ -33,6 +34,10 @@ export interface StorefrontResponse {
     /** Sold only with a main item from this vendor — shown apart, under extras. */
     isAddOn: boolean;
   }[];
+  /** What delivery costs, so the cart shows the true total before checkout. */
+  deliveryFee: number;
+  /** Whether a buyer may collect instead (`PICKUP_ENABLED`). */
+  pickupEnabled: boolean;
 }
 
 export interface PaginatedResult<T> {
@@ -61,6 +66,7 @@ export class StoreService {
     @InjectRepository(User)
     private readonly usersRepository: Repository<User>,
     private readonly productsService: ProductsService,
+    private readonly config: ConfigService,
   ) {}
 
   async getAllStores(
@@ -162,6 +168,12 @@ export class StoreService {
           isAvailable: p.isAvailable,
           isAddOn: p.isAddOn,
         })),
+        // The same settings checkout charges by, so the total shown is the total paid.
+        deliveryFee:
+          Math.round((this.config.get<number>('delivery.feeNgn') ?? 0) * 100) /
+          100,
+        pickupEnabled:
+          this.config.get<boolean>('delivery.pickupEnabled') ?? false,
       },
     };
   }

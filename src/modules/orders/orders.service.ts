@@ -184,6 +184,7 @@ export class OrdersService {
             })),
           })),
           paidAt,
+          checkout.source,
         ),
       );
     } catch (error) {

@@ -13,7 +13,11 @@ import { ChatAccount } from './entities/chat-account.entity';
 import { Conversation } from '../conversation/entities/conversation.entity';
 import { ChatMessage } from '../conversation/entities/message.entity';
 import { BuyerPushSubscription } from '../conversation/entities/buyer-push-subscription.entity';
-import { MessageDirection } from '../enums/chat.enums';
+import {
+  ChatChannel,
+  ConversationState,
+  MessageDirection,
+} from '../enums/chat.enums';
 import { EMAIL_PORT, type EmailPort } from '../ports/email.port';
 import {
   CODE_TTL_MINUTES,
@@ -136,6 +140,75 @@ export class AccountService {
   }
 
   /**
+   * The chat for an email, made if there is none yet — where an order placed outside the
+   * chat (on a vendor's storefront) is put, so it is waiting when the buyer signs in.
+   *
+   * Nobody proves the email here, and nothing is shown to whoever typed it: opening the
+   * chat still takes the code sent to that inbox. A chat made here has no browser yet;
+   * its address, `account:<id>`, becomes the first signed-in browser's session.
+   */
+  async chatForEmail(
+    rawEmail: string,
+    profile: { name: string; phone: string },
+  ): Promise<Conversation | null> {
+    const parsed = emailSchema.safeParse(rawEmail);
+    if (!parsed.success) return null;
+
+    for (let attempt = 0; ; attempt++) {
+      try {
+        return await this.dataSource.transaction((manager) =>
+          this.chatForEmailWithin(manager, parsed.data, profile),
+        );
+      } catch (error) {
+        // Two payments for one new email at once: one makes the chat, the other finds it.
+        if (attempt === 0 && isUniqueViolation(error)) continue;
+        throw error;
+      }
+    }
+  }
+
+  private async chatForEmailWithin(
+    manager: EntityManager,
+    email: string,
+    profile: { name: string; phone: string },
+  ): Promise<Conversation> {
+    await manager
+      .createQueryBuilder()
+      .insert()
+      .into(ChatAccount)
+      .values({ email })
+      .orIgnore()
+      .execute();
+    // Locked, so two orders for the same new email cannot both make a chat.
+    const account = await manager.findOneOrFail(ChatAccount, {
+      where: { email },
+      lock: { mode: 'pessimistic_write' },
+    });
+
+    const home = await manager.findOne(Conversation, {
+      where: { accountId: account.id, mergedIntoId: IsNull() },
+    });
+    if (home) return home;
+
+    const made = await manager.save(
+      manager.create(Conversation, {
+        channel: ChatChannel.PWA,
+        channelAddress: `account:${account.id}`,
+        accountId: account.id,
+        buyerId: null,
+        areaId: null,
+        state: ConversationState.DISCOVERY,
+        context: {
+          profile: { name: profile.name, phone: profile.phone, email },
+        },
+        lastMessageAt: null,
+      }),
+    );
+    this.logger.log(`Made a chat for ${account.id} to hold an order`);
+    return made;
+  }
+
+  /**
    * Attach `conversationId` to the account for `email`, or fold it into the account's
    * conversation. Returns the conversation this browser should now be on.
    *
@@ -177,6 +250,9 @@ export class AccountService {
     const account = await manager.findOneOrFail(ChatAccount, {
       where: { email },
     });
+    // An account made to hold a storefront order has never been signed into. Its first
+    // sign-in is the buyer's first, and gets the welcome.
+    const firstSignIn = created || !account.lastSignedInAt;
     await manager.update(
       ChatAccount,
       { id: account.id },
@@ -205,7 +281,7 @@ export class AccountService {
         { accountId: account.id, context: current.context },
       );
       this.logger.log(`Conversation ${current.id} signed in`);
-      return { conversation: current, created };
+      return { conversation: current, created: firstSignIn };
     }
 
     // Another browser: fold this conversation into the account's.
@@ -260,7 +336,10 @@ export class AccountService {
     this.logger.log(
       `Conversation ${current.id} folded into ${home.id} on sign-in`,
     );
-    return { conversation: Object.assign(home, merged), created };
+    return {
+      conversation: Object.assign(home, merged),
+      created: firstSignIn,
+    };
   }
 }
 

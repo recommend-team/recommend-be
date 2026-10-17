@@ -7,6 +7,8 @@ export default registerAs('app', () => ({
   apiPrefix: process.env.API_PREFIX || 'api/v1',
   frontendUrl: process.env.FRONTEND_URL || 'http://localhost:4000',
   vendorAppUrl: process.env.VENDOR_APP_URL || '',
+  /** The public website; storefront buyers return to `<websiteUrl>/order/<reference>`. */
+  websiteUrl: process.env.WEBSITE_URL?.trim().replace(/\/$/, '') || '',
 }));
 
 /**

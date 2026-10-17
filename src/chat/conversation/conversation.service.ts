@@ -444,13 +444,29 @@ export class ConversationService {
 
   /**
    * Find the conversation a paid checkout belongs to.
+   *
+   * First the one that holds the order — what the Orders tab lists and where "I've
+   * received it" works. Then one waiting on its payment. Last, by the buyer's phone,
+   * which is a guess: several chats can carry one number.
    */
   async findForCheckout(
     reference: string,
     buyerPhone: string,
   ): Promise<Conversation | null> {
     // Only live conversations: one folded into a signed-in buyer's thread handed its
-    // payment and its phone over, and the update belongs where the buyer now reads.
+    // orders, payment and phone over, and the update belongs where the buyer now reads.
+    const holdingIt = await this.conversationsRepository
+      .createQueryBuilder('c')
+      .where(
+        "jsonb_exists(COALESCE(c.context->'orderReferences', '[]'::jsonb), :reference)",
+        { reference },
+      )
+      .andWhere('c."mergedIntoId" IS NULL')
+      .orderBy('c.lastMessageAt', 'DESC', 'NULLS LAST')
+      .getOne();
+
+    if (holdingIt) return holdingIt;
+
     const byReference = await this.conversationsRepository
       .createQueryBuilder('c')
       .where("c.context->>'pendingPaymentReference' = :reference", {

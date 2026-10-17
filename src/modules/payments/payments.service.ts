@@ -90,6 +90,7 @@ export class PaymentsService {
     amountNgn: number;
     reference: string;
     metadata?: Record<string, unknown>;
+    callbackUrl?: string;
   }): Promise<PaystackInitResult> {
     const amountKobo = Math.round(params.amountNgn * 100);
 
@@ -98,6 +99,7 @@ export class PaymentsService {
       amount: amountKobo,
       reference: params.reference,
       metadata: params.metadata ?? {},
+      ...(params.callbackUrl ? { callback_url: params.callbackUrl } : {}),
     });
 
     let response: Response;

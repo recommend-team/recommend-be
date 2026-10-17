@@ -13,6 +13,7 @@ import { Order } from './order.entity';
 import { User } from '../../auth/entities/auth.entity';
 import { OrderStatus } from '../../../common/enums/order-status.enum';
 import { FulfillmentType } from '../../../common/enums/fulfillment-type.enum';
+import { CheckoutSource } from '../../../common/enums/checkout-source.enum';
 
 @Entity('checkouts')
 export class Checkout {
@@ -75,6 +76,10 @@ export class Checkout {
 
   @Column({ type: 'uuid', nullable: true })
   createdByAdminId!: string | null;
+
+  /** Where it was placed — the chat, a vendor's storefront, or an admin. */
+  @Column({ type: 'varchar', length: 16, default: CheckoutSource.CHAT })
+  source!: CheckoutSource;
 
   /**
    * The rider carrying this delivery, assigned by an admin until riders have an app of

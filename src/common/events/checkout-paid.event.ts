@@ -6,6 +6,8 @@
  * context, vendor notifications), so listeners never reach back into order
  * internals and the chat context stays extractable.
  */
+import { CheckoutSource } from '../enums/checkout-source.enum';
+
 export const CHECKOUT_PAID_EVENT = 'checkout.paid';
 
 export interface CheckoutPaidVendorOrder {
@@ -41,5 +43,7 @@ export class CheckoutPaidEvent {
     readonly totalAmount: number,
     readonly orders: CheckoutPaidVendorOrder[],
     readonly paidAt: Date,
+    /** Where it was placed — a storefront order is put into the buyer's chat by email. */
+    readonly source: CheckoutSource = CheckoutSource.CHAT,
   ) {}
 }
