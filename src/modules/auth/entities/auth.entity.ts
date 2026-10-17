@@ -144,8 +144,7 @@ export class User extends BaseEntity {
   @Column({ type: 'varchar', nullable: true })
   whatsappNumber!: string | null;
 
-  /** Whether the vendor is currently accepting orders */
-  @Column({ type: 'boolean', default: false })
+  @Column({ type: 'boolean', default: true })
   isOpen!: boolean;
 
   /**
