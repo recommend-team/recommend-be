@@ -72,6 +72,7 @@ function catalogue(): CatalogPort & {
     getVendorById: jest.fn(),
     getProductById: jest.fn(),
     listAddOns: jest.fn(),
+    getDishOptions: jest.fn().mockResolvedValue([]),
     searchProducts: jest.fn((q: ProductSearchQuery) => {
       productQueries.push(q);
       const tokens = words(q.text);
@@ -293,5 +294,57 @@ describe('the unmet-search log', () => {
     await expect(
       service.record([{ query: 'suya', areaId: null, alternatives: 'none' }]),
     ).resolves.toBeUndefined();
+  });
+});
+
+describe('the assistant reading a menu', () => {
+  it('learns what each dish comes with, by name — never what it costs', async () => {
+    const catalog = catalogue();
+    (catalog.getDishOptions as jest.Mock).mockImplementation((ids: string[]) =>
+      Promise.resolve(
+        ids.slice(0, 1).map((productId) => ({
+          productId,
+          name: 'Jollof Rice',
+          unit: 'portion',
+          choices: [
+            {
+              id: 'g1',
+              name: 'Choose your protein',
+              required: true,
+              minPick: 1,
+              maxPick: 1,
+              options: [
+                { id: 'o1', name: 'Chicken', priceDelta: 0, isAvailable: true },
+                { id: 'o2', name: 'Goat', priceDelta: 500, isAvailable: false },
+              ],
+            },
+          ],
+          extras: [{ id: 'w1', name: 'Water', price: 300 }],
+        })),
+      ),
+    );
+
+    const answer = await executeTool(
+      'search_products',
+      { query: 'jollof rice' },
+      { catalog, locations: {} as never, areaId: null },
+      emptyHarvest(),
+    );
+
+    const [dish] = JSON.parse(answer) as Record<string, unknown>[];
+    expect(dish).toMatchObject({
+      soldPer: 'portion',
+      choices: [
+        {
+          name: 'Choose your protein',
+          required: true,
+          pickUpTo: 1,
+          options: ['Chicken'],
+        },
+      ],
+      extras: ['Water'],
+    });
+    // Neither the option's extra cost nor the extra's price reaches the model.
+    expect(answer).not.toMatch(/\b(500|300)\b/);
   });
 });

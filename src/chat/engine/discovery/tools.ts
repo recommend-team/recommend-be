@@ -241,7 +241,7 @@ export async function executeTool(
 
       if (products.length > 0) {
         collectProducts(products, harvest);
-        return JSON.stringify(products.map(forModel));
+        return JSON.stringify(await withOptions(context.catalog, products));
       }
 
       // Nothing exact. Offer the nearest thing that is available rather than a dead end,
@@ -310,7 +310,7 @@ export async function executeTool(
 
       return products.length === 0
         ? 'That store has nothing available right now.'
-        : JSON.stringify(products.map(forModel));
+        : JSON.stringify(await withOptions(context.catalog, products));
     }
 
     case 'get_my_orders': {
@@ -419,6 +419,46 @@ function alternativesForModel(query: string, found: Alternatives): string {
  * What the model is shown. Prices are included so it can reason about "cheapest", but
  * the system prompt forbids repeating them and the price guard enforces it.
  */
+/**
+ * Products as the model sees them, with what each dish comes with — its unit, its
+ * choices and its extras — by name only, so it can answer "what proteins do they have?"
+ * without a price to repeat.
+ */
+async function withOptions(catalog: CatalogPort, products: ProductSummary[]) {
+  const dishes = new Map(
+    (await catalog.getDishOptions(products.map((product) => product.id))).map(
+      (dish) => [dish.productId, dish],
+    ),
+  );
+  return products.map((product) => {
+    const dish = dishes.get(product.id);
+    if (!dish) return forModel(product);
+    return {
+      ...forModel(product),
+      ...(dish.unit ? { soldPer: sanitizeUntrusted(dish.unit, 16) } : {}),
+      ...(dish.choices.length > 0
+        ? {
+            choices: dish.choices.map((choice) => ({
+              name: sanitizeUntrusted(choice.name, 60),
+              required: choice.required,
+              pickUpTo: choice.maxPick,
+              options: choice.options
+                .filter((option) => option.isAvailable)
+                .map((option) => sanitizeUntrusted(option.name, 60)),
+            })),
+          }
+        : {}),
+      ...(dish.extras.length > 0
+        ? {
+            extras: dish.extras.map((extra) =>
+              sanitizeUntrusted(extra.name, 60),
+            ),
+          }
+        : {}),
+    };
+  });
+}
+
 function forModel(product: ProductSummary) {
   return {
     id: product.id,

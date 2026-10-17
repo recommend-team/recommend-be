@@ -139,6 +139,7 @@ const catalog: CatalogPort = {
   getProductById: (id) =>
     Promise.resolve(PRODUCTS.find((item) => item.id === id) ?? null),
   listAddOns: () => Promise.resolve([]),
+  getDishOptions: () => Promise.resolve([]),
   searchProducts: (query) => {
     const wanted = words(query.text);
     return Promise.resolve(
@@ -192,6 +193,7 @@ const ordering = {
   deliveryFeeFor: (type: 'PICKUP' | 'DELIVERY') =>
     type === 'DELIVERY' ? DELIVERY_FEE : 0,
   placeCheckout: () => Promise.reject(new Error('not in this harness')),
+  quoteCart: () => Promise.resolve(null),
   completeOrder: () => Promise.resolve(),
 } as OrderingPort;
 

@@ -9,6 +9,7 @@ import {
   CatalogPort,
   CategorySummary,
   ProductSearchQuery,
+  DishOptions,
   ProductSummary,
   VendorSearchQuery,
   VendorSummary,
@@ -216,6 +217,49 @@ export class LocalCatalogAdapter implements CatalogPort {
       take: 60,
     });
     return products.map(toProductSummary);
+  }
+
+  async getDishOptions(productIds: string[]): Promise<DishOptions[]> {
+    if (productIds.length === 0) return [];
+
+    const products = await this.productsRepository.find({
+      where: { id: In([...new Set(productIds)]) },
+      relations: [
+        'extras',
+        'extras.vendor',
+        'choiceGroups',
+        'choiceGroups.options',
+      ],
+    });
+    return products.map((product) => ({
+      productId: product.id,
+      name: product.name,
+      unit: product.unit ?? null,
+      choices: [...(product.choiceGroups ?? [])]
+        .sort((a, b) => a.position - b.position)
+        .map((group) => ({
+          id: group.id,
+          name: group.name,
+          required: group.required,
+          minPick: group.minPick,
+          maxPick: group.maxPick,
+          options: [...(group.options ?? [])]
+            .sort((a, b) => a.position - b.position)
+            .map((option) => ({
+              id: option.id,
+              name: option.name,
+              priceDelta: Number(option.priceDelta),
+              isAvailable: option.isAvailable,
+            })),
+        })),
+      extras: (product.extras ?? [])
+        .filter((extra) => extra.isAvailable)
+        .sort(
+          (a, b) =>
+            Number(a.price) - Number(b.price) || a.name.localeCompare(b.name),
+        )
+        .map(toProductSummary),
+    }));
   }
 }
 

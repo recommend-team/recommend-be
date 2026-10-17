@@ -32,6 +32,35 @@ export interface ProductSummary {
   isAddOn: boolean;
 }
 
+/**
+ * What a dish is sold with (PRODUCT_OPTIONS_PLAN.md): its unit, the choices the buyer
+ * answers ("Choose your protein"), and the vendor's extras ticked on it.
+ */
+export interface DishOptions {
+  productId: string;
+  name: string;
+  /** "portion" — what the price is per. Null: no unit. */
+  unit: string | null;
+  choices: DishChoice[];
+  /** Ticked on this dish and on sale. */
+  extras: ProductSummary[];
+}
+
+export interface DishChoice {
+  id: string;
+  name: string;
+  required: boolean;
+  minPick: number;
+  maxPick: number;
+  options: {
+    id: string;
+    name: string;
+    /** Added per portion. */
+    priceDelta: number;
+    isAvailable: boolean;
+  }[];
+}
+
 export interface VendorSearchQuery {
   /** Free text from the buyer, matched against business name and description. */
   text?: string;
@@ -75,6 +104,8 @@ export interface CatalogPort {
   getVendorById(vendorId: string): Promise<VendorSummary | null>;
   searchProducts(query: ProductSearchQuery): Promise<ProductSummary[]>;
   getProductById(productId: string): Promise<ProductSummary | null>;
-  /** The available add-ons of these vendors, for the checkout offer. */
+  /** The available add-ons of these vendors — every extra they sell. */
   listAddOns(vendorIds: string[]): Promise<ProductSummary[]>;
+  /** Each dish's unit, choices and extras. Products with none come back empty. */
+  getDishOptions(productIds: string[]): Promise<DishOptions[]>;
 }
