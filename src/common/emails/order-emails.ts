@@ -8,7 +8,7 @@
  *
  * Table-based HTML with inline styles, like the welcome email: what email clients render.
  */
-import { SUPPORT_PHONE } from '../support';
+import { supportPhone, supportPhoneHref } from '../support';
 
 export interface OrderEmailLinks {
   /** The public website — serves the logo. */
@@ -243,7 +243,7 @@ function layout(
             </tr>
             <tr>
               <td style="padding:18px 40px;border-top:3px solid ${BRAND.green};">
-                <p style="margin:0 0 4px;font-size:14px;line-height:1.5;color:${BRAND.ink};">Questions about your order? Call us on <a href="tel:${SUPPORT_PHONE.replace(/\s/g, '')}" style="color:${BRAND.green};font-weight:bold;text-decoration:none;white-space:nowrap;">${SUPPORT_PHONE}</a></p>
+                <p style="margin:0 0 4px;font-size:14px;line-height:1.5;color:${BRAND.ink};">Questions about your order? Call us on <a href="${supportPhoneHref()}" style="color:${BRAND.green};font-weight:bold;text-decoration:none;white-space:nowrap;">${escape(supportPhone())}</a></p>
                 <p style="margin:0;font-size:12px;line-height:1.5;color:${BRAND.muted};">Recommend &middot; Lagos, Nigeria &middot; <a href="${links.websiteUrl}" style="color:${BRAND.muted};">${escape(site)}</a></p>
               </td>
             </tr>
@@ -258,7 +258,7 @@ function layout(
 function textFooter(): string[] {
   return [
     '',
-    `Questions about your order? Call us on ${SUPPORT_PHONE}.`,
+    `Questions about your order? Call us on ${supportPhone()}.`,
     '— Recommend',
   ];
 }

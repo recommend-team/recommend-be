@@ -19,7 +19,7 @@ import {
   buildOnItsWayEmail,
   buildReceiptEmail,
 } from '../../common/emails/order-emails';
-import { SUPPORT_EMAIL } from '../../common/support';
+import { supportEmail } from '../../common/support';
 
 /** Paystack needs an email; a buyer who gave none is charged under this, and never mailed. */
 const PLACEHOLDER_DOMAIN = '@buyers.recommend.ng';
@@ -124,7 +124,7 @@ export class BuyerOrderEmailsListener {
         text: email.text,
         // A reply about an order should reach a person.
         replyTo: {
-          email: this.config.get<string>('contact.inbox') ?? SUPPORT_EMAIL,
+          email: this.config.get<string>('contact.inbox') ?? supportEmail(),
           name: 'Recommend',
         },
       });

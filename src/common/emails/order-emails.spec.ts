@@ -3,7 +3,7 @@ import {
   buildReceiptEmail,
   followLink,
 } from './order-emails';
-import { SUPPORT_PHONE } from '../support';
+import { supportPhone } from '../support';
 
 const links = {
   websiteUrl: 'https://recommend.ng',
@@ -67,8 +67,8 @@ describe('the receipt', () => {
 
   it('gives our number', () => {
     const email = receipt();
-    expect(email.html).toContain(SUPPORT_PHONE);
-    expect(email.text).toContain(SUPPORT_PHONE);
+    expect(email.html).toContain(supportPhone());
+    expect(email.text).toContain(supportPhone());
   });
 
   it('opens the chat signed in with their email — where the order is waiting', () => {
@@ -135,7 +135,7 @@ describe('on its way', () => {
 
   it('gives our number and the way back to the chat', () => {
     const email = onItsWay();
-    expect(email.text).toContain(SUPPORT_PHONE);
+    expect(email.text).toContain(supportPhone());
     expect(email.html).toContain('?signin=ada%2Bfood%40example.com');
   });
 });

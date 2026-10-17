@@ -1,9 +1,9 @@
 import type { AreaSummary } from '../../ports/location.port';
 import { WHY_DETAILS, asksWhyDetails } from '../flows/aside';
 import {
-  SUPPORT_EMAIL,
   SUPPORT_HOURS,
-  SUPPORT_PHONE,
+  supportEmail,
+  supportPhone,
 } from '../../../common/support';
 
 /**
@@ -15,7 +15,7 @@ import {
  */
 
 // Shared with the order emails, so the assistant and the inbox give the same number.
-export { SUPPORT_EMAIL, SUPPORT_HOURS, SUPPORT_PHONE };
+export { SUPPORT_HOURS, supportEmail, supportPhone };
 
 export const DELIVERY_TIME =
   'usually 20 to 30 minutes, a little longer at busy times or in the rain';
@@ -88,7 +88,7 @@ ${pickup}
   skipped.
 - Areas we cover right now: ${describeAreas(facts.servedAreas)}. If someone asks about a
   place that is not listed, say we do not have vendors there yet.
-- Talking to the team: ${SUPPORT_PHONE}, or ${SUPPORT_EMAIL}. Open ${SUPPORT_HOURS}. You can
+- Talking to the team: ${supportPhone()}, or ${supportEmail()}. Open ${SUPPORT_HOURS}. You can
   also bring the team into this chat (request_teammate).
 - Recommend was founded by Chanor James.
 `.trim();
@@ -206,7 +206,7 @@ export function answerFromKnowledge(
     has(/\b(contact|phone number|email|call you|customer care number)\b/)
   ) {
     answers.push(
-      `You can call us on ${SUPPORT_PHONE} or email ${SUPPORT_EMAIL} — we're open ` +
+      `You can call us on ${supportPhone()} or email ${supportEmail()} — we're open ` +
         `${SUPPORT_HOURS}. Or just ask here and I'll bring the team in.`,
     );
   }
