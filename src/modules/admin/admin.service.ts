@@ -3,7 +3,10 @@ import {
   NotFoundException,
   BadRequestException,
   ConflictException,
+  Logger,
+  Optional,
 } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, In, ILike } from 'typeorm';
 import { User } from '../auth/entities/auth.entity';
@@ -34,6 +37,8 @@ import { RiderType } from '../../common/enums/rider-type.enum';
 import { Account, AccountStatus } from '../wallet/entities/account.entity';
 import { Withdrawal } from '../wallet/entities/withdrawal.entity';
 import { WalletService } from '../wallet/wallet.service';
+import { CheckoutSource } from '../../common/enums/checkout-source.enum';
+import { DISPATCHED_AT_SQL } from '../orders/stuck-delivery.service';
 
 export interface PaginatedResult<T> {
   items: T[];
@@ -63,6 +68,18 @@ export interface TransactionSummary {
   /** Who is carrying it. Null on a pickup, and on a delivery with no rider yet. */
   rider: { id: string; name: string; phone: string | null } | null;
   riderAssignedAt: string | null;
+  /** Where it was placed: the chat, a vendor's storefront, or by an admin. */
+  source: CheckoutSource;
+  /**
+   * Whether the buyer can be reached in the chat. A chat order always can; a storefront
+   * buyer only once they have signed in with the email they paid with — until then,
+   * follow-up means a phone call.
+   */
+  buyerOnChat: boolean;
+  /** When it last left with a rider. Null until dispatched. */
+  dispatchedAt: string | null;
+  /** With its rider for longer than `DELIVERY_STALE_HOURS`, and not delivered. */
+  stuck: boolean;
   vendors: {
     orderId: string;
     vendorId: string;
@@ -74,7 +91,19 @@ export interface TransactionSummary {
   }[];
 }
 
-function toTransactionSummary(checkout: Checkout): TransactionSummary {
+/** What a transaction row needs beyond the checkout itself — see `followUpFacts`. */
+interface FollowUpFacts {
+  buyerOnChat: boolean;
+  dispatchedAt: Date | null;
+}
+
+function toTransactionSummary(
+  checkout: Checkout,
+  facts: FollowUpFacts | undefined,
+  staleCutoff: Date,
+): TransactionSummary {
+  const source = checkout.source ?? CheckoutSource.CHAT;
+  const dispatchedAt = facts?.dispatchedAt ?? null;
   return {
     id: checkout.id,
     reference: checkout.reference,
@@ -102,6 +131,16 @@ function toTransactionSummary(checkout: Checkout): TransactionSummary {
     riderAssignedAt: checkout.riderAssignedAt
       ? checkout.riderAssignedAt.toISOString()
       : null,
+    source,
+    // A chat order, or one an admin placed from a conversation they were holding, came
+    // from the chat — the buyer is there whether or not they ever signed in.
+    buyerOnChat:
+      source !== CheckoutSource.STOREFRONT || (facts?.buyerOnChat ?? false),
+    dispatchedAt: dispatchedAt ? dispatchedAt.toISOString() : null,
+    stuck:
+      checkout.status === OrderStatus.DISPATCHED &&
+      !!dispatchedAt &&
+      dispatchedAt <= staleCutoff,
     vendors: (checkout.orders ?? []).map((order) => ({
       orderId: order.id,
       vendorId: order.vendorId,
@@ -258,6 +297,8 @@ const ADMIN_ROLES = [Role.ADMIN, Role.SUPER_ADMIN];
 
 @Injectable()
 export class AdminService {
+  private readonly logger = new Logger(AdminService.name);
+
   constructor(
     @InjectRepository(User)
     private readonly usersRepo: Repository<User>,
@@ -277,6 +318,7 @@ export class AdminService {
     @InjectRepository(Withdrawal)
     private readonly withdrawalsRepo: Repository<Withdrawal>,
     private readonly wallet: WalletService,
+    @Optional() private readonly config?: ConfigService,
   ) {}
 
   // ─── Pending approvals (unified) ───────────────────────────────────────────
@@ -853,6 +895,10 @@ export class AdminService {
     riderId?: string;
     /** Deliveries paid for or ready with nobody assigned yet — the dispatch queue. */
     needsRider?: boolean;
+    /** Where the order was placed — storefront orders are the ones to call about. */
+    source?: CheckoutSource;
+    /** With a rider for longer than `DELIVERY_STALE_HOURS` and not delivered. */
+    stuck?: boolean;
     page?: number;
     limit?: number;
   }): Promise<PaginatedResult<TransactionSummary>> {
@@ -894,6 +940,21 @@ export class AdminService {
         });
     }
 
+    if (query.source) {
+      if (!Object.values(CheckoutSource).includes(query.source)) {
+        throw new BadRequestException('Unknown source');
+      }
+      qb.andWhere('checkout.source = :source', { source: query.source });
+    }
+
+    if (query.stuck) {
+      qb.andWhere('checkout.status = :dispatched', {
+        dispatched: OrderStatus.DISPATCHED,
+      }).andWhere(`${DISPATCHED_AT_SQL('checkout')} <= :staleCutoff`, {
+        staleCutoff: this.staleCutoff(),
+      });
+    }
+
     if (query.search?.trim()) {
       // Reference, buyer name or phone — whichever the admin happens to be holding.
       const term = `%${query.search.trim().replace(/[%_]/g, '')}%`;
@@ -906,7 +967,7 @@ export class AdminService {
     const [rows, total] = await qb.getManyAndCount();
 
     return {
-      items: rows.map((checkout) => toTransactionSummary(checkout)),
+      items: await this.summarise(rows),
       total,
       page,
       limit,
@@ -932,7 +993,8 @@ export class AdminService {
     });
     if (!checkout) throw new NotFoundException('Transaction not found');
 
-    return toTransactionSummary(checkout);
+    const [summary] = await this.summarise([checkout]);
+    return summary;
   }
 
   // ─── Order lifecycle ───────────────────────────────────────────────────────
@@ -995,6 +1057,68 @@ export class AdminService {
     });
   }
 
+  /** Dispatched before this and not yet delivered is stuck on its way. */
+  private staleCutoff(): Date {
+    const hours = this.config?.get<number>('delivery.staleHours') ?? 3;
+    return new Date(Date.now() - hours * 60 * 60_000);
+  }
+
+  private async summarise(
+    checkouts: Checkout[],
+  ): Promise<TransactionSummary[]> {
+    const facts = await this.followUpFacts(checkouts);
+    const staleCutoff = this.staleCutoff();
+    return checkouts.map((checkout) =>
+      toTransactionSummary(checkout, facts.get(checkout.id), staleCutoff),
+    );
+  }
+
+  /**
+   * For a page of transactions, in one query: when each last left with a rider, and
+   * whether its buyer has signed in to the chat with the email they paid with.
+   *
+   * A row is still worth showing without these, so a failure here is logged and the rows
+   * go out as "not on chat, not dispatched" rather than not at all.
+   */
+  private async followUpFacts(
+    checkouts: Checkout[],
+  ): Promise<Map<string, FollowUpFacts>> {
+    if (checkouts.length === 0) return new Map();
+    try {
+      const rows: {
+        id: string;
+        dispatchedAt: Date | string | null;
+        buyerOnChat: boolean;
+      }[] = await this.checkoutsRepo.query(
+        `SELECT c.id,
+                CASE WHEN c.status IN ('DISPATCHED', 'COMPLETED')
+                     THEN ${DISPATCHED_AT_SQL('c')} END AS "dispatchedAt",
+                EXISTS (SELECT 1 FROM chat_accounts a
+                         WHERE a.email = LOWER(TRIM(c."buyerEmail"))
+                           AND a."lastSignedInAt" IS NOT NULL) AS "buyerOnChat"
+           FROM checkouts c
+          WHERE c.id = ANY($1::uuid[])`,
+        [checkouts.map((checkout) => checkout.id)],
+      );
+      return new Map(
+        rows.map((row) => [
+          row.id,
+          {
+            buyerOnChat: row.buyerOnChat === true,
+            dispatchedAt: row.dispatchedAt ? new Date(row.dispatchedAt) : null,
+          },
+        ]),
+      );
+    } catch (error) {
+      this.logger.error(
+        `Could not read follow-up details for transactions: ${
+          error instanceof Error ? error.message : 'unknown error'
+        }`,
+      );
+      return new Map();
+    }
+  }
+
   /** The transaction as it stands now, without asking Paystack anything. */
   private async verifyless(reference: string): Promise<TransactionSummary> {
     const checkout = await this.checkoutsRepo.findOne({
@@ -1002,7 +1126,8 @@ export class AdminService {
       relations: ['orders', 'orders.items', 'orders.vendor', 'rider'],
     });
     if (!checkout) throw new NotFoundException('Transaction not found');
-    return toTransactionSummary(checkout);
+    const [summary] = await this.summarise([checkout]);
+    return summary;
   }
 
   // ─── Riders ────────────────────────────────────────────────────────────────

@@ -31,6 +31,11 @@ import {
   VendorOrderReadyEvent,
 } from '../../common/events/vendor-order-ready.event';
 import { FulfillmentType } from '../../common/enums/fulfillment-type.enum';
+import { CheckoutSource } from '../../common/enums/checkout-source.enum';
+import {
+  DELIVERY_STUCK_EVENT,
+  DeliveryStuckEvent,
+} from '../../common/events/delivery-stuck.event';
 
 interface Alert {
   kind: AdminAlertKind;
@@ -58,6 +63,7 @@ const FEED_TYPE: Record<AdminAlertKind, NotificationType> = {
   NEW_PAID_ORDER: NotificationType.ADMIN_NEW_PAID_ORDER,
   VENDOR_ORDER_READY: NotificationType.ADMIN_VENDOR_ORDER_READY,
   WITHDRAWAL_FAILED: NotificationType.ADMIN_WITHDRAWAL_FAILED,
+  DELIVERY_STUCK: NotificationType.ADMIN_DELIVERY_STUCK,
 };
 
 @Injectable()
@@ -132,7 +138,11 @@ export class AdminAlertsService {
 
     await this.send({
       kind: 'NEW_PAID_ORDER',
-      title: 'New paid order',
+      // A storefront buyer may never open the chat — worth knowing before they need us.
+      title:
+        event.source === CheckoutSource.STOREFRONT
+          ? 'New storefront order'
+          : 'New paid order',
       body:
         `${event.buyerName} paid ₦${event.totalAmount.toLocaleString()}` +
         (vendors.length > 0 ? ` — ${vendors.join(', ')}` : '') +
@@ -185,6 +195,29 @@ export class AdminAlertsService {
         allReady && delivery
           ? { urgency: 'high', ttlSeconds: 2 * 60 * 60 }
           : { ttlSeconds: 60 * 60 },
+    });
+  }
+
+  /** With a rider for hours. Someone needs to call the rider, and probably the buyer. */
+  @OnEvent(DELIVERY_STUCK_EVENT)
+  async onDeliveryStuck(event: DeliveryStuckEvent): Promise<void> {
+    const hours = Math.floor(
+      (Date.now() - event.dispatchedAt.getTime()) / (60 * 60_000),
+    );
+    const rider = event.riderName
+      ? `${event.riderName}${event.riderPhone ? ` (${event.riderPhone})` : ''}`
+      : 'its rider';
+
+    await this.send({
+      kind: 'DELIVERY_STUCK',
+      title: 'Stuck on its way',
+      body:
+        `${event.reference} for ${event.buyerName} left with ${rider} ` +
+        `${hours >= 1 ? `${hours}h` : 'hours'} ago and isn't marked delivered. Call the rider.`,
+      url: '/admin/transactions?stuck=true',
+      tag: `checkout:${event.reference}`,
+      adminId: null,
+      delivery: { urgency: 'high', ttlSeconds: 2 * 60 * 60 },
     });
   }
 

@@ -16,6 +16,7 @@ import { PaymentsController } from '../payments/payments.controller';
 import { WalletModule } from '../wallet/wallet.module';
 import { CommonModule } from '../../common/common.module';
 import { BuyerOrderEmailsListener } from './buyer-order-emails.listener';
+import { StuckDeliveryService } from './stuck-delivery.service';
 
 @Module({
   imports: [
@@ -39,6 +40,7 @@ import { BuyerOrderEmailsListener } from './buyer-order-emails.listener';
     OrderLifecycleService,
     HandoverCodeService,
     BuyerOrderEmailsListener,
+    StuckDeliveryService,
   ],
   exports: [
     OrdersService,

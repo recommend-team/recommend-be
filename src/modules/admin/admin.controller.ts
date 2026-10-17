@@ -35,6 +35,7 @@ import { User } from '../auth/entities/auth.entity';
 import { Role } from '../../common/enums/roles.enum';
 import { SellerStatus } from '../../common/enums/seller-status.enum';
 import { OrderStatus } from '../../common/enums/order-status.enum';
+import { CheckoutSource } from '../../common/enums/checkout-source.enum';
 
 const VENDOR_SORTS: VendorOrderSort[] = ['today', 'week', 'month', 'allTime'];
 
@@ -271,6 +272,18 @@ export class AdminController {
     type: Boolean,
     description: 'Paid or ready deliveries with no rider yet',
   })
+  @ApiQuery({
+    name: 'source',
+    enum: CheckoutSource,
+    required: false,
+    description: 'Where the order was placed',
+  })
+  @ApiQuery({
+    name: 'stuck',
+    required: false,
+    type: Boolean,
+    description: 'With a rider longer than DELIVERY_STALE_HOURS, not delivered',
+  })
   @ApiQuery({ name: 'page', required: false, type: Number })
   @ApiQuery({ name: 'limit', required: false, type: Number })
   @ApiResponse({ status: 200, description: 'Paginated transaction list' })
@@ -279,6 +292,8 @@ export class AdminController {
     @Query('search') search?: string,
     @Query('riderId', new ParseUUIDPipe({ optional: true })) riderId?: string,
     @Query('needsRider') needsRider?: string,
+    @Query('source') source?: CheckoutSource,
+    @Query('stuck') stuck?: string,
     @Query('page') page?: number,
     @Query('limit') limit?: number,
   ) {
@@ -287,6 +302,8 @@ export class AdminController {
       search,
       riderId,
       needsRider: needsRider === 'true',
+      source: source || undefined,
+      stuck: stuck === 'true',
       page,
       limit,
     });

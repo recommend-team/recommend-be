@@ -98,6 +98,9 @@ export class Checkout {
   @Column({ type: 'timestamptz', nullable: true })
   riderAssignedAt!: Date | null;
 
+  @Column({ type: 'timestamptz', nullable: true })
+  stuckAlertedAt!: Date | null;
+
   @OneToMany(() => Order, (order) => order.checkout)
   orders!: Order[];
 

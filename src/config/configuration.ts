@@ -275,6 +275,14 @@ export const deliveryConfig = registerAs('delivery', () => ({
    * placed for pickup are unaffected.
    */
   pickupEnabled: process.env.PICKUP_ENABLED === 'true',
+  /**
+   * How long an order can be with a rider before admins are told it is stuck on its way.
+   * Measured from dispatch. Alerted once per order; the transactions page filters on it.
+   */
+  staleHours: Math.max(
+    0.25,
+    parseFloat(process.env.DELIVERY_STALE_HOURS || '3') || 3,
+  ),
 }));
 
 export const platformConfig = registerAs('platform', () => {

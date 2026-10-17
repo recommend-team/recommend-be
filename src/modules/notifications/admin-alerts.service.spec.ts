@@ -18,6 +18,8 @@ import { CheckoutPaidEvent } from '../../common/events/checkout-paid.event';
 import { WithdrawalFailedEvent } from '../../common/events/wallet.events';
 import { VendorOrderReadyEvent } from '../../common/events/vendor-order-ready.event';
 import { FulfillmentType } from '../../common/enums/fulfillment-type.enum';
+import { CheckoutSource } from '../../common/enums/checkout-source.enum';
+import { DeliveryStuckEvent } from '../../common/events/delivery-stuck.event';
 
 const admin = (id: string, over: Partial<User> = {}): User =>
   Object.assign(new User(), {
@@ -246,8 +248,51 @@ describe('AdminAlertsService', () => {
     expect(emitted[0]).toMatchObject({
       kind: 'NEW_PAID_ORDER',
       body: 'Ada paid ₦6,500 — Mama Put. Delivery.',
+      title: 'New paid order',
       url: '/admin/transactions',
     });
+    expect(pushedTo()).toEqual(['a1', 'a2']);
+  });
+
+  it('says when a paid order came from a storefront', async () => {
+    await service.onCheckoutPaid({
+      reference: 'REC-AAB',
+      buyerName: 'Ada',
+      totalAmount: 6500,
+      fulfillmentType: 'DELIVERY',
+      orders: [{ vendorName: 'Mama Put' }],
+      source: CheckoutSource.STOREFRONT,
+    } as unknown as CheckoutPaidEvent);
+
+    expect(emitted[0]).toMatchObject({ title: 'New storefront order' });
+  });
+
+  it('flags a delivery stuck with its rider, naming the rider to call', async () => {
+    await service.onDeliveryStuck(
+      new DeliveryStuckEvent(
+        'REC-STK',
+        'Ada Obi',
+        'Tunde Bakare',
+        '+2348031112222',
+        new Date(Date.now() - 4 * 60 * 60_000 - 60_000),
+      ),
+    );
+
+    expect(emitted[0]).toMatchObject({
+      kind: 'DELIVERY_STUCK',
+      title: 'Stuck on its way',
+      body:
+        'REC-STK for Ada Obi left with Tunde Bakare (+2348031112222) 4h ago ' +
+        "and isn't marked delivered. Call the rider.",
+      url: '/admin/transactions?stuck=true',
+    });
+    expect(feed.insert).toHaveBeenCalledWith(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: NotificationType.ADMIN_DELIVERY_STUCK,
+        }),
+      ]),
+    );
     expect(pushedTo()).toEqual(['a1', 'a2']);
   });
 

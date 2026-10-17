@@ -57,7 +57,8 @@ export type AdminAlertKind =
   | 'HELD_CONVERSATION_MESSAGE'
   | 'NEW_PAID_ORDER'
   | 'VENDOR_ORDER_READY'
-  | 'WITHDRAWAL_FAILED';
+  | 'WITHDRAWAL_FAILED'
+  | 'DELIVERY_STUCK';
 
 /**
  * One alert, ready to send. Carries its own id so a panel that hears it twice — over the
