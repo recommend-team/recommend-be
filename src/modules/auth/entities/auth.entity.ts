@@ -251,6 +251,19 @@ export class User extends BaseEntity {
     return this.isEmailVerified;
   }
 
+  /**
+   * May sign in and keep a session. As `isActive`, except that a **suspended vendor**
+   * still can: they see their account, told it is suspended, but every change is refused
+   * (`SuspendedReadOnlyGuard`). A suspended admin, rider or buyer, and anyone
+   * deactivated, cannot.
+   */
+  canHoldSession(): boolean {
+    if (this.role === Role.SELLER && this.status === SellerStatus.SUSPENDED) {
+      return this.isEmailVerified;
+    }
+    return this.isActive();
+  }
+
   isApproved(): boolean {
     return this.status === SellerStatus.APPROVED;
   }
@@ -260,7 +273,7 @@ export class User extends BaseEntity {
   }
 
   canLogin(): boolean {
-    return this.isActive() && this.failedLoginAttempts < 5;
+    return this.canHoldSession() && this.failedLoginAttempts < 5;
   }
 
   recordFailedLogin(): void {

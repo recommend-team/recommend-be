@@ -159,6 +159,40 @@ export class EmailService {
           <p>Your password was changed successfully on ${context.timestamp}.</p>
           <p>If you didn't make this change, please contact support immediately.</p>
         `;
+      // Sent by an admin: an invite to an account they set up, or a fresh link.
+      case 'set-password-link': {
+        const name = escapeHtml(String(context.name ?? ''));
+        const business = escapeHtml(
+          String(context.businessName ?? 'your shop'),
+        );
+        const url = escapeHtml(String(context.url ?? ''));
+        return context.invite
+          ? `
+          <h1>Your shop on Recommend is ready</h1>
+          <p>Hello ${name},</p>
+          <p>The Recommend team has set up <b>${business}</b> for you. Choose a password to sign in to the vendor app, where you can see your orders, your products and your earnings.</p>
+          <p><a href="${url}">Set your password</a></p>
+          <p>This link works for 72 hours. If it runs out, ask us for a new one.</p>
+        `
+          : `
+          <h1>Set a new password</h1>
+          <p>Hello ${name},</p>
+          <p>The Recommend team sent you a link to set a new password for your vendor account.</p>
+          <p><a href="${url}">Set a new password</a></p>
+          <p>This link works for 72 hours. If you didn't ask us for this, you can ignore this email — your password stays as it is.</p>
+        `;
+      }
+      // To the old address, when an admin changes a vendor's login email.
+      case 'login-email-changed': {
+        const name = escapeHtml(String(context.name ?? ''));
+        const newEmail = escapeHtml(String(context.newEmail ?? ''));
+        return `
+          <h1>Your login email was changed</h1>
+          <p>Hello ${name},</p>
+          <p>The Recommend team changed the email you sign in with to <b>${newEmail}</b>. From now on, sign in with that address — this one will no longer work.</p>
+          <p>If you didn't ask for this, contact us straight away.</p>
+        `;
+      }
       case 'account-approved':
         return `
           <h1>Your ${context.role} account has been approved! 🎉</h1>
@@ -205,4 +239,14 @@ export class EmailService {
         return '<p>Email from Recommend</p>';
     }
   }
+}
+
+/** For values typed by people (names, emails) going into an email's HTML. */
+function escapeHtml(text: string): string {
+  return text
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
 }

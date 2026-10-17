@@ -27,6 +27,7 @@ import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { Public } from '../auth/decorators/public.decorator';
 import { User } from '../auth/entities/auth.entity';
 import { ZodValidationPipe } from '../../common/pipes/zod-validation.pipes';
+import { AllowWhenSuspended } from '../auth/decorators/allow-when-suspended.decorator';
 
 const subscribeSchema = z.object({
   endpoint: z.string().url('endpoint must be a valid URL'),
@@ -84,6 +85,7 @@ export class NotificationsController {
   }
 
   @Patch(':id/read')
+  @AllowWhenSuspended()
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Mark one notification read' })
   @ApiParam({ name: 'id' })
@@ -97,6 +99,7 @@ export class NotificationsController {
   }
 
   @Patch('read-all')
+  @AllowWhenSuspended()
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Mark every notification read' })
   async markAllRead(@CurrentUser() user: User) {
@@ -122,6 +125,7 @@ export class NotificationsController {
   }
 
   @Post('push/subscribe')
+  @AllowWhenSuspended()
   @HttpCode(HttpStatus.OK)
   @ApiOperation({
     summary: 'Register this browser for push',
@@ -139,6 +143,7 @@ export class NotificationsController {
   }
 
   @Delete('push/subscribe')
+  @AllowWhenSuspended()
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Unregister this browser' })
   async unsubscribe(@Body() body: { endpoint?: string }) {

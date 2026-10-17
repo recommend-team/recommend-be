@@ -15,6 +15,7 @@ import {
 } from '@nestjs/swagger';
 import { AuthService } from './auth.service';
 import { Public } from './decorators/public.decorator';
+import { AllowWhenSuspended } from './decorators/allow-when-suspended.decorator';
 import { CurrentUser } from './decorators/current-user.decorator';
 import { ZodValidationPipe } from 'src/common/pipes/zod-validation.pipes';
 import { LoginRequestDto, loginSchema } from './dto/login.dto';
@@ -227,6 +228,7 @@ export class AuthController {
   // ─── Authenticated endpoints ───────────────────────────────────────────────
 
   @Post('logout')
+  @AllowWhenSuspended()
   @HttpCode(HttpStatus.OK)
   @ApiBearerAuth()
   @ApiOperation({

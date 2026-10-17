@@ -19,43 +19,45 @@ const days = [
   'sunday',
 ] as const;
 
-export const updateProfileSchema = z
-  .object({
-    businessName: z.string().min(2).max(100).optional(),
-    businessAddress: z.string().min(5).max(255).optional(),
-    businessDescription: z.string().max(500).optional(),
-    businessCategory: z.string().min(2).max(100).optional(),
-    // Areas are admin-created rows now, not free text — send their ids.
-    areaIds: z
-      .array(z.string().uuid('Each area id must be a valid UUID'))
-      .max(20, 'A vendor can serve at most 20 areas')
-      .optional(),
-    businessLogoUrl: z
-      .string()
-      .url('businessLogoUrl must be a valid URL')
-      .optional(),
-    businessBannerUrl: z
-      .string()
-      .url('businessBannerUrl must be a valid URL')
-      .optional(),
-    whatsappNumber: z
-      .string()
-      .regex(/^\+?[1-9]\d{1,14}$/, 'Invalid WhatsApp number format')
-      .optional(),
-    isOpen: z.boolean().optional(),
-    operatingHours: z
-      .object(
-        Object.fromEntries(
-          days.map((d) => [d, dayScheduleSchema.optional()]),
-        ) as {
-          [K in (typeof days)[number]]?: typeof dayScheduleSchema;
-        },
-      )
-      .optional(),
-  })
-  .refine((data) => Object.keys(data).length > 0, {
-    message: 'At least one field must be provided',
-  });
+/** The store fields, without the "at least one" rule — reused by the admin's vendor edit. */
+export const profileFieldsSchema = z.object({
+  businessName: z.string().min(2).max(100).optional(),
+  businessAddress: z.string().min(5).max(255).optional(),
+  businessDescription: z.string().max(500).optional(),
+  businessCategory: z.string().min(2).max(100).optional(),
+  // Areas are admin-created rows now, not free text — send their ids.
+  areaIds: z
+    .array(z.string().uuid('Each area id must be a valid UUID'))
+    .max(20, 'A vendor can serve at most 20 areas')
+    .optional(),
+  businessLogoUrl: z
+    .string()
+    .url('businessLogoUrl must be a valid URL')
+    .optional(),
+  businessBannerUrl: z
+    .string()
+    .url('businessBannerUrl must be a valid URL')
+    .optional(),
+  whatsappNumber: z
+    .string()
+    .regex(/^\+?[1-9]\d{1,14}$/, 'Invalid WhatsApp number format')
+    .optional(),
+  isOpen: z.boolean().optional(),
+  operatingHours: z
+    .object(
+      Object.fromEntries(
+        days.map((d) => [d, dayScheduleSchema.optional()]),
+      ) as {
+        [K in (typeof days)[number]]?: typeof dayScheduleSchema;
+      },
+    )
+    .optional(),
+});
+
+export const updateProfileSchema = profileFieldsSchema.refine(
+  (data) => Object.keys(data).length > 0,
+  { message: 'At least one field must be provided' },
+);
 
 export type UpdateProfileDto = z.infer<typeof updateProfileSchema>;
 

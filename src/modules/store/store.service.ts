@@ -130,8 +130,10 @@ export class StoreService {
   async getStorefront(
     slug: string,
   ): Promise<{ message: string; data: StorefrontResponse }> {
+    // Only an approved vendor's shop opens. A pending, suspended or deactivated vendor's
+    // link reads as unavailable rather than showing a shop no one can buy from.
     const vendor = await this.usersRepository.findOne({
-      where: { slug },
+      where: { slug, role: Role.SELLER, status: SellerStatus.APPROVED },
       relations: ['serviceAreas'],
     });
     if (!vendor) throw new NotFoundException('Storefront not found');

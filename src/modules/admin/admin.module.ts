@@ -14,6 +14,14 @@ import { EmailService } from '../../common/services/email.service';
 import { Account } from '../wallet/entities/account.entity';
 import { Withdrawal } from '../wallet/entities/withdrawal.entity';
 import { WalletModule } from '../wallet/wallet.module';
+import { PendingUser } from '../auth/entities/pending-user.entity';
+import { AuthModule } from '../auth/auth.module';
+import { SellersModule } from '../sellers/sellers.module';
+import { ProductsModule } from '../products/products.module';
+import { NotificationsModule } from '../notifications/notifications.module';
+import { VendorAdminEdit } from './entities/vendor-admin-edit.entity';
+import { AdminVendorsController } from './admin-vendors.controller';
+import { AdminVendorsService } from './admin-vendors.service';
 
 @Module({
   // OrdersModule for `confirmByReference` — the admin's "check with Paystack" must
@@ -27,12 +35,24 @@ import { WalletModule } from '../wallet/wallet.module';
       OrderStatusEvent,
       Account,
       Withdrawal,
+      PendingUser,
+      VendorAdminEdit,
     ]),
     OrdersModule,
     // The vendor page shows the balance, summed the one way the wallet sums it.
     WalletModule,
+    // Running a vendor's account for them goes through the vendor's own code.
+    AuthModule,
+    SellersModule,
+    ProductsModule,
+    NotificationsModule,
   ],
-  controllers: [AdminController, SuperAdminController],
-  providers: [AdminService, BootstrapSuperAdminService, EmailService],
+  controllers: [AdminController, AdminVendorsController, SuperAdminController],
+  providers: [
+    AdminService,
+    AdminVendorsService,
+    BootstrapSuperAdminService,
+    EmailService,
+  ],
 })
 export class AdminModule {}

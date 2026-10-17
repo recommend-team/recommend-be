@@ -168,7 +168,9 @@ export class AuthService {
       );
     }
 
-    if (user.status === SellerStatus.SUSPENDED) {
+    // A suspended vendor signs in to a read-only account that says so; anyone else
+    // suspended is kept out.
+    if (user.status === SellerStatus.SUSPENDED && user.role !== Role.SELLER) {
       throw new UnauthorizedException(
         'Your account has been suspended. Please contact support.',
       );
@@ -385,6 +387,54 @@ export class AuthService {
     return { message: genericMessage, data: null };
   }
 
+  /**
+   * Emails a vendor a link to choose their password, for an admin: an **invite** for an
+   * account the admin set up (it has no password yet), or a fresh link for a vendor who
+   * is locked out. Valid for 72 hours — longer than a self-service reset, because the
+   * vendor did not ask for it and may not open it at once.
+   *
+   * Uses the reset-password link and page, so there is one way to set a password.
+   * Returns whether the email went, so the admin is told when it did not.
+   */
+  async sendSetPasswordLink(
+    user: User,
+    kind: 'invite' | 'reset',
+  ): Promise<boolean> {
+    const token = this.generateResetToken();
+    await this.usersRepository.update(user.id, {
+      passwordResetToken: createHash('sha256').update(token).digest('hex'),
+      passwordResetTokenExpires: new Date(Date.now() + 72 * 60 * 60 * 1000),
+    });
+
+    const vendorAppUrl = this.configService.get<string>('app.vendorAppUrl');
+    const base =
+      user.role === Role.SELLER && vendorAppUrl
+        ? vendorAppUrl
+        : this.configService.get<string>('app.frontendUrl');
+    const url = `${base}/reset-password?token=${token}${kind === 'invite' ? '&invite=1' : ''}`;
+
+    try {
+      await this.emailService.sendEmail({
+        to: user.email,
+        subject:
+          kind === 'invite'
+            ? `Your shop on Recommend is ready – set your password`
+            : 'Set a new password – Recommend',
+        template: 'set-password-link',
+        context: {
+          name: user.firstName,
+          businessName: user.businessName,
+          url,
+          invite: kind === 'invite',
+        },
+      });
+      return true;
+    } catch (error) {
+      console.error('Failed to send set-password email:', error);
+      return false;
+    }
+  }
+
   async resetPassword(
     resetPasswordDto: ResetPasswordDto,
   ): Promise<{ message: string; data: null }> {
@@ -413,6 +463,9 @@ export class AuthService {
     user.passwordResetToken = null;
     user.passwordResetTokenExpires = null;
     user.passwordChangedAt = new Date();
+    // The lock-out message tells people to reset their password — so resetting it must
+    // lift the lock, or they are stuck.
+    user.failedLoginAttempts = 0;
 
     await this.usersRepository.save(user);
     await this.sendPasswordChangedEmail(user);
@@ -475,7 +528,7 @@ export class AuthService {
     const user = await this.usersRepository.findOne({
       where: { id: payload.sub },
     });
-    if (!user || !user.isActive()) return null;
+    if (!user || !user.canHoldSession()) return null;
     return user;
   }
 

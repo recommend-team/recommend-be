@@ -45,6 +45,7 @@ import {
   updateNonRegisteredKycSchema,
 } from './dto/update-kyc.dto';
 import { VendorType } from '../../common/enums/vendor-type.enum';
+import { AllowWhenSuspended } from '../auth/decorators/allow-when-suspended.decorator';
 
 @ApiTags('Sellers')
 @ApiBearerAuth()
@@ -171,7 +172,9 @@ export class SellersController {
     });
   }
 
+  // Orders already paid are finished even while suspended — buyers must not be stranded.
   @Patch('orders/:id/ready')
+  @AllowWhenSuspended()
   @HttpCode(HttpStatus.OK)
   @ApiOperation({
     summary: 'Mark an order ready for pickup',
@@ -199,6 +202,7 @@ export class SellersController {
   }
 
   @Post('orders/:id/check-code')
+  @AllowWhenSuspended()
   @HttpCode(HttpStatus.OK)
   @ApiOperation({
     summary: 'Check a buyer’s collection code at the counter',
