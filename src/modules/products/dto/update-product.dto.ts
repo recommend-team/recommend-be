@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { ApiPropertyOptional } from '@nestjs/swagger';
+import { productOptionsFields } from './product-options.dto';
 
 export const updateProductSchema = z
   .object({
@@ -9,6 +10,7 @@ export const updateProductSchema = z
     imageUrl: z.string().url().optional(),
     isAvailable: z.boolean().optional(),
     isAddOn: z.boolean().optional(),
+    ...productOptionsFields,
   })
   .refine((data) => Object.keys(data).length > 0, {
     message: 'At least one field must be provided',
@@ -39,4 +41,21 @@ export class UpdateProductRequestDto {
     description: 'Sold only with a main item from this vendor.',
   })
   isAddOn?: boolean;
+
+  @ApiPropertyOptional({
+    example: 'portion',
+    description: 'What the price is for.',
+  })
+  unit?: string | null;
+
+  @ApiPropertyOptional({
+    type: [String],
+    description: 'Extras that go with this dish.',
+  })
+  extraIds?: string[];
+
+  @ApiPropertyOptional({
+    description: 'Choices on this dish (see PRODUCT_OPTIONS_PLAN.md).',
+  })
+  choices?: unknown[];
 }

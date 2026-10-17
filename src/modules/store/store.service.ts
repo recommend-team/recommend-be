@@ -5,6 +5,7 @@ import { Repository, Not, IsNull } from 'typeorm';
 import { User } from '../auth/entities/auth.entity';
 import { ProductsService } from '../products/products.service';
 import { SellerStatus } from '../../common/enums/seller-status.enum';
+import type { ChoiceGroupView } from '../products/products.service';
 import { Role } from '../../common/enums/roles.enum';
 
 export interface StorefrontResponse {
@@ -33,6 +34,12 @@ export interface StorefrontResponse {
     isAvailable: boolean;
     /** Sold only with a main item from this vendor — shown apart, under extras. */
     isAddOn: boolean;
+    /** What the price is for — "per portion". Null shows no unit. */
+    unit: string | null;
+    /** On a dish: the vendor's extras that go with it (ids in `products`). */
+    extraIds: string[];
+    /** On a dish: its choices. Options include unavailable ones, marked so. */
+    choices: ChoiceGroupView[];
   }[];
   /** What delivery costs, so the cart shows the true total before checkout. */
   deliveryFee: number;
@@ -169,6 +176,9 @@ export class StoreService {
           imageUrl: p.imageUrl,
           isAvailable: p.isAvailable,
           isAddOn: p.isAddOn,
+          unit: p.unit,
+          extraIds: p.extraIds,
+          choices: p.choices,
         })),
         // The same settings checkout charges by, so the total shown is the total paid.
         deliveryFee:

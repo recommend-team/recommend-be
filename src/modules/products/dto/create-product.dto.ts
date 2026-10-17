@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
+import { productOptionsFields } from './product-options.dto';
 
 export const createProductSchema = z.object({
   name: z
@@ -20,6 +21,7 @@ export const createProductSchema = z.object({
   imageUrl: z.string().url('imageUrl must be a valid URL').optional(),
   isAvailable: z.boolean().optional().default(true),
   isAddOn: z.boolean().optional().default(false),
+  ...productOptionsFields,
 });
 
 export type CreateProductDto = z.infer<typeof createProductSchema>;
@@ -54,4 +56,21 @@ export class CreateProductRequestDto {
       'Kept out of search and offered at checkout instead.',
   })
   isAddOn?: boolean;
+
+  @ApiPropertyOptional({
+    example: 'portion',
+    description: 'What the price is for.',
+  })
+  unit?: string | null;
+
+  @ApiPropertyOptional({
+    type: [String],
+    description: 'Extras that go with this dish.',
+  })
+  extraIds?: string[];
+
+  @ApiPropertyOptional({
+    description: 'Choices on this dish (see PRODUCT_OPTIONS_PLAN.md).',
+  })
+  choices?: unknown[];
 }
