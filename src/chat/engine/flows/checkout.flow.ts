@@ -2,6 +2,7 @@ import { Inject, Injectable, Logger } from '@nestjs/common';
 import { ConversationService } from '../../conversation/conversation.service';
 import {
   Conversation,
+  ConversationContext,
   PendingCartLine,
 } from '../../conversation/entities/conversation.entity';
 import { ConversationState } from '../../enums/chat.enums';
@@ -11,7 +12,12 @@ import type { OrderingPort } from '../../ports/ordering.port';
 import { IDENTITY_PORT } from '../../ports/identity.port';
 import type { IdentityPort } from '../../ports/identity.port';
 import { CATALOG_PORT } from '../../ports/catalog.port';
-import type { CatalogPort } from '../../ports/catalog.port';
+import type {
+  CatalogPort,
+  DishChoice,
+  DishOptions,
+  ProductSummary,
+} from '../../ports/catalog.port';
 import { LOCATION_PORT } from '../../ports/location.port';
 import type { AreaSummary, LocationPort } from '../../ports/location.port';
 import { CartChangedError } from '../../adapters/local-ordering.adapter';
@@ -47,16 +53,31 @@ export class CheckoutFlow {
 
     await this.conversationService.mergeContext(conversation.id, {
       pendingCart: cart,
+      // Built in the app, each dish already carries the extras the buyer chose for it.
+      cartBuilt: cart.some(builtAsPack) || undefined,
+      choosing: undefined,
       // A new order starts its address afresh.
       addressDraft: undefined,
       addressRetried: undefined,
     });
 
+    // A dish whose required choice the cart left unanswered — an older app — is asked
+    // about first: checkout would refuse it.
+    const question = await this.nextChoice(conversation.id, cart);
+    if (question) return [question];
+
+    return this.afterChoices(conversation);
+  }
+
+  /** Extras, then the buyer's details. */
+  private async afterChoices(
+    conversation: Conversation,
+  ): Promise<OutboundMessage[]> {
     // Extras first, while the buyer is still thinking about the food — once per order,
-    // and only when a vendor in the cart has any.
+    // and only when a dish in the cart has any.
     const fresh = await this.conversationService.findById(conversation.id);
     if (!fresh?.context?.addOnsOffered) {
-      const offer = await this.addOnOffer(cart);
+      const offer = await this.addOnOffer(fresh?.context);
       if (offer) {
         await this.conversationService.mergeContext(conversation.id, {
           addOnsOffered: true,
@@ -92,9 +113,10 @@ export class CheckoutFlow {
 
     const cart = conversation.context?.pendingCart ?? [];
     const offered = new Map(
-      (await this.catalog.listAddOns(await this.vendorsWithMain(cart))).map(
-        (addOn) => [addOn.id, addOn],
-      ),
+      (await this.offeredExtras(conversation.context)).map((addOn) => [
+        addOn.id,
+        addOn,
+      ]),
     );
 
     const lines = [...cart];
@@ -168,10 +190,14 @@ export class CheckoutFlow {
     }
 
     switch (state) {
+      case ConversationState.SELECTING_ITEM: {
+        const asking = await this.currentChoice(context);
+        return asking ? [choiceQuestion(asking.dish, asking.group)] : [];
+      }
       case ConversationState.OFFERING_ADDONS: {
         // A fresh card, not "the card above": the app retires a card once the buyer has
         // typed anything after it, so the old one no longer has working buttons.
-        const offer = await this.addOnOffer(context.pendingCart ?? []);
+        const offer = await this.addOnOffer(context);
         const text =
           'Would you like anything to go with it? Pick below, or tap No, thanks.';
         return [offer ? { ...offer, text } : { text }];
@@ -230,6 +256,8 @@ export class CheckoutFlow {
     }
 
     switch (conversation.state) {
+      case ConversationState.SELECTING_ITEM:
+        return this.answerChoice(conversation, answer);
       case ConversationState.OFFERING_ADDONS:
         return this.answerAddOnOffer(conversation, answer);
       case ConversationState.COLLECTING_NAME:
@@ -882,20 +910,24 @@ export class CheckoutFlow {
     const cart = conversation.context?.pendingCart ?? [];
     const profile = conversation.context?.profile ?? {};
 
-    const lines = await Promise.all(
-      cart.map(async (line) => {
-        const product = await this.catalog.getProductById(line.productId);
-        return product
-          ? {
-              name: product.name,
-              vendorName: product.vendorName,
-              quantity: line.quantity,
-              unitPrice: product.price,
-              lineTotal: round2(product.price * line.quantity),
-            }
-          : null;
-      }),
-    );
+    // Priced the way checkout prices it; the plain per-item sum only if that's unavailable.
+    const quote = await this.ordering.quoteCart(cart);
+    const lines =
+      quote?.lines ??
+      (await Promise.all(
+        cart.map(async (line) => {
+          const product = await this.catalog.getProductById(line.productId);
+          return product
+            ? {
+                name: product.name,
+                vendorName: product.vendorName,
+                quantity: line.quantity,
+                unitPrice: product.price,
+                lineTotal: round2(product.price * line.quantity),
+              }
+            : null;
+        }),
+      ));
 
     const items = lines.filter(
       (line): line is NonNullable<typeof line> => !!line,
@@ -953,9 +985,7 @@ export class CheckoutFlow {
       return this.advanceFrom(conversation, ConversationState.COLLECTING_NAME);
     }
 
-    const offer = await this.addOnOffer(
-      conversation.context?.pendingCart ?? [],
-    );
+    const offer = await this.addOnOffer(conversation.context);
     if (!offer) {
       return this.advanceFrom(conversation, ConversationState.COLLECTING_NAME);
     }
@@ -967,13 +997,11 @@ export class CheckoutFlow {
     ];
   }
 
-  /** The add-on card for this cart, or null when no vendor in it has any. */
+  /** The add-on card for this cart, or null when no dish in it has extras. */
   private async addOnOffer(
-    cart: PendingCartLine[],
+    context?: ConversationContext,
   ): Promise<OutboundMessage | null> {
-    const addOns = await this.catalog.listAddOns(
-      await this.vendorsWithMain(cart),
-    );
+    const addOns = await this.offeredExtras(context);
     if (addOns.length === 0) return null;
 
     const byVendor = new Map<
@@ -1014,20 +1042,132 @@ export class CheckoutFlow {
   }
 
   /**
-   * Vendors with a main (non-add-on) item in the cart. Only their add-ons are offered:
-   * an extra always rides with a meal from its own kitchen.
+   * The extras ticked on the cart's dishes — what goes with this food, not everything
+   * the vendor sells. None for a cart built in the app: its packs carry their own.
    */
-  private async vendorsWithMain(cart: PendingCartLine[]): Promise<string[]> {
-    const products = await Promise.all(
-      cart.map((line) => this.catalog.getProductById(line.productId)),
+  private async offeredExtras(
+    context?: ConversationContext,
+  ): Promise<ProductSummary[]> {
+    const cart = context?.pendingCart ?? [];
+    if (context?.cartBuilt || cart.length === 0) return [];
+
+    const dishes = await this.catalog.getDishOptions(
+      cart.map((line) => line.productId),
     );
-    return [
-      ...new Set(
-        products
-          .filter((product) => product && !product.isAddOn)
-          .map((product) => product!.vendorId),
-      ),
-    ];
+    const extras = new Map<string, ProductSummary>();
+    for (const dish of dishes) {
+      for (const extra of dish.extras) extras.set(extra.id, extra);
+    }
+    return [...extras.values()];
+  }
+
+  // ─── Choices a cart left unanswered ─────────────────────────────────────────
+
+  /**
+   * The first dish in the cart with a required choice it didn't answer, asked about —
+   * or null when every dish is complete. Remembers what is being asked.
+   */
+  private async nextChoice(
+    conversationId: string,
+    cart: PendingCartLine[],
+  ): Promise<OutboundMessage | null> {
+    const dishes = new Map(
+      (
+        await this.catalog.getDishOptions(cart.map((line) => line.productId))
+      ).map((dish) => [dish.productId, dish]),
+    );
+
+    for (const [line, item] of cart.entries()) {
+      const dish = dishes.get(item.productId);
+      const group = dish?.choices.find(
+        (choice) =>
+          choice.required &&
+          choice.minPick > 0 &&
+          !(item.choices ?? []).some((c) => c.groupId === choice.id),
+      );
+      if (!dish || !group) continue;
+
+      await this.conversationService.mergeContext(conversationId, {
+        choosing: { line, groupId: group.id },
+      });
+      await this.conversationService.setState(
+        conversationId,
+        ConversationState.SELECTING_ITEM,
+      );
+      return choiceQuestion(dish, group);
+    }
+    return null;
+  }
+
+  private async currentChoice(
+    context: ConversationContext,
+  ): Promise<{ dish: DishOptions; group: DishChoice } | null> {
+    const choosing = context.choosing;
+    const item = choosing ? context.pendingCart?.[choosing.line] : undefined;
+    if (!choosing || !item) return null;
+    const [dish] = await this.catalog.getDishOptions([item.productId]);
+    const group = dish?.choices.find(
+      (choice) => choice.id === choosing.groupId,
+    );
+    return dish && group ? { dish, group } : null;
+  }
+
+  /**
+   * The buyer's answer — a tap on the card, or typed. Options are matched by name; one
+   * that has run out is said so, and too few or too many is asked again.
+   */
+  private async answerChoice(
+    conversation: Conversation,
+    answer: string,
+  ): Promise<OutboundMessage[]> {
+    const fresh = await this.conversationService.findById(conversation.id);
+    const context = fresh?.context ?? conversation.context ?? {};
+    const asking = await this.currentChoice(context);
+    const cart = [...(context.pendingCart ?? [])];
+
+    // The dish or the choice has gone since it was asked: checkout will say so.
+    if (!asking || !context.choosing) {
+      await this.conversationService.mergeContext(conversation.id, {
+        choosing: undefined,
+      });
+      return this.afterChoices(conversation);
+    }
+
+    const { dish, group } = asking;
+    const said = normalise(answer);
+    const named = group.options.filter((option) =>
+      said.includes(normalise(option.name)),
+    );
+    const picked = named.filter((option) => option.isAvailable);
+    const soldOut = named.find((option) => !option.isAvailable);
+
+    if (picked.length < Math.max(1, group.minPick)) {
+      const lead = soldOut
+        ? `Sorry, ${soldOut.name} has run out. `
+        : picked.length > 0
+          ? `Pick ${group.minPick}, please. `
+          : "Sorry, I didn't catch that. ";
+      return [choiceQuestion(dish, group, lead)];
+    }
+    if (picked.length > group.maxPick) {
+      const lead = `Just ${group.maxPick === 1 ? 'one' : group.maxPick}, please. `;
+      return [choiceQuestion(dish, group, lead)];
+    }
+
+    const line = context.choosing.line;
+    cart[line] = withChoice(
+      cart[line],
+      group.id,
+      picked.map((option) => option.id),
+    );
+    await this.conversationService.mergeContext(conversation.id, {
+      pendingCart: cart,
+      choosing: undefined,
+    });
+
+    const next = await this.nextChoice(conversation.id, cart);
+    if (next) return [next];
+    return this.afterChoices(conversation);
   }
 
   private async reset(conversationId: string): Promise<void> {
@@ -1035,6 +1175,8 @@ export class CheckoutFlow {
       pendingCart: [],
       // A new order is offered extras again.
       addOnsOffered: false,
+      cartBuilt: undefined,
+      choosing: undefined,
       addressDraft: undefined,
       addressRetried: undefined,
     });
@@ -1274,6 +1416,14 @@ function describeCartChanges(error: CartChangedError): string {
         return `${name} has sold out`;
       case 'ADDON_WITHOUT_MAIN':
         return `${name} is an extra, so it needs a meal from the same vendor`;
+      case 'EXTRA_NOT_OFFERED':
+        return `${name} no longer comes with ${change.dishName ?? 'that dish'}`;
+      case 'CHOICES_NEEDED':
+        return `${name} needs you to pick ${(change.groupName ?? 'an option').toLowerCase()}`;
+      case 'CHOICE_UNAVAILABLE':
+        return change.optionName
+          ? `${change.optionName} is no longer available for ${name}`
+          : `one of the options on ${name} has changed`;
       default:
         return `${name} is no longer available`;
     }
@@ -1284,4 +1434,80 @@ function describeCartChanges(error: CartChangedError): string {
 
 function round2(value: number): number {
   return Math.round(value * 100) / 100;
+}
+
+/** A dish built as a pack in the app, rather than a plain line from an older one. */
+function builtAsPack(line: PendingCartLine): boolean {
+  return (
+    line.packs !== undefined ||
+    (line.extras?.length ?? 0) > 0 ||
+    (line.choices?.length ?? 0) > 0
+  );
+}
+
+/** "Which protein for your Rice and stew?", with the options to tap. */
+function choiceQuestion(
+  dish: DishOptions,
+  group: DishChoice,
+  lead = '',
+): OutboundMessage {
+  const many =
+    group.maxPick <= 1
+      ? ''
+      : group.minPick === group.maxPick
+        ? ` Pick ${group.maxPick}.`
+        : ` Pick up to ${group.maxPick}.`;
+  return {
+    text: `${lead}Which ${choiceNoun(group.name)} for your ${dish.name}?${many}`,
+    payload: choices(
+      'dish-choice',
+      group.options
+        .filter((option) => option.isAvailable)
+        .map((option) => ({
+          id: option.id,
+          // The extra cost is per portion — said so, as on the menu.
+          label:
+            option.priceDelta > 0
+              ? `${option.name} (+${formatNaira(option.priceDelta)}${dish.unit ? ` per ${dish.unit}` : ' each'})`
+              : option.name,
+        })),
+    ),
+  };
+}
+
+/** "Choose your protein" → "protein". */
+function choiceNoun(name: string): string {
+  const noun = name
+    .trim()
+    .replace(/^(choose|pick|select)\s+/i, '')
+    .replace(/^(your|a|an|the)\s+/i, '')
+    .replace(/[?:.]+$/, '')
+    .toLowerCase();
+  return noun || 'option';
+}
+
+/**
+ * The line with its choice answered. A pack holds at most 10 portions, so an older
+ * app's 12 plates become 12 packs of one.
+ */
+function withChoice(
+  line: PendingCartLine,
+  groupId: string,
+  optionIds: string[],
+): PendingCartLine {
+  const answered = {
+    ...line,
+    choices: [...(line.choices ?? []), { groupId, optionIds }],
+  };
+  return line.packs === undefined && line.quantity > 10
+    ? { ...answered, quantity: 1, packs: line.quantity }
+    : answered;
+}
+
+/** Lower case, letters and digits only — "Fish (+₦300…)" and "fish" match. */
+function normalise(text: string): string {
+  return ` ${text
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, ' ')
+    .trim()} `;
 }

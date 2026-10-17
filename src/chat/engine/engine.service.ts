@@ -697,6 +697,7 @@ function repeatedThemselves(history: ChatMessage[], text: string): boolean {
 
 /** Checkout steps where a question or a greeting gets an answer, then the step again. */
 const QUESTION_STEPS = new Set<ConversationState>([
+  ConversationState.SELECTING_ITEM,
   ConversationState.OFFERING_ADDONS,
   ConversationState.COLLECTING_NAME,
   ConversationState.COLLECTING_PHONE,

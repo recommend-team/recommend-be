@@ -12,6 +12,7 @@ export enum ChatChannel {
  */
 export enum ConversationState {
   DISCOVERY = 'DISCOVERY',
+  /** "Which protein for your Rice and stew?" — a required choice the cart didn't answer. */
   SELECTING_ITEM = 'SELECTING_ITEM',
   /** "Anything to go with it?" — the cart vendors' add-ons, offered once after Pay. */
   OFFERING_ADDONS = 'OFFERING_ADDONS',
