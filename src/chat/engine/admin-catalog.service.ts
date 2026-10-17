@@ -5,10 +5,22 @@ import { LOCATION_PORT } from '../ports/location.port';
 import type {
   CatalogPort,
   CategorySummary,
+  DishChoice,
   ProductSummary,
   VendorSummary,
 } from '../ports/catalog.port';
 import type { AreaSummary, LocationPort } from '../ports/location.port';
+
+/**
+ * A product in the admin's order builder. A dish carries what it's sold with, so the
+ * builder can build a pack as a buyer would; an extra carries empty lists.
+ */
+export interface AdminCatalogProduct extends ProductSummary {
+  unit: string | null;
+  /** The extras ticked on this dish, on sale — whole, so a pack can be built from a search. */
+  extras: { id: string; name: string; price: number }[];
+  choices: DishChoice[];
+}
 
 /** Everything the admin needs to choose the right shelf, in one reply. */
 export interface AdminCatalogContext {
@@ -92,7 +104,7 @@ export class AdminCatalogService {
       search?: string;
       limit?: number;
     },
-  ): Promise<ProductSummary[]> {
+  ): Promise<AdminCatalogProduct[]> {
     const areaId = await this.resolveArea(conversationId, query.areaId);
 
     const products = await this.catalog.searchProducts({
@@ -106,8 +118,35 @@ export class AdminCatalogService {
     // Browsing one store, the admin sees its extras too — flagged, so the builder lists
     // them apart and only alongside a meal. A search across stores never surfaces them,
     // as it never does for buyers. Checkout refuses an extra on its own either way.
-    if (!query.vendorId || query.search?.trim()) return products;
-    return [...products, ...(await this.catalog.listAddOns([query.vendorId]))];
+    const listed =
+      !query.vendorId || query.search?.trim()
+        ? products
+        : [...products, ...(await this.catalog.listAddOns([query.vendorId]))];
+    return this.withOptions(listed);
+  }
+
+  /** Each dish with its unit, extras and choices, so the builder can build packs. */
+  private async withOptions(
+    products: ProductSummary[],
+  ): Promise<AdminCatalogProduct[]> {
+    const dishes = new Map(
+      (
+        await this.catalog.getDishOptions(
+          products.filter((p) => !p.isAddOn).map((p) => p.id),
+        )
+      ).map((dish) => [dish.productId, dish]),
+    );
+    return products.map((product) => {
+      const dish = dishes.get(product.id);
+      return {
+        ...product,
+        unit: dish?.unit ?? null,
+        extras:
+          dish?.extras.map(({ id, name, price }) => ({ id, name, price })) ??
+          [],
+        choices: dish?.choices ?? [],
+      };
+    });
   }
 
   /** What the admin is looking at, falling back to what the conversation knows. */

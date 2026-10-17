@@ -25,6 +25,7 @@ describe('AdminCatalogService', () => {
     searchProducts: jest.Mock;
     listCategories: jest.Mock;
     listAddOns: jest.Mock;
+    getDishOptions: jest.Mock;
   };
   let locations: {
     listAreas: jest.Mock;
@@ -39,6 +40,7 @@ describe('AdminCatalogService', () => {
       searchProducts: jest.fn().mockResolvedValue([]),
       listCategories: jest.fn().mockResolvedValue([]),
       listAddOns: jest.fn().mockResolvedValue([]),
+      getDishOptions: jest.fn().mockResolvedValue([]),
     };
     locations = {
       listAreas: jest.fn().mockResolvedValue([area(IKEJA, 'Ikeja')]),
@@ -169,7 +171,42 @@ describe('AdminCatalogService', () => {
       const products = await service.products('c1', { vendorId: 'v1' });
 
       expect(catalog.listAddOns).toHaveBeenCalledWith(['v1']);
-      expect(products).toEqual([dish, water]);
+      expect(products).toEqual([
+        { ...dish, unit: null, extras: [], choices: [] },
+        { ...water, unit: null, extras: [], choices: [] },
+      ]);
+    });
+
+    it('gives each dish its unit, extras and choices, so packs can be built', async () => {
+      const protein = {
+        id: 'g1',
+        name: 'Choose your protein',
+        required: true,
+        minPick: 1,
+        maxPick: 1,
+        options: [],
+      };
+      catalog.searchProducts.mockResolvedValue([
+        { id: 'p1', name: 'Rice and stew', isAddOn: false },
+      ]);
+      catalog.getDishOptions.mockResolvedValue([
+        {
+          productId: 'p1',
+          name: 'Rice and stew',
+          unit: 'portion',
+          choices: [protein],
+          extras: [{ id: 'w1', name: 'Water', price: 300, isAddOn: true }],
+        },
+      ]);
+
+      const [stew] = await service.products('c1', { search: 'stew' });
+
+      expect(catalog.getDishOptions).toHaveBeenCalledWith(['p1']);
+      expect(stew).toMatchObject({
+        unit: 'portion',
+        extras: [{ id: 'w1', name: 'Water', price: 300 }],
+        choices: [protein],
+      });
     });
 
     it('never surfaces extras in a search, as for buyers', async () => {
