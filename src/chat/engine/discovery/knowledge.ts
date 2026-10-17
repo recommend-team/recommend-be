@@ -1,5 +1,10 @@
 import type { AreaSummary } from '../../ports/location.port';
 import { WHY_DETAILS, asksWhyDetails } from '../flows/aside';
+import {
+  SUPPORT_EMAIL,
+  SUPPORT_HOURS,
+  SUPPORT_PHONE,
+} from '../../../common/support';
 
 /**
  * What the assistant knows about Recommend.
@@ -9,11 +14,8 @@ import { WHY_DETAILS, asksWhyDetails } from '../flows/aside';
  * from the system, never written down, so James cannot quote a stale figure.
  */
 
-/** Same details as the customer app's Help & contact and the website's contact page. */
-export const SUPPORT_PHONE = '+234 814 306 7676';
-export const SUPPORT_EMAIL = 'contacts.recommend@gmail.com';
-export const SUPPORT_HOURS =
-  'Monday to Friday 8am to 9pm, and Saturday 9am to 8pm';
+// Shared with the order emails, so the assistant and the inbox give the same number.
+export { SUPPORT_EMAIL, SUPPORT_HOURS, SUPPORT_PHONE };
 
 export const DELIVERY_TIME =
   'usually 20 to 30 minutes, a little longer at busy times or in the rain';

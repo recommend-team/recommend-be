@@ -14,6 +14,8 @@ import { OrderStatusEvent } from './entities/order-status-event.entity';
 import { PaymentsModule } from '../payments/payments.module';
 import { PaymentsController } from '../payments/payments.controller';
 import { WalletModule } from '../wallet/wallet.module';
+import { CommonModule } from '../../common/common.module';
+import { BuyerOrderEmailsListener } from './buyer-order-emails.listener';
 
 @Module({
   imports: [
@@ -26,6 +28,8 @@ import { WalletModule } from '../wallet/wallet.module';
     ]),
     PaymentsModule,
     WalletModule,
+    // EmailService, for the buyer's receipt and delivery-code emails.
+    CommonModule,
   ],
   controllers: [OrdersController, PaymentsController],
   providers: [
@@ -34,6 +38,7 @@ import { WalletModule } from '../wallet/wallet.module';
     PaymentReconciliationService,
     OrderLifecycleService,
     HandoverCodeService,
+    BuyerOrderEmailsListener,
   ],
   exports: [
     OrdersService,
