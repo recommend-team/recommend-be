@@ -11,6 +11,7 @@ import { PaymentReconciliationService } from './payment-reconciliation.service';
 import { OrderLifecycleService } from './order-lifecycle.service';
 import { HandoverCodeService } from './handover-code.service';
 import { OrderStatusEvent } from './entities/order-status-event.entity';
+import { ProductChoiceGroup } from '../products/entities/product-choice.entity';
 import { PaymentsModule } from '../payments/payments.module';
 import { PaymentsController } from '../payments/payments.controller';
 import { WalletModule } from '../wallet/wallet.module';
@@ -26,6 +27,7 @@ import { StuckDeliveryService } from './stuck-delivery.service';
       OrderItem,
       Product,
       OrderStatusEvent,
+      ProductChoiceGroup,
     ]),
     PaymentsModule,
     WalletModule,
