@@ -12,6 +12,7 @@ export const CATEGORIES = {
   gadgets: 'Gadgets',
   phoneAccessories: 'Phone Accessories',
   homeAppliances: 'Home Appliances',
+  fashion: 'Fashion',
 } as const;
 
 const SYNONYMS: Record<string, string[]> = {
@@ -38,6 +39,73 @@ const SYNONYMS: Record<string, string[]> = {
     'something to eat',
     'kitchen',
     'takeaway',
+    'hungry',
+    'starving',
+    'famished',
+    'barbecue',
+    'bbq',
+    'grill',
+    'grills',
+    // Dishes: someone asking for one wants food, whatever the menu calls it.
+    'rice',
+    'jollof',
+    'fried rice',
+    'ofada',
+    'native rice',
+    'amala',
+    'eba',
+    'fufu',
+    'semo',
+    'semovita',
+    'pounded yam',
+    'swallow',
+    'soup',
+    'egusi',
+    'efo',
+    'ogbono',
+    'okra',
+    'banga',
+    'afang',
+    'edikaikong',
+    'pepper soup',
+    'beans',
+    'ewa',
+    'agoyin',
+    'plantain',
+    'dodo',
+    'boli',
+    'bole',
+    'moi moi',
+    'moin moin',
+    'akara',
+    'yam',
+    'porridge',
+    'suya',
+    'asun',
+    'isi ewu',
+    'nkwobi',
+    'gizdodo',
+    'shawarma',
+    'burger',
+    'burgers',
+    'pizza',
+    'sandwich',
+    'chicken',
+    'turkey',
+    'goat meat',
+    'fish',
+    'catfish',
+    'spaghetti',
+    'noodles',
+    'indomie',
+    'small chops',
+    'puff puff',
+    'meat pie',
+    'pastries',
+    'snacks',
+    'zobo',
+    'chapman',
+    'smoothie',
   ],
   [CATEGORIES.gadgets]: [
     'gadget',
@@ -51,10 +119,15 @@ const SYNONYMS: Record<string, string[]> = {
     'phone',
     'phones',
     'smartphone',
+    'smartphones',
     'android',
+    'androids',
     'iphone',
+    'iphones',
     'tablet',
+    'tablets',
     'ipad',
+    'ipads',
     'electronics',
     'tech',
     'device',
@@ -96,6 +169,7 @@ const SYNONYMS: Record<string, string[]> = {
     'oven',
     'cooker',
     'gas cooker',
+    'rice cooker',
     'fan',
     'standing fan',
     'tv',
@@ -104,6 +178,49 @@ const SYNONYMS: Record<string, string[]> = {
     'water dispenser',
     'pressing iron',
     'kettle',
+  ],
+  [CATEGORIES.fashion]: [
+    'fashion',
+    'clothes',
+    'clothing',
+    'wear',
+    'outfit',
+    'outfits',
+    'dress',
+    'dresses',
+    'gown',
+    'gowns',
+    'shirt',
+    'shirts',
+    't shirt',
+    'tshirt',
+    'top',
+    'tops',
+    'trouser',
+    'trousers',
+    'jeans',
+    'skirt',
+    'skirts',
+    'ankara',
+    'aso ebi',
+    'agbada',
+    'kaftan',
+    'senator',
+    'shoe',
+    'shoes',
+    'sneakers',
+    'sandals',
+    'slippers',
+    'heels',
+    'bag',
+    'bags',
+    'handbag',
+    'cap',
+    'hat',
+    'wig',
+    'wigs',
+    'jewellery',
+    'jewelry',
   ],
 };
 
@@ -116,6 +233,30 @@ for (const [category, words] of Object.entries(SYNONYMS)) {
     if (word.includes(' ')) PHRASES.push({ phrase: word, category });
     else SINGLE_WORD.set(word, category);
   }
+}
+// Longest first, so "rice cooker" is read before anything shorter inside it.
+PHRASES.sort((a, b) => b.phrase.length - a.phrase.length);
+
+/**
+ * The standard categories a vendor's own category stands for. Vendors type it freely —
+ * "food", "Barbecue, food", "Iphones, androids, ipads, etc" — so it is read with the
+ * same words buyers use: "Barbecue, food" is a Restaurant.
+ */
+export function standardCategoriesOf(vendorCategory: string | null): string[] {
+  if (!vendorCategory?.trim()) return [];
+  const exact = Object.values(CATEGORIES).find(
+    (category) =>
+      category.toLowerCase() === vendorCategory.trim().toLowerCase(),
+  );
+  return exact ? [exact] : categoriesFor(vendorCategory);
+}
+
+/** "food, gadgets, phone accessories, home appliances or fashion" — for asking. */
+export function kindsList(): string {
+  const kinds = Object.values(CATEGORIES).map((category) =>
+    category === CATEGORIES.restaurant ? 'food' : category.toLowerCase(),
+  );
+  return `${kinds.slice(0, -1).join(', ')} or ${kinds[kinds.length - 1]}`;
 }
 
 /**
@@ -133,11 +274,15 @@ export function categoriesFor(text: string | undefined): string[] {
 
   const found = new Set<string>();
 
+  let rest = ` ${normalised} `;
   for (const { phrase, category } of PHRASES) {
-    if (normalised.includes(phrase)) found.add(category);
+    if (rest.includes(` ${phrase} `)) {
+      found.add(category);
+      rest = rest.split(` ${phrase} `).join(' ');
+    }
   }
 
-  for (const token of normalised.split(' ')) {
+  for (const token of rest.trim().split(/\s+/)) {
     const category = SINGLE_WORD.get(token);
     if (category) found.add(category);
   }

@@ -32,8 +32,9 @@ const vendor = (name: string, category: string): VendorSummary => ({
 });
 
 /**
- * A small catalogue in Ajah: food from one kitchen, chargers from one shop. Searches
- * behave like the real ones — all words, any word, by category, by area.
+ * A small catalogue in Ajah: food from two kitchens (one filed as "Barbecue, food"),
+ * chargers from one shop, a rice cooker from another. Searches behave like the real ones
+ * — all words, any word, by category, by area.
  */
 function catalogue(): CatalogPort & {
   productQueries: ProductSearchQuery[];
@@ -43,14 +44,18 @@ function catalogue(): CatalogPort & {
     { ...product('Jollof Rice'), category: 'Restaurant' },
     { ...product('Beans and Plantain'), category: 'Restaurant' },
     { ...product('Pepper Soup'), category: 'Restaurant' },
+    { ...product('Grilled Fish', 'Bisi Grills'), category: 'Barbecue, food' },
     {
       ...product('iPhone Fast Charger', 'Gadget Hub'),
       category: 'Phone Accessories',
     },
+    { ...product('Rice Cooker', 'Home Plus'), category: 'Home Appliances' },
   ];
   const vendors = [
     vendor('Mama Put', 'Restaurant'),
+    vendor('Bisi Grills', 'Barbecue, food'),
     vendor('Gadget Hub', 'Phone Accessories'),
+    vendor('Home Plus', 'Home Appliances'),
   ];
   const words = (text?: string) =>
     (text ?? '')
@@ -68,7 +73,12 @@ function catalogue(): CatalogPort & {
   return {
     productQueries,
     vendorQueries,
-    listCategories: jest.fn(),
+    // As vendors typed them, counted.
+    listCategories: jest.fn(() =>
+      Promise.resolve(
+        vendors.map((v) => ({ name: v.category ?? '', storeCount: 1 })),
+      ),
+    ),
     getVendorById: jest.fn(),
     getProductById: jest.fn(),
     listAddOns: jest.fn(),
@@ -125,7 +135,12 @@ describe('offering something when nothing matches', () => {
 
     expect(found.kind).toBe('category');
     expect(found.category).toBe('Restaurant');
-    expect(found.products.every((p) => p.vendorName === 'Mama Put')).toBe(true);
+    // Food only — both kitchens, never the shops.
+    expect(
+      found.products.every((p) =>
+        ['Mama Put', 'Bisi Grills'].includes(p.vendorName ?? ''),
+      ),
+    ).toBe(true);
   });
 
   it('never jumps to another kind of thing for a request whose kind is known', async () => {
@@ -153,26 +168,70 @@ describe('offering something when nothing matches', () => {
     expect(found.products.map((p) => p.name)).toEqual(['Beans and Plantain']);
   });
 
-  it('offers the vendors serving the area when the kind is unknown', async () => {
-    const found = await findAlternatives(catalogue(), {
-      text: 'chilled zobo',
+  it('asks what kind of thing, rather than list every vendor, when it cannot tell', async () => {
+    const catalog = catalogue();
+    const found = await findAlternatives(catalog, {
+      text: 'kente',
       areaId: 'ajah',
+    });
+
+    expect(found.kind).toBe('ask');
+    expect(found.vendors).toEqual([]);
+    expect(catalog.vendorQueries).toEqual([]);
+    expect(alternativesLine(found, 'kente', 'Ajah')).toBe(
+      `I couldn't find "kente" in Ajah. What kind of thing is it — food, gadgets, phone accessories, home appliances or fashion? Then I can show you who has that near you.`,
+    );
+  });
+
+  it('someone hungry is shown food vendors only — never the shops nearby', async () => {
+    const catalog = catalogue();
+    (catalog.searchProducts as jest.Mock).mockResolvedValue([]);
+
+    // "ofada" alone says nothing; "I'm hungry" a message ago says it's food.
+    const found = await findAlternatives(catalog, {
+      text: 'ofada',
+      areaId: 'ajah',
+      said: "ofada I'm hungry",
     });
 
     expect(found.kind).toBe('vendors');
     expect(found.vendors.map((v) => v.name)).toEqual([
       'Mama Put',
-      'Gadget Hub',
+      'Bisi Grills',
     ]);
   });
 
-  it('does not list every vendor anywhere when the area is unknown', async () => {
+  it('never offers a rice cooker for fried rice', async () => {
     const found = await findAlternatives(catalogue(), {
-      text: 'chilled zobo',
-      areaId: null,
+      text: 'fried rice and chicken',
+      areaId: 'ajah',
     });
 
-    expect(found.kind).toBe('none');
+    expect(found.kind).toBe('similar');
+    expect(found.products.map((p) => p.name)).toEqual(['Jollof Rice']);
+  });
+
+  it('counts a vendor filed as "Barbecue, food" as food', async () => {
+    const found = await findAlternatives(catalogue(), {
+      text: 'suya',
+      areaId: 'ajah',
+    });
+
+    expect(found.kind).toBe('category');
+    expect(found.products.map((p) => p.vendorName)).toContain('Bisi Grills');
+    expect(found.products.map((p) => p.name)).not.toContain('Rice Cooker');
+  });
+
+  it('says so when no vendor of that kind serves the area', async () => {
+    const found = await findAlternatives(catalogue(), {
+      text: 'ankara gown',
+      areaId: 'ajah',
+    });
+
+    expect(found).toMatchObject({ kind: 'none', category: 'Fashion' });
+    expect(alternativesLine(found, 'ankara gown', 'Ajah')).toBe(
+      `I couldn't find "ankara gown" in Ajah, and no fashion vendors serve there yet. Try another area, or another search.`,
+    );
   });
 
   it('skips the any-word search for a single word — it would be the same search', async () => {

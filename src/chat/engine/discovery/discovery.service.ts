@@ -516,6 +516,7 @@ export class DiscoveryService {
       const found = await findAlternatives(this.catalog, {
         text: query,
         areaId,
+        said: recentBuyerText(request),
       });
       harvest.unmet.push({ query, areaId, alternatives: found.kind });
       harvest.products.push(...found.products);

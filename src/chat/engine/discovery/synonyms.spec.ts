@@ -1,4 +1,4 @@
-import { CATEGORIES, categoriesFor } from './synonyms';
+import { CATEGORIES, categoriesFor, standardCategoriesOf } from './synonyms';
 
 describe('categoriesFor', () => {
   it('maps the word that started all this', () => {
@@ -42,10 +42,36 @@ describe('categoriesFor', () => {
     expect(both).toContain(CATEGORIES.phoneAccessories);
   });
 
-  it('says nothing when the buyer named a specific thing', () => {
-    // These must fall through to ordinary text search, which is more precise. Widening
-    // "jollof rice" to every restaurant would bury the dish they asked for.
-    expect(categoriesFor('jollof rice')).toEqual([]);
+  it('knows a dish, or being hungry, is food — so suggestions stay food', () => {
+    // Only used when the dish itself found nothing: then "jollof rice" is food, and the
+    // suggestions are food vendors, never the shop next door.
+    expect(categoriesFor('jollof rice')).toEqual([CATEGORIES.restaurant]);
+    expect(categoriesFor("I'm hungry")).toEqual([CATEGORIES.restaurant]);
+    expect(categoriesFor('ofada and dodo')).toEqual([CATEGORIES.restaurant]);
+  });
+
+  it('reads a phrase before its words — a rice cooker is not rice', () => {
+    expect(categoriesFor('rice cooker')).toEqual([CATEGORIES.homeAppliances]);
+  });
+
+  it('knows fashion', () => {
+    expect(categoriesFor('ankara gown')).toEqual([CATEGORIES.fashion]);
+    expect(categoriesFor('sneakers')).toEqual([CATEGORIES.fashion]);
+  });
+
+  it('reads vendors’ own categories, however they typed them', () => {
+    expect(standardCategoriesOf('Restaurant')).toEqual([CATEGORIES.restaurant]);
+    expect(standardCategoriesOf('food')).toEqual([CATEGORIES.restaurant]);
+    expect(standardCategoriesOf('Barbecue, food')).toEqual([
+      CATEGORIES.restaurant,
+    ]);
+    expect(standardCategoriesOf('Iphones, androids, ipads, etc')).toEqual([
+      CATEGORIES.gadgets,
+    ]);
+    expect(standardCategoriesOf(null)).toEqual([]);
+  });
+
+  it('says nothing when the words name no kind of thing', () => {
     expect(categoriesFor('Mama Ngozi')).toEqual([]);
     expect(categoriesFor('')).toEqual([]);
     expect(categoriesFor(undefined)).toEqual([]);

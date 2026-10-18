@@ -8,11 +8,12 @@ import { AreaSummary, LocationPort } from '../../ports/location.port';
 import type { OrderingPort } from '../../ports/ordering.port';
 import { orderForModel, orderPrices } from './my-orders';
 import { sanitizeUntrusted } from './sanitize';
-import { categoriesFor } from './synonyms';
+import { categoriesFor, kindsList, standardCategoriesOf } from './synonyms';
 import {
   AlternativeKind,
   Alternatives,
   findAlternatives,
+  vendorCategoriesFor,
 } from './alternatives';
 import { searchWithDishNames } from './dish-names';
 
@@ -249,6 +250,8 @@ export async function executeTool(
       const found = await findAlternatives(context.catalog, {
         text: query,
         areaId,
+        // "I'm hungry" a message ago says "ofada" is food.
+        said: context.buyerText,
       });
       harvest.unmet.push({
         query,
@@ -266,22 +269,41 @@ export async function executeTool(
       const text = typeof args.query === 'string' ? args.query : undefined;
       const category =
         typeof args.category === 'string' ? args.category : undefined;
-      const impliedByBuyer =
-        !text && !category ? categoriesFor(context.buyerText) : [];
+      // The kind of store: as the model named it, else from what the buyer said.
+      // Matched against vendors' own categories however they typed them — "food",
+      // "Barbecue, food" and "Restaurant" are all food.
+      const kinds = category
+        ? standardCategoriesOf(category)
+        : !text
+          ? categoriesFor(context.buyerText)
+          : [];
+      const typed =
+        kinds.length > 0
+          ? await vendorCategoriesFor(context.catalog, kinds, areaId)
+          : [];
 
-      let vendors = await context.catalog.searchVendors({
-        text,
-        category,
-        categories: impliedByBuyer.length > 0 ? impliedByBuyer : undefined,
-        areaId,
-      });
+      let vendors =
+        kinds.length > 0 && typed.length === 0
+          ? [] // Nothing of that kind serves the area.
+          : await context.catalog.searchVendors({
+              text,
+              category: kinds.length > 0 ? undefined : category,
+              categories: typed.length > 0 ? typed : undefined,
+              areaId,
+            });
 
-      if (vendors.length === 0) {
-        const categories = categoriesFor(
-          [text, category].filter(Boolean).join(' '),
-        );
-        if (categories.length > 0) {
-          vendors = await context.catalog.searchVendors({ categories, areaId });
+      // A name that matched nobody: stores of the kind the words point at, if any.
+      if (vendors.length === 0 && text) {
+        const named = categoriesFor(text);
+        const namedTyped =
+          named.length > 0
+            ? await vendorCategoriesFor(context.catalog, named, areaId)
+            : [];
+        if (namedTyped.length > 0) {
+          vendors = await context.catalog.searchVendors({
+            categories: namedTyped,
+            areaId,
+          });
         }
       }
 
@@ -401,8 +423,9 @@ function alternativesForModel(query: string, found: Alternatives): string {
         exactMatch: false,
         note:
           `Nothing matches "${asked}" exactly, and no similar items either. These ` +
-          'vendors serve the area. Say first that you could not find it, then suggest ' +
-          'they tap a vendor to see what they have. They are shown as cards.',
+          `${found.category ?? ''} vendors serve the area. Say first that you could ` +
+          'not find it, then suggest they tap a vendor to see what they have. They are ' +
+          'shown as cards.',
         vendors: found.vendors.map((vendor) => ({
           id: vendor.id,
           name: sanitizeUntrusted(vendor.name, 80),
@@ -410,15 +433,22 @@ function alternativesForModel(query: string, found: Alternatives): string {
           isOpen: vendor.isOpen,
         })),
       });
+    case 'ask':
+      return JSON.stringify({
+        exactMatch: false,
+        note:
+          `Nothing matches "${asked}", and it is not clear what kind of thing it is. ` +
+          'Say you could not find it, and ask what kind of thing they want — ' +
+          `${kindsList()} — so you can show who has that near them. Do not ` +
+          'suggest vendors of another kind.',
+      });
     case 'none':
-      return 'Nothing available matching that, and nothing similar nearby.';
+      return found.category
+        ? `Nothing matching that, and no ${found.category} vendors serve the area. Say so; do not suggest vendors of another kind.`
+        : 'Nothing available matching that, and nothing similar nearby.';
   }
 }
 
-/**
- * What the model is shown. Prices are included so it can reason about "cheapest", but
- * the system prompt forbids repeating them and the price guard enforces it.
- */
 /**
  * Products as the model sees them, with what each dish comes with — its unit, its
  * choices and its extras — by name only, so it can answer "what proteins do they have?"
@@ -459,6 +489,10 @@ async function withOptions(catalog: CatalogPort, products: ProductSummary[]) {
   });
 }
 
+/**
+ * What the model is shown. Prices are included so it can reason about "cheapest", but
+ * the system prompt forbids repeating them and the price guard enforces it.
+ */
 function forModel(product: ProductSummary) {
   return {
     id: product.id,

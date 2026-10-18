@@ -36,7 +36,11 @@ const product = (over: Partial<Record<string, unknown>> = {}) => ({
  */
 describe('DiscoveryService (keyword fallback)', () => {
   let service: DiscoveryService;
-  let catalog: { searchProducts: jest.Mock; searchVendors: jest.Mock };
+  let catalog: {
+    searchProducts: jest.Mock;
+    searchVendors: jest.Mock;
+    listCategories: jest.Mock;
+  };
   let locations: {
     searchAreas: jest.Mock;
     listServedAreas: jest.Mock;
@@ -52,6 +56,7 @@ describe('DiscoveryService (keyword fallback)', () => {
     catalog = {
       searchProducts: jest.fn().mockResolvedValue([]),
       searchVendors: jest.fn().mockResolvedValue([]),
+      listCategories: jest.fn().mockResolvedValue([]),
     };
     locations = {
       searchAreas: jest.fn().mockResolvedValue([]),
@@ -462,6 +467,7 @@ describe('DiscoveryService (model)', () => {
           useValue: {
             searchProducts: jest.fn().mockResolvedValue([]),
             searchVendors: jest.fn().mockResolvedValue([]),
+            listCategories: jest.fn().mockResolvedValue([]),
           },
         },
         {
