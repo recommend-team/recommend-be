@@ -176,6 +176,7 @@ const locations: LocationPort = {
       AREAS.filter((area) => said.includes(area.name.toLowerCase())),
     );
   },
+  recordUnplaced: () => Promise.resolve(),
   listAreas: () => Promise.resolve(AREAS),
   listServedAreas: () =>
     Promise.resolve(AREAS.filter((area) => SERVED.has(area.id))),
