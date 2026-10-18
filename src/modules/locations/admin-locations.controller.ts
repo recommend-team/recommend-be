@@ -21,12 +21,17 @@ import {
   ApiBody,
 } from '@nestjs/swagger';
 import { LocationsService } from './locations.service';
+import { AreaNamesService } from './area-names.service';
 import { Roles } from '../auth/decorators/roles.decorator';
 import { Role } from '../../common/enums/roles.enum';
 import { ZodValidationPipe } from '../../common/pipes/zod-validation.pipes';
 import {
   CreateAreaRequestDto,
   CreateStateRequestDto,
+  areaAliasSchema,
+  placeUnplacedSchema,
+  type AreaAliasDto,
+  type PlaceUnplacedDto,
   UpdateAreaRequestDto,
   UpdateStateRequestDto,
   createAreaSchema,
@@ -47,7 +52,87 @@ import {
 @Controller('admin/locations')
 @Roles(Role.ADMIN)
 export class AdminLocationsController {
-  constructor(private readonly locationsService: LocationsService) {}
+  constructor(
+    private readonly locationsService: LocationsService,
+    private readonly areaNames: AreaNamesService,
+  ) {}
+
+  // ─── The Areas page ─────────────────────────────────────────────────────────
+
+  @Get('overview')
+  @ApiOperation({
+    summary:
+      'Every state and area, with vendor counts and the other names of places in them',
+  })
+  async overview() {
+    return {
+      message: 'Areas retrieved',
+      data: await this.areaNames.overview(),
+    };
+  }
+
+  @Post('areas/:id/aliases')
+  @ApiOperation({
+    summary: 'Add another name for a place in this area — "Badore" for Ajah',
+  })
+  @ApiParam({ name: 'id', description: 'Area ID' })
+  @ApiResponse({
+    status: 409,
+    description: 'That name is already an area, or another area’s',
+  })
+  async addAlias(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body(new ZodValidationPipe(areaAliasSchema)) dto: AreaAliasDto,
+  ) {
+    return {
+      message: 'Name added',
+      data: await this.areaNames.addAlias(id, dto.name),
+    };
+  }
+
+  @Delete('aliases/:id')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Remove another name of an area' })
+  @ApiParam({ name: 'id', description: 'Alias ID' })
+  async removeAlias(@Param('id', ParseUUIDPipe) id: string) {
+    return this.areaNames.removeAlias(id);
+  }
+
+  @Get('unplaced')
+  @ApiOperation({
+    summary: 'Places buyers gave that matched no area, most asked-about first',
+  })
+  async listUnplaced() {
+    return {
+      message: 'Unplaced locations retrieved',
+      data: await this.areaNames.listUnplaced(),
+    };
+  }
+
+  @Post('unplaced/:id/place')
+  @ApiOperation({
+    summary: 'Put a place buyers typed in an area, as one of its other names',
+  })
+  @ApiParam({ name: 'id' })
+  async placeUnplaced(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body(new ZodValidationPipe(placeUnplacedSchema)) dto: PlaceUnplacedDto,
+  ) {
+    return {
+      message: 'Placed',
+      data: await this.areaNames.placeUnplaced(id, dto.areaId, dto.name),
+    };
+  }
+
+  @Delete('unplaced/:id')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    summary: 'Dismiss a place buyers typed — not a place, or not worth adding',
+  })
+  @ApiParam({ name: 'id' })
+  async dismissUnplaced(@Param('id', ParseUUIDPipe) id: string) {
+    return this.areaNames.dismissUnplaced(id);
+  }
 
   // ─── States ─────────────────────────────────────────────────────────────────
 
@@ -147,6 +232,7 @@ export class AdminLocationsController {
     @Body(new ZodValidationPipe(createAreaSchema)) dto: CreateAreaRequestDto,
   ) {
     const area = await this.locationsService.createArea(dto);
+    this.areaNames.changed();
     return { message: 'Area created successfully', data: area };
   }
 
@@ -160,6 +246,7 @@ export class AdminLocationsController {
     @Body(new ZodValidationPipe(updateAreaSchema)) dto: UpdateAreaRequestDto,
   ) {
     const area = await this.locationsService.updateArea(id, dto);
+    this.areaNames.changed();
     return { message: 'Area updated successfully', data: area };
   }
 
@@ -181,6 +268,7 @@ export class AdminLocationsController {
   @ApiParam({ name: 'id' })
   async deactivateArea(@Param('id', ParseUUIDPipe) id: string) {
     const area = await this.locationsService.setAreaActive(id, false);
+    this.areaNames.changed();
     return { message: 'Area deactivated', data: area };
   }
 
@@ -190,6 +278,7 @@ export class AdminLocationsController {
   @ApiParam({ name: 'id' })
   async activateArea(@Param('id', ParseUUIDPipe) id: string) {
     const area = await this.locationsService.setAreaActive(id, true);
+    this.areaNames.changed();
     return { message: 'Area activated', data: area };
   }
 
@@ -203,7 +292,9 @@ export class AdminLocationsController {
   @ApiParam({ name: 'id' })
   @ApiResponse({ status: 409, description: 'Vendors still serve this area' })
   async deleteArea(@Param('id', ParseUUIDPipe) id: string) {
-    return this.locationsService.deleteArea(id);
+    const result = await this.locationsService.deleteArea(id);
+    this.areaNames.changed();
+    return result;
   }
 
   // ─── Backfill cleanup ───────────────────────────────────────────────────────

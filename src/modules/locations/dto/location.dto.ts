@@ -42,6 +42,19 @@ export class UpdateStateRequestDto {
 
 // ─── Area ─────────────────────────────────────────────────────────────────────
 
+/** Another name for a place inside an area — "Badore". */
+export const areaAliasSchema = z.object({
+  name: z.string().trim().min(2, 'Give the place a name').max(80),
+});
+export type AreaAliasDto = z.infer<typeof areaAliasSchema>;
+
+/** Put a place buyers typed in an area, optionally written better than they typed it. */
+export const placeUnplacedSchema = z.object({
+  areaId: z.string().uuid('Choose an area'),
+  name: z.string().trim().min(2).max(80).optional(),
+});
+export type PlaceUnplacedDto = z.infer<typeof placeUnplacedSchema>;
+
 export const createAreaSchema = z.object({
   stateId: z.string().uuid('stateId must be a valid UUID'),
   name: z.string().min(2, 'Area name must be at least 2 characters').max(100),
