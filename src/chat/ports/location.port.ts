@@ -10,11 +10,25 @@ export interface AreaSummary {
   id: string;
   name: string;
   stateName: string;
+  /** The place the buyer named that we know is in this area — "Badore", for Ajah. */
+  via?: string;
+  /** Spelled differently from any place we know ("Leki"): confirm before using it. */
+  guess?: boolean;
 }
 
 export interface LocationPort {
-  /** Fuzzy match on what the buyer typed. Empty when nothing plausible matches. */
-  searchAreas(text: string, limit?: number): Promise<AreaSummary[]>;
+  /**
+   * The areas what the buyer typed points to: by our area names, then by the other names
+   * of places inside them ("Badore" is in Ajah), then — with `guesses` — by close
+   * spellings, marked `guess`. Empty when nothing plausible matches.
+   */
+  searchAreas(
+    text: string,
+    limit?: number,
+    options?: { guesses?: boolean },
+  ): Promise<AreaSummary[]>;
+  /** A place a buyer named that matched nothing — counted, for an admin to place. */
+  recordUnplaced(text: string): Promise<void>;
   listAreas(limit?: number): Promise<AreaSummary[]>;
   /**
    * Areas a buyer can actually order in: at least one approved vendor serves them. What
