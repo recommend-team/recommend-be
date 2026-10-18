@@ -61,3 +61,39 @@ describe('resolve_area', () => {
     expect(told.ourAreas).toEqual(['Ajah', 'Lekki']);
   });
 });
+
+describe('search_vendors', () => {
+  it('tells the model where each vendor delivers, so it never guesses', async () => {
+    const catalog = {
+      searchVendors: jest.fn().mockResolvedValue([
+        {
+          id: 'v1',
+          name: 'BasseyWhite Collection',
+          slug: 'bassey',
+          category: 'Fashion',
+          areas: [
+            { id: 'ajah', name: 'Ajah' },
+            { id: 'lekki', name: 'Lekki' },
+          ],
+          isOpen: true,
+          logoUrl: null,
+        },
+      ]),
+      listCategories: jest
+        .fn()
+        .mockResolvedValue([{ name: 'Fashion', storeCount: 1 }]),
+    };
+    const answer = await executeTool(
+      'search_vendors',
+      { category: 'fashion' },
+      {
+        catalog: catalog as unknown as CatalogPort,
+        locations: {} as LocationPort,
+        areaId: 'lekki',
+      },
+      emptyHarvest(),
+    );
+
+    expect(answer).toContain('"deliversTo":["Ajah","Lekki"]');
+  });
+});

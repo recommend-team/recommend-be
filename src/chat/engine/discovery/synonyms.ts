@@ -237,6 +237,15 @@ for (const [category, words] of Object.entries(SYNONYMS)) {
 // Longest first, so "rice cooker" is read before anything shorter inside it.
 PHRASES.sort((a, b) => b.phrase.length - a.phrase.length);
 
+/** "wears" → "wear", "dresses" → "dress", "caps" → "cap"; other words as they are. */
+function singular(word: string): string {
+  if (word.length > 4 && /(ss|sh|ch|x)es$/.test(word)) return word.slice(0, -2);
+  if (word.length > 3 && word.endsWith('s') && !word.endsWith('ss')) {
+    return word.slice(0, -1);
+  }
+  return word;
+}
+
 /**
  * The standard categories a vendor's own category stands for. Vendors type it freely —
  * "food", "Barbecue, food", "Iphones, androids, ipads, etc" — so it is read with the
@@ -283,7 +292,7 @@ export function categoriesFor(text: string | undefined): string[] {
   }
 
   for (const token of rest.trim().split(/\s+/)) {
-    const category = SINGLE_WORD.get(token);
+    const category = SINGLE_WORD.get(token) ?? SINGLE_WORD.get(singular(token));
     if (category) found.add(category);
   }
 

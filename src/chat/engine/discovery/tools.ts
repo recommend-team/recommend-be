@@ -362,6 +362,7 @@ export async function executeTool(
               name: sanitizeUntrusted(vendor.name, 80),
               category: sanitizeUntrusted(vendor.category, 60),
               isOpen: vendor.isOpen,
+              deliversTo: vendor.areas.map((area) => area.name),
             })),
           );
     }
@@ -476,6 +477,7 @@ function alternativesForModel(query: string, found: Alternatives): string {
           name: sanitizeUntrusted(vendor.name, 80),
           category: sanitizeUntrusted(vendor.category, 60),
           isOpen: vendor.isOpen,
+          deliversTo: vendor.areas.map((area) => area.name),
         })),
       });
     case 'ask':

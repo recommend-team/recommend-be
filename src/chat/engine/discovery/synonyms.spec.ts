@@ -54,6 +54,14 @@ describe('categoriesFor', () => {
     expect(categoriesFor('rice cooker')).toEqual([CATEGORIES.homeAppliances]);
   });
 
+  it('reads plurals as their word — "wears", "caps", "dresses"', () => {
+    expect(categoriesFor('wears')).toEqual([CATEGORIES.fashion]);
+    expect(categoriesFor('any bags or caps?')).toEqual([CATEGORIES.fashion]);
+    expect(categoriesFor('dresses')).toEqual([CATEGORIES.fashion]);
+    // Not every word ending in s is a plural of one we know.
+    expect(categoriesFor('glass')).toEqual([]);
+  });
+
   it('knows fashion', () => {
     expect(categoriesFor('ankara gown')).toEqual([CATEGORIES.fashion]);
     expect(categoriesFor('sneakers')).toEqual([CATEGORIES.fashion]);

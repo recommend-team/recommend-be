@@ -521,6 +521,23 @@ describe('DiscoveryService (model)', () => {
     expect(told).toContain('Their latest message names a place in Lekki');
   });
 
+  it('makes the model search when a message names a kind of thing', async () => {
+    // Left to choose, it once answered "here are some options" having searched nothing.
+    mockCreate.mockResolvedValueOnce(replies('Here you go.'));
+    await service.discover({ text: 'wears', areaId: null, history: [] });
+
+    const [request] = mockCreate.mock.calls[0] as [{ tool_choice?: string }];
+    expect(request.tool_choice).toBe('required');
+  });
+
+  it('lets the model just talk when nothing is being looked for', async () => {
+    mockCreate.mockResolvedValueOnce(replies('Hi there!'));
+    await service.discover({ text: 'hello there', areaId: null, history: [] });
+
+    const [request] = mockCreate.mock.calls[0] as [{ tool_choice?: string }];
+    expect(request.tool_choice).toBeUndefined();
+  });
+
   it('names a neighbourhood the area it is in', async () => {
     modelLocations.searchAreas.mockResolvedValue([
       { id: 'ajah', name: 'Ajah', stateName: 'Lagos', via: 'Badore' },

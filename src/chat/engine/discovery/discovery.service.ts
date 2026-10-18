@@ -39,6 +39,7 @@ import { enforcePriceIntegrity } from './price-guard';
 import { alternativesLine, findAlternatives } from './alternatives';
 import { searchWithDishNames } from './dish-names';
 import { stripCardEcho } from './card-echo';
+import { categoriesFor } from './synonyms';
 import {
   areaChoicesPayload,
   productListPayload,
@@ -267,6 +268,10 @@ export class DiscoveryService {
     ];
 
     let reply = '';
+    // A message naming a kind of thing — "wears", "any bags?", "no fashion vendors?" — is
+    // never answered from memory: the first round must use a tool. Left to choose, the
+    // model once said "here are some options" having searched nothing.
+    const mustLook = categoriesFor(request.text).length > 0;
 
     for (let round = 0; round <= this.maxToolRounds; round++) {
       const completion = await client.chat.completions.create({
@@ -274,6 +279,9 @@ export class DiscoveryService {
         temperature: this.temperature,
         messages,
         tools: DISCOVERY_TOOLS as ChatCompletionTool[],
+        ...(mustLook && round === 0
+          ? { tool_choice: 'required' as const }
+          : {}),
       });
 
       const choice = completion.choices[0]?.message;
