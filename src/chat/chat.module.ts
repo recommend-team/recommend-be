@@ -37,6 +37,8 @@ import { IDENTITY_PORT } from './ports/identity.port';
 import { OrdersModule } from '../modules/orders/orders.module';
 import { Checkout } from '../modules/orders/entities/checkout.entity';
 import { Area } from '../modules/locations/entities/area.entity';
+import { AreaAlias } from '../modules/locations/entities/area-alias.entity';
+import { UnplacedLocation } from '../modules/locations/entities/unplaced-location.entity';
 import { NotificationsModule } from '../modules/notifications/notifications.module';
 import { BuyerPushSubscription } from './conversation/entities/buyer-push-subscription.entity';
 import { BuyerPushService } from './engine/buyer-push.service';
@@ -66,6 +68,8 @@ import { WelcomeEmailService } from '../common/services/welcome-email.service';
       User,
       Product,
       Area,
+      AreaAlias,
+      UnplacedLocation,
       Checkout,
       UnmetSearch,
     ]),
