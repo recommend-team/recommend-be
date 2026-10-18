@@ -829,6 +829,36 @@ describe('CheckoutFlow', () => {
     });
   });
 
+  describe('an address in the buyer’s own words', () => {
+    it('confirms a misspelt area rather than refusing the address', async () => {
+      // "Leki" matches nothing by name; as a guess it is Lekki.
+      locations.searchAreas.mockImplementation(
+        (_text: string, _limit?: number, options?: { guesses?: boolean }) =>
+          Promise.resolve(
+            options?.guesses
+              ? [
+                  {
+                    id: 'a-lekki',
+                    name: 'Lekki',
+                    stateName: 'Lagos',
+                    guess: true,
+                  },
+                ]
+              : [],
+          ),
+      );
+      stored = { profile: { name: 'Ada', phone: '+2348012345678' } };
+
+      const replies = await flow.handle(
+        conversationAt(ConversationState.COLLECTING_ADDRESS, stored),
+        '14 Admiralty Way, Leki',
+      );
+
+      expect(replies[0].text).toBe('Is that in Lekki?');
+      expect(stored.addressDraft).toMatchObject({ suggestedAreaId: 'a-lekki' });
+    });
+  });
+
   describe('the receipt email', () => {
     it('is asked for after the phone number, with the card to enter it', async () => {
       stored = { profile: { name: 'Ada' } };

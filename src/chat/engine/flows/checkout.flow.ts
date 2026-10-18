@@ -528,10 +528,19 @@ export class CheckoutFlow {
 
     if (area) return this.checkArea(conversation, answer, area);
 
-    // No area in it, or several it could be. Offer the one the chat already knows.
+    // No area in it, or several it could be. Offer the one the chat already knows — or,
+    // knowing none, the area a misspelt name in it looks like ("Leki"), to confirm.
     const known = fresh?.areaId
       ? await this.locations.getAreaById(fresh.areaId)
-      : null;
+      : named.length === 0
+        ? ((
+            await this.locations.searchAreas(
+              answer.split(/s+/).slice(-5).join(' '),
+              1,
+              { guesses: true },
+            )
+          )[0] ?? null)
+        : null;
     await this.conversationService.mergeContext(conversation.id, {
       addressDraft: {
         text: answer,
