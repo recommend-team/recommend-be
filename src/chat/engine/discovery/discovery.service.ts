@@ -214,8 +214,13 @@ export class DiscoveryService {
     harvest.prices.push(facts.deliveryFee);
 
     const named = await this.areaNamedIn(request.text);
-    const areaId = named ?? request.areaId;
-    if (named && named !== request.areaId) harvest.resolvedAreaId = named;
+    if (!named) await this.noteUnplaced(request.text);
+    const areaId = named?.id ?? request.areaId;
+    if (named && named.id !== request.areaId) harvest.resolvedAreaId = named.id;
+    // By name: an id alone told the model nothing, and it once filled the gap from
+    // earlier talk — "Lekki Phase 1 is also in Ajah".
+    const area =
+      named ?? (areaId ? await this.locations.getAreaById(areaId) : null);
 
     const context = {
       catalog: this.catalog,
@@ -237,8 +242,12 @@ export class DiscoveryService {
             {
               role: 'system' as const,
               content:
-                `The buyer's area is ${areaId}. Do not ask which area they are in. ` +
-                `If they name a different area, call resolve_area with it and search there instead.`,
+                `The buyer's area is ${area?.name ?? 'known'} (id ${areaId}). ` +
+                (named
+                  ? `Their latest message names a place in ${named.name}${named.via ? ` — ${named.via} is in ${named.name}` : ''}; say it is in ${named.name}. `
+                  : '') +
+                'Do not ask which area they are in. If they name a different place, ' +
+                'call resolve_area with it and search there instead.',
             },
           ]
         : []),
@@ -393,10 +402,31 @@ export class DiscoveryService {
     }
   }
 
-  private async areaNamedIn(text: string): Promise<string | null> {
+  /**
+   * "I live in Timbuktu Estate": a place the buyer gave that matches nothing we know is
+   * counted for the team to place — whether or not the model thinks to look it up.
+   */
+  private async noteUnplaced(text: string): Promise<void> {
+    const place = placeMentioned(text);
+    if (!place) return;
+    try {
+      const found = await this.locations.searchAreas(place, 1, {
+        guesses: true,
+      });
+      if (found.length === 0) await this.locations.recordUnplaced(place);
+    } catch (error) {
+      this.logger.warn(
+        `Could not note unplaced "${place}": ${
+          error instanceof Error ? error.message : 'unknown error'
+        }`,
+      );
+    }
+  }
+
+  private async areaNamedIn(text: string): Promise<AreaSummary | null> {
     try {
       const areas = await this.locations.searchAreas(text);
-      return areas.length === 1 ? areas[0].id : null;
+      return areas.length === 1 ? areas[0] : null;
     } catch (error) {
       this.logger.warn(
         `Could not pre-resolve an area from "${text}": ${
@@ -630,26 +660,42 @@ export class DiscoveryService {
       }
 
       case 'coverage': {
-        const named = await this.locations.searchAreas(request.text);
+        const named = await this.locations.searchAreas(request.text, 5, {
+          guesses: true,
+        });
         const served = new Set(facts.servedAreas.map((area) => area.id));
-        const covered = named.filter((area) => served.has(area.id));
+        // "Badore is in Ajah" — the place they named, then the area it's in.
+        const placed = (area: AreaSummary) =>
+          area.via ? `${area.via} is in ${area.name}` : null;
 
         if (named.length === 0) {
           return done(
             `Right now we have vendors in ${describeAreas(facts.servedAreas)}. ` +
-              'Which area are you in?',
+              'Which of those are you in, or closest to?',
           );
         }
+        // Spelled unlike anything we know for sure: ask before answering for it.
+        if (named.every((area) => area.guess)) {
+          return done(
+            `Did you mean ${named.map((area) => area.name).join(' or ')}?`,
+          );
+        }
+        const sure = named.filter((area) => !area.guess);
+        const covered = sure.filter((area) => served.has(area.id));
         if (covered.length > 0) {
           if (covered.length === 1) harvest.resolvedAreaId = covered[0].id;
+          const where = placed(covered[0]);
           return done(
-            `Yes — we have vendors in ${covered.map((area) => area.name).join(', ')}. ` +
+            (where && covered.length === 1
+              ? `${where} — yes, we have vendors there. `
+              : `Yes — we have vendors in ${covered.map((area) => area.name).join(', ')}. `) +
               'What would you like?',
           );
         }
+        const where = placed(sure[0]);
         return done(
-          `We don't have vendors in ${named[0].name} yet. Right now we cover ` +
-            `${describeAreas(facts.servedAreas)}.`,
+          `${where ? `${where}, and we` : 'We'} don't have vendors in ${sure[0].name} yet. ` +
+            `Right now we cover ${describeAreas(facts.servedAreas)}.`,
         );
       }
     }
@@ -805,6 +851,19 @@ function stripFiller(text: string): string {
     .join(' ')
     .trim();
 }
+
+/**
+ * The place in "I live in X", "I'm at X", "deliver to X", "vendors in X" — or null.
+ * Only these plain forms: a word after "in" in any sentence is not a place.
+ */
+export function placeMentioned(text: string): string | null {
+  const match = PLACE_PHRASE.exec(text);
+  const place = match?.[1]?.trim().replace(/\s+/g, ' ');
+  return place && place.length >= 3 ? place.slice(0, 60) : null;
+}
+
+const PLACE_PHRASE =
+  /\b(?:i\s*['’]?\s*m\s+(?:in|at|around)|i\s+am\s+(?:in|at|around)|i\s+live\s+(?:in|at|around)|i\s+stay\s+(?:in|at)|i\s+dey|deliver(?:y)?\s+to|vendors?\s+(?:in|at|around)|stores?\s+(?:in|at|around)|anyone\s+(?:in|at|around))\s+([a-z0-9][a-z0-9 .'-]{1,60}?)\s*(?:[?.!,]|$)/i;
 
 const BUYER_TURNS_FOR_INTENT = 3;
 

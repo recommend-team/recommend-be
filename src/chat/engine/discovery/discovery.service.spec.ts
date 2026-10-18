@@ -1,6 +1,6 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { ConfigService } from '@nestjs/config';
-import { DiscoveryService } from './discovery.service';
+import { DiscoveryService, placeMentioned } from './discovery.service';
 import { CATALOG_PORT } from '../../ports/catalog.port';
 import { LOCATION_PORT } from '../../ports/location.port';
 import { ORDERING_PORT } from '../../ports/ordering.port';
@@ -441,6 +441,12 @@ describe('DiscoveryService (keyword fallback)', () => {
  */
 describe('DiscoveryService (model)', () => {
   let service: DiscoveryService;
+  const modelLocations = {
+    searchAreas: jest.fn(),
+    listServedAreas: jest.fn().mockResolvedValue([YABA]),
+    getAreaById: jest.fn(),
+    recordUnplaced: jest.fn().mockResolvedValue(undefined),
+  };
   const modelOrdering = {
     listOrders: jest.fn(),
     deliveryFeeFor: jest.fn(),
@@ -449,6 +455,8 @@ describe('DiscoveryService (model)', () => {
 
   beforeEach(async () => {
     mockCreate.mockReset();
+    modelLocations.searchAreas.mockReset().mockResolvedValue([]);
+    modelLocations.getAreaById.mockReset().mockResolvedValue(null);
     modelOrdering.listOrders.mockReset().mockResolvedValue([]);
     modelOrdering.deliveryFeeFor.mockReset().mockReturnValue(1500);
 
@@ -472,10 +480,7 @@ describe('DiscoveryService (model)', () => {
         },
         {
           provide: LOCATION_PORT,
-          useValue: {
-            searchAreas: jest.fn().mockResolvedValue([]),
-            listServedAreas: jest.fn().mockResolvedValue([YABA]),
-          },
+          useValue: modelLocations,
         },
         { provide: ORDERING_PORT, useValue: modelOrdering },
       ],
@@ -497,6 +502,66 @@ describe('DiscoveryService (model)', () => {
       .filter((message) => message.role === 'system')
       .map((message) => message.content);
   };
+
+  it('tells the model the area by name, and that the place just named is in it', async () => {
+    // Given only an id, it once said "Lekki Phase 1 is also in Ajah".
+    modelLocations.searchAreas.mockResolvedValue([
+      { id: 'lekki', name: 'Lekki', stateName: 'Lagos' },
+    ]);
+    mockCreate.mockResolvedValueOnce(replies('Lekki Phase 1 is in Lekki.'));
+
+    await service.discover({
+      text: 'How about Lekki Phase 1',
+      areaId: 'ajah',
+      history: [],
+    });
+
+    const told = systemMessages().join(' ');
+    expect(told).toContain("The buyer's area is Lekki");
+    expect(told).toContain('Their latest message names a place in Lekki');
+  });
+
+  it('names a neighbourhood the area it is in', async () => {
+    modelLocations.searchAreas.mockResolvedValue([
+      { id: 'ajah', name: 'Ajah', stateName: 'Lagos', via: 'Badore' },
+    ]);
+    mockCreate.mockResolvedValueOnce(replies('Badore is in Ajah.'));
+
+    await service.discover({ text: 'Badore', areaId: null, history: [] });
+
+    expect(systemMessages().join(' ')).toContain('Badore is in Ajah');
+  });
+
+  it('counts a place the buyer gave that matches nothing, even if the model never looks it up', async () => {
+    mockCreate.mockResolvedValueOnce(replies('Which area is that in?'));
+
+    await service.discover({
+      text: 'I live in Timbuktu estate',
+      areaId: null,
+      history: [],
+    });
+
+    expect(modelLocations.recordUnplaced).toHaveBeenCalledWith(
+      'Timbuktu estate',
+    );
+  });
+
+  it('names the area kept from earlier in the conversation', async () => {
+    modelLocations.getAreaById.mockResolvedValue({
+      id: 'ajah',
+      name: 'Ajah',
+      stateName: 'Lagos',
+    });
+    mockCreate.mockResolvedValueOnce(replies('What would you like?'));
+
+    await service.discover({
+      text: 'what do you have',
+      areaId: 'ajah',
+      history: [],
+    });
+
+    expect(systemMessages().join(' ')).toContain("The buyer's area is Ajah");
+  });
 
   it('gives the model what Recommend is, with the live fee and areas', async () => {
     mockCreate.mockResolvedValueOnce(replies('Delivery is a flat ₦1,500.'));
@@ -650,5 +715,22 @@ describe('DiscoveryService (model)', () => {
     ];
     expect(request.messages[0].content).toContain('You are James');
     expect(request.temperature).toBe(0.6);
+  });
+});
+
+describe('placeMentioned', () => {
+  it('finds the place in the plain ways buyers say where they are', () => {
+    expect(placeMentioned('I live in Timbuktu estate')).toBe('Timbuktu estate');
+    expect(placeMentioned('Are there vendors at Ajah Badore ?')).toBe(
+      'Ajah Badore',
+    );
+    expect(placeMentioned("I'm at Leki")).toBe('Leki');
+    expect(placeMentioned('do you deliver to Chevron?')).toBe('Chevron');
+    expect(placeMentioned('I dey Ogba')).toBe('Ogba');
+  });
+
+  it('does not take any word after "in" for a place', () => {
+    expect(placeMentioned('I want rice in a bowl')).toBeNull();
+    expect(placeMentioned('hello')).toBeNull();
   });
 });

@@ -53,8 +53,10 @@ export const DISCOVERY_TOOLS = [
     function: {
       name: 'resolve_area',
       description:
-        'Turn what a buyer said about where they are ("yaba", "I dey Lekki") into ' +
-        'real areas the platform serves. Call this before searching if the area is unknown.',
+        'Turn what a buyer said about where they are ("yaba", "I dey Lekki", "Badore", ' +
+        '"Chevron", "Akinwale Road Ajah") into the areas we use. Knows neighbourhoods, ' +
+        'estates and streets inside each area. Call this before searching if the area ' +
+        'is unknown, and whenever the buyer names a new place.',
       parameters: {
         type: 'object',
         properties: {
@@ -221,14 +223,57 @@ export async function executeTool(
 
     case 'resolve_area': {
       const text = typeof args.text === 'string' ? args.text : '';
-      const areas = await context.locations.searchAreas(text);
+      const areas = await context.locations.searchAreas(text, 5, {
+        guesses: true,
+      });
       harvest.areas.push(...areas);
 
-      if (areas.length === 1) harvest.resolvedAreaId = areas[0].id;
+      // A guess ("Leki") waits for the buyer to say yes.
+      if (areas.length === 1 && !areas[0].guess) {
+        harvest.resolvedAreaId = areas[0].id;
+      }
 
-      return areas.length === 0
-        ? 'No matching area. The platform may not cover it yet.'
-        : JSON.stringify(areas);
+      if (areas.length === 0) {
+        // Counted, so the team can say which area it is in for next time.
+        await context.locations
+          .recordUnplaced(text)
+          .catch((error: unknown) =>
+            logger.warn(
+              `Could not record unplaced "${text}": ${error instanceof Error ? error.message : 'unknown'}`,
+            ),
+          );
+        const known = await context.locations.listAreas(200);
+        return JSON.stringify({
+          matched: false,
+          note:
+            'This place matches none of our areas or the places we know inside them. ' +
+            'Do NOT say we do not cover it, or that it is not one of our areas — say you ' +
+            "don't recognise it yet. If you know which of these areas it is in " +
+            'or next to, suggest that one and ask the buyer to confirm ("Is Badore ' +
+            'around Ajah?"). Otherwise ask which of these areas they are in or closest to.',
+          ourAreas: known.map((area) => area.name),
+        });
+      }
+
+      return JSON.stringify(
+        areas.map((area) => ({
+          id: area.id,
+          name: area.name,
+          state: area.stateName,
+          ...(area.via
+            ? {
+                buyerSaid: sanitizeUntrusted(area.via, 60),
+                note: `${sanitizeUntrusted(area.via, 60)} is in ${area.name} — say so, and carry on in ${area.name}.`,
+              }
+            : {}),
+          ...(area.guess
+            ? {
+                guess: true,
+                note: `Spelled differently from anything we know — ask "Did you mean ${area.name}?" before using it.`,
+              }
+            : {}),
+        })),
+      );
     }
 
     case 'search_products': {
