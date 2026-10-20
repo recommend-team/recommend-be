@@ -7,6 +7,7 @@ import { ProductsService } from '../products/products.service';
 import { SellerStatus } from '../../common/enums/seller-status.enum';
 import type { ChoiceGroupView } from '../products/products.service';
 import { Role } from '../../common/enums/roles.enum';
+import { openingFields } from '../../common/utils/opening-hours.util';
 
 export interface StorefrontResponse {
   vendor: {
@@ -18,7 +19,12 @@ export interface StorefrontResponse {
     businessLogoUrl: string | null;
     businessBannerUrl: string | null;
     whatsappNumber: string | null;
+    /** Can be bought from right now: not paused, and inside opening hours if set. */
     isOpen: boolean;
+    /** When it next opens (ISO) — null if open, paused, or no hours open. */
+    opensAt: string | null;
+    /** When the current opening ends (ISO) — null if closed or no end. */
+    closesAt: string | null;
     operatingHours: Record<
       string,
       { isOpen: boolean; open: string; close: string }
@@ -63,7 +69,10 @@ export interface StoreListItem {
   serviceAreas: { id: string; name: string }[];
   businessLogoUrl: string | null;
   slug: string | null;
+  /** Can be bought from right now — see `StorefrontResponse`. */
   isOpen: boolean;
+  opensAt: string | null;
+  closesAt: string | null;
   createdAt: Date;
 }
 
@@ -101,6 +110,7 @@ export class StoreService {
         'businessLogoUrl',
         'slug',
         'isOpen',
+        'operatingHours',
         'createdAt',
       ],
       relations: ['serviceAreas'],
@@ -109,6 +119,7 @@ export class StoreService {
       order: { createdAt: 'DESC' },
     });
 
+    const now = new Date();
     return {
       message: 'Stores retrieved successfully',
       data: {
@@ -123,7 +134,7 @@ export class StoreService {
           })),
           businessLogoUrl: vendor.businessLogoUrl,
           slug: vendor.slug,
-          isOpen: vendor.isOpen,
+          ...openForBuyers(vendor, now),
           createdAt: vendor.createdAt,
         })),
         total,
@@ -149,6 +160,7 @@ export class StoreService {
       vendor.id,
     );
 
+    const now = new Date();
     return {
       message: 'Storefront retrieved successfully',
       data: {
@@ -164,7 +176,7 @@ export class StoreService {
           businessLogoUrl: vendor.businessLogoUrl,
           businessBannerUrl: vendor.businessBannerUrl,
           whatsappNumber: vendor.whatsappNumber,
-          isOpen: vendor.isOpen,
+          ...openForBuyers(vendor, now),
           operatingHours: vendor.operatingHours,
           slug: vendor.slug,
         },
@@ -191,4 +203,10 @@ export class StoreService {
       },
     };
   }
+}
+
+/** A buyer's `isOpen` means "can I buy now" — the switch and the opening hours together. */
+function openForBuyers(vendor: User, now: Date) {
+  const { openNow, opensAt, closesAt } = openingFields(vendor, now);
+  return { isOpen: openNow, opensAt, closesAt };
 }

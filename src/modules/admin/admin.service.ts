@@ -40,6 +40,10 @@ import { WalletService } from '../wallet/wallet.service';
 import { CheckoutSource } from '../../common/enums/checkout-source.enum';
 import { DISPATCHED_AT_SQL } from '../orders/stuck-delivery.service';
 import { toOrderLines, type OrderLine } from '../orders/order-lines';
+import {
+  openingFields,
+  type OpeningFields,
+} from '../../common/utils/opening-hours.util';
 
 export interface PaginatedResult<T> {
   items: T[];
@@ -434,24 +438,28 @@ export class AdminService {
     page?: number;
     limit?: number;
   }): Promise<
-    PaginatedResult<{
-      id: string;
-      firstName: string;
-      lastName: string;
-      email: string;
-      phoneNumber: string | null;
-      businessName: string | null;
-      businessCategory: string | null;
-      businessLogoUrl: string | null;
-      slug: string | null;
-      vendorType: string | null;
-      status: SellerStatus;
-      isOpen: boolean;
-      isEmailVerified: boolean;
-      productCount: number;
-      createdAt: Date;
-    }>
+    PaginatedResult<
+      {
+        id: string;
+        firstName: string;
+        lastName: string;
+        email: string;
+        phoneNumber: string | null;
+        businessName: string | null;
+        businessCategory: string | null;
+        businessLogoUrl: string | null;
+        slug: string | null;
+        vendorType: string | null;
+        status: SellerStatus;
+        /** The pause switch. */
+        isOpen: boolean;
+        isEmailVerified: boolean;
+        productCount: number;
+        createdAt: Date;
+      } & OpeningFields
+    >
   > {
+    const now = new Date();
     const page = Math.max(1, query.page ?? 1);
     const limit = Math.min(100, Math.max(1, query.limit ?? 20));
     const skip = (page - 1) * limit;
@@ -474,6 +482,7 @@ export class AdminService {
         'vendorType',
         'status',
         'isOpen',
+        'operatingHours',
         'isEmailVerified',
         'createdAt',
       ],
@@ -502,6 +511,7 @@ export class AdminService {
           vendorType: vendor.vendorType,
           status: vendor.status,
           isOpen: vendor.isOpen,
+          ...openingFields(vendor, now),
           isEmailVerified: vendor.isEmailVerified,
           productCount,
           createdAt: vendor.createdAt,
@@ -524,7 +534,12 @@ export class AdminService {
     page?: number;
     limit?: number;
     sort?: VendorOrderSort;
-  }): Promise<PaginatedResult<Partial<User> & { orders: VendorOrderCounts }>> {
+  }): Promise<
+    PaginatedResult<
+      Partial<User> & { orders: VendorOrderCounts } & OpeningFields
+    >
+  > {
+    const now = new Date();
     const page = Math.max(1, query.page ?? 1);
     const limit = Math.min(100, Math.max(1, query.limit ?? 20));
     const skip = (page - 1) * limit;
@@ -548,6 +563,7 @@ export class AdminService {
           'businessLogoUrl',
           'slug',
           'isOpen',
+          'operatingHours',
           'isEmailVerified',
           'createdAt',
         ].map((field) => `vendor.${field}`),
@@ -587,6 +603,7 @@ export class AdminService {
     const items = vendors.map((vendor) => ({
       ...vendor,
       orders: counts.get(vendor.id) ?? NO_ORDERS,
+      ...openingFields(vendor, now),
     }));
 
     return { items, total, page, limit, totalPages: Math.ceil(total / limit) };
@@ -634,7 +651,7 @@ export class AdminService {
   }
 
   async getVendorDetail(id: string): Promise<{
-    vendor: Partial<User>;
+    vendor: Partial<User> & OpeningFields;
     products: Product[];
     productCount: number;
     serviceAreas: { id: string; name: string; stateName: string | null }[];
@@ -671,7 +688,10 @@ export class AdminService {
     const { serviceAreas, ...profile } = vendor;
 
     return {
-      vendor: this.stripSensitive(profile as User),
+      vendor: {
+        ...this.stripSensitive(profile as User),
+        ...openingFields(vendor, new Date()),
+      },
       products,
       productCount,
       serviceAreas: (serviceAreas ?? []).map((area) => ({
@@ -870,7 +890,12 @@ export class AdminService {
           unit: true,
           isAddOn: true,
           parentItemId: true,
-          choices: { id: true, groupName: true, optionName: true, priceDelta: true },
+          choices: {
+            id: true,
+            groupName: true,
+            optionName: true,
+            priceDelta: true,
+          },
         },
         // The payment reference now lives on the parent checkout.
         checkout: {
