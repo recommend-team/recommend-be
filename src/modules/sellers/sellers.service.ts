@@ -22,6 +22,7 @@ import {
 import { LocationsService } from '../locations/locations.service';
 import { uniqueSlug } from '../../common/utils/slug.util';
 import { toOrderLines } from '../orders/order-lines';
+import { openingFields } from '../../common/utils/opening-hours.util';
 
 export interface VendorProfileResponse {
   id: string;
@@ -43,7 +44,14 @@ export interface VendorProfileResponse {
   businessLogoUrl: string | null;
   businessBannerUrl: string | null;
   whatsappNumber: string | null;
+  /** The pause switch, as the vendor set it. */
   isOpen: boolean;
+  /** Whether buyers can order right now — the switch and the opening hours together. */
+  openNow: boolean;
+  /** When they next open (ISO) — null if open, paused, or no hours open. */
+  opensAt: string | null;
+  /** When the current opening ends (ISO) — null if closed or no end. */
+  closesAt: string | null;
   operatingHours: Record<
     string,
     { isOpen: boolean; open: string; close: string }
@@ -130,10 +138,7 @@ export class SellersService {
       vendor.whatsappNumber = dto.whatsappNumber;
     if (dto.isOpen !== undefined) vendor.isOpen = dto.isOpen;
     if (dto.operatingHours !== undefined)
-      vendor.operatingHours = dto.operatingHours as Record<
-        string,
-        { isOpen: boolean; open: string; close: string }
-      >;
+      vendor.operatingHours = dto.operatingHours;
 
     const saved = await this.usersRepository.save(vendor);
 
@@ -412,6 +417,7 @@ export class SellersService {
       whatsappNumber: vendor.whatsappNumber,
       isOpen: vendor.isOpen,
       operatingHours: vendor.operatingHours,
+      ...openingFields(vendor, new Date()),
       orderQuota: vendor.orderQuota,
       monthlyOrderCount: vendor.monthlyOrderCount,
       cacDocumentUrl: vendor.cacDocumentUrl,

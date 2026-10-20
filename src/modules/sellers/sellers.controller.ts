@@ -36,6 +36,7 @@ import { OrderStatus } from '../../common/enums/order-status.enum';
 import { User } from '../auth/entities/auth.entity';
 import { ZodValidationPipe } from '../../common/pipes/zod-validation.pipes';
 import {
+  type UpdateProfileDto,
   UpdateProfileRequestDto,
   updateProfileSchema,
 } from './dto/update-profile.dto';
@@ -88,7 +89,7 @@ export class SellersController {
   async updateProfile(
     @CurrentUser() user: User,
     @Body(new ZodValidationPipe(updateProfileSchema))
-    dto: UpdateProfileRequestDto,
+    dto: UpdateProfileDto,
   ) {
     return this.sellersService.updateProfile(user.id, dto);
   }

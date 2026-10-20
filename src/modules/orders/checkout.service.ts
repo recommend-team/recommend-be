@@ -24,12 +24,14 @@ import { FulfillmentType } from '../../common/enums/fulfillment-type.enum';
 import { SellerStatus } from '../../common/enums/seller-status.enum';
 import { CheckoutSource } from '../../common/enums/checkout-source.enum';
 import { toOrderLines } from './order-lines';
+import { openingStatus } from '../../common/utils/opening-hours.util';
 
 const FALLBACK_PLATFORM_FEE_RATE = 0.2;
 
 export type CartChangeReason =
   | 'REMOVED'
   | 'UNAVAILABLE'
+  /** Paused, or outside opening hours — `opensAt` says when to come back, if known. */
   | 'VENDOR_CLOSED'
   | 'PRICE_CHANGED'
   /** An add-on with no main item from its vendor in the cart — never sold alone. */
@@ -55,6 +57,8 @@ export interface CartChange {
   groupName?: string;
   optionId?: string;
   optionName?: string | null;
+  /** On a closed vendor: when they next open (ISO), null if paused or no hours open. */
+  opensAt?: string | null;
 }
 
 /** A cart priced, not placed — see `CheckoutService.quote`. */
@@ -390,10 +394,12 @@ export class CheckoutService {
   private detectChanges(dto: CreateCheckoutDto, menu: Menu): CartChange[] {
     const changes: CartChange[] = [];
     const { products } = menu;
+    // One moment for the whole cart, so two lines cannot disagree about closing time.
+    const now = new Date();
 
     for (const line of dto.items) {
       const product = products.get(line.productId);
-      const dishProblem = this.problemWith(line.productId, product, line);
+      const dishProblem = this.problemWith(line.productId, product, line, now);
       if (dishProblem) {
         changes.push(dishProblem);
         continue;
@@ -410,7 +416,12 @@ export class CheckoutService {
       const offered = menu.extrasOn.get(dish.id) ?? new Set<string>();
       for (const extraLine of line.extras ?? []) {
         const extra = products.get(extraLine.productId);
-        const problem = this.problemWith(extraLine.productId, extra, extraLine);
+        const problem = this.problemWith(
+          extraLine.productId,
+          extra,
+          extraLine,
+          now,
+        );
         if (problem) {
           changes.push({ ...problem, dishId: dish.id, dishName: dish.name });
           continue;
@@ -457,6 +468,7 @@ export class CheckoutService {
     productId: string,
     product: Product | undefined,
     line: { expectedUnitPrice?: number },
+    now: Date,
   ): CartChange | null {
     if (!product) {
       return { productId, productName: null, reason: 'REMOVED' };
@@ -467,8 +479,14 @@ export class CheckoutService {
     ) {
       return { productId, productName: product.name, reason: 'UNAVAILABLE' };
     }
-    if (!product.vendor.isOpen) {
-      return { productId, productName: product.name, reason: 'VENDOR_CLOSED' };
+    const hours = openingStatus(product.vendor, now);
+    if (!hours.openNow) {
+      return {
+        productId,
+        productName: product.name,
+        reason: 'VENDOR_CLOSED',
+        opensAt: hours.opensAt?.toISOString() ?? null,
+      };
     }
     const currentUnitPrice = round2(Number(product.price));
     if (

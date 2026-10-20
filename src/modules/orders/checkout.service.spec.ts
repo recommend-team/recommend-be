@@ -29,6 +29,10 @@ interface SavedOrder {
   platformFee: number;
   vendorAmount: number;
 }
+interface CartChangeBody {
+  reason: string;
+  opensAt?: string | null;
+}
 interface SavedItem {
   productName: string;
   unitPrice: number;
@@ -515,6 +519,96 @@ describe('CheckoutService', () => {
           expect(body.changes[0].reason).toBe(reason);
         });
       expect.assertions(1);
+    });
+
+    describe('opening hours', () => {
+      // Monday 19 October 2026, 8pm in Lagos.
+      const mondayEvening = new Date('2026-10-19T20:00:00+01:00');
+      const day = (open: string, close: string, isOpen = true) => ({
+        isOpen,
+        open,
+        close,
+      });
+      const hours = {
+        monday: day('09:00', '19:00'),
+        tuesday: day('08:00', '18:00'),
+        wednesday: day('09:00', '19:00'),
+        thursday: day('09:00', '19:00'),
+        friday: day('09:00', '19:00'),
+        saturday: day('00:00', '00:00', false),
+        sunday: day('00:00', '00:00', false),
+      };
+      const vendor = (over: Record<string, unknown>) => ({
+        id: 'v1',
+        status: SellerStatus.APPROVED,
+        isOpen: true,
+        ...over,
+      });
+      const checkout = () =>
+        service.createCheckout({
+          ...baseDto,
+          items: [{ productId: 'p1', quantity: 1 }],
+        } as never);
+
+      beforeEach(() => {
+        jest.useFakeTimers({ now: mondayEvening, doNotFake: ['nextTick'] });
+      });
+      afterEach(() => jest.useRealTimers());
+
+      it('refuses a vendor outside their hours, and says when they open', async () => {
+        products.find.mockResolvedValue([
+          product({ vendor: vendor({ operatingHours: hours }) }),
+        ]);
+
+        await checkout().catch((error: ConflictException) => {
+          const body = error.getResponse() as { changes: CartChangeBody[] };
+          expect(body.changes[0]).toMatchObject({
+            reason: 'VENDOR_CLOSED',
+            opensAt: '2026-10-20T07:00:00.000Z',
+          });
+        });
+        expect.assertions(1);
+      });
+
+      it('sells from a vendor inside their hours', async () => {
+        products.find.mockResolvedValue([
+          product({
+            vendor: vendor({
+              operatingHours: { ...hours, monday: day('09:00', '22:00') },
+            }),
+          }),
+        ]);
+
+        await expect(checkout()).resolves.toBeDefined();
+      });
+
+      it('sells from a vendor with no hours set, at any time', async () => {
+        products.find.mockResolvedValue([
+          product({ vendor: vendor({ operatingHours: null }) }),
+        ]);
+
+        await expect(checkout()).resolves.toBeDefined();
+      });
+
+      it('refuses a paused vendor even inside their hours, with no time to return', async () => {
+        products.find.mockResolvedValue([
+          product({
+            vendor: vendor({
+              isOpen: false,
+              operatingHours: { ...hours, monday: day('09:00', '22:00') },
+            }),
+          }),
+        ]);
+
+        await checkout().catch((error: ConflictException) => {
+          const body = error.getResponse() as { changes: CartChangeBody[] };
+          expect(body.changes[0]).toMatchObject({
+            reason: 'VENDOR_CLOSED',
+            opensAt: null,
+          });
+        });
+        expect.assertions(1);
+      });
     });
 
     it('does not take payment for a rejected cart', async () => {

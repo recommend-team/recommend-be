@@ -43,14 +43,26 @@ export const profileFieldsSchema = z.object({
     .regex(/^\+?[1-9]\d{1,14}$/, 'Invalid WhatsApp number format')
     .optional(),
   isOpen: z.boolean().optional(),
+  // The whole week or nothing: saving replaces the stored schedule, so a missing day
+  // would silently be wiped. Null clears it — open whenever the switch is on.
   operatingHours: z
     .object(
       Object.fromEntries(
-        days.map((d) => [d, dayScheduleSchema.optional()]),
+        days.map((d) => [
+          d,
+          z.object(dayScheduleSchema.shape, {
+            required_error: `Send ${d}'s hours too — all seven days are needed`,
+          }),
+        ]),
       ) as {
-        [K in (typeof days)[number]]?: typeof dayScheduleSchema;
+        [K in (typeof days)[number]]: typeof dayScheduleSchema;
       },
     )
+    .refine((week) => Object.values(week).some((day) => day.isOpen), {
+      message:
+        'Open at least one day — to stop taking orders for now, pause the store instead',
+    })
+    .nullable()
     .optional(),
 });
 
@@ -101,13 +113,26 @@ export class UpdateProfileRequestDto {
   @ApiPropertyOptional({ example: '+2348012345678' })
   whatsappNumber?: string;
 
-  @ApiPropertyOptional({ example: true })
+  @ApiPropertyOptional({
+    description:
+      'The pause switch. Off: no orders, whatever the opening hours say. On: orders ' +
+      'within the opening hours, or at any time if none are set.',
+    example: true,
+  })
   isOpen?: boolean;
 
   @ApiPropertyOptional({
+    description:
+      'The weekly schedule, in Lagos time. All seven days must be sent, at least one ' +
+      'open. A closing time earlier than the opening time closes the next day; the same ' +
+      'time means open all day. null clears it.',
+    nullable: true,
     example: {
-      monday: { isOpen: true, open: '08:00', close: '20:00' },
-      tuesday: { isOpen: true, open: '08:00', close: '20:00' },
+      monday: { isOpen: true, open: '09:00', close: '19:00' },
+      tuesday: { isOpen: true, open: '08:00', close: '18:00' },
+      wednesday: { isOpen: true, open: '09:00', close: '19:00' },
+      thursday: { isOpen: true, open: '09:00', close: '19:00' },
+      friday: { isOpen: true, open: '18:00', close: '02:00' },
       saturday: { isOpen: true, open: '10:00', close: '18:00' },
       sunday: { isOpen: false, open: '00:00', close: '00:00' },
     },
@@ -115,5 +140,5 @@ export class UpdateProfileRequestDto {
   operatingHours?: Record<
     string,
     { isOpen: boolean; open: string; close: string }
-  >;
+  > | null;
 }
