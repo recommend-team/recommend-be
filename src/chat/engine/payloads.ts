@@ -19,6 +19,9 @@ export function productListPayload(products: ProductSummary[]): MessagePayload {
       vendorName: string | null;
       /** So the card can open the vendor's menu without a second lookup. */
       vendorSlug: string | null;
+      /** Its vendor can be bought from right now; if not, when they open (ISO). */
+      vendorIsOpen: boolean;
+      vendorOpensAt: string | null;
       items: {
         id: string;
         name: string;
@@ -33,6 +36,8 @@ export function productListPayload(products: ProductSummary[]): MessagePayload {
       vendorId: product.vendorId,
       vendorName: product.vendorName,
       vendorSlug: product.vendorSlug,
+      vendorIsOpen: product.vendorIsOpen,
+      vendorOpensAt: product.vendorOpensAt,
       items: [],
     };
 
@@ -69,6 +74,7 @@ export function vendorListPayload(vendors: VendorSummary[]): MessagePayload {
         slug: vendor.slug,
         category: vendor.category,
         isOpen: vendor.isOpen,
+        opensAt: vendor.opensAt,
         logoUrl: vendor.logoUrl,
         areas: vendor.areas.map((area) => area.name),
       })),

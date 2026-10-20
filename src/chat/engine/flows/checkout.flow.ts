@@ -22,6 +22,7 @@ import { LOCATION_PORT } from '../../ports/location.port';
 import type { AreaSummary, LocationPort } from '../../ports/location.port';
 import { CartChangedError } from '../../adapters/local-ordering.adapter';
 import { formatForDisplay, formatNaira, toE164 } from '../../utils/phone.util';
+import { describeOpening } from '../../../common/utils/opening-hours.util';
 
 /**
  * The money path, as a conversation.
@@ -1420,7 +1421,9 @@ function describeCartChanges(error: CartChangedError): string {
       case 'PRICE_CHANGED':
         return `${name} is now ${formatNaira(change.currentUnitPrice ?? 0)}`;
       case 'VENDOR_CLOSED':
-        return `${name} — that vendor has closed`;
+        return change.opensAt
+          ? `${name} — that vendor is closed now and opens ${describeOpening(new Date(change.opensAt), new Date())}`
+          : `${name} — that vendor isn't taking orders right now`;
       case 'UNAVAILABLE':
         return `${name} has sold out`;
       case 'ADDON_WITHOUT_MAIN':

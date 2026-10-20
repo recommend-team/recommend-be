@@ -53,6 +53,7 @@ const VENDORS: VendorSummary[] = [
     category: 'Food',
     areas: [{ id: 'area-yaba', name: 'Yaba' }],
     isOpen: true,
+    opensAt: null,
     logoUrl: null,
   },
   {
@@ -62,6 +63,7 @@ const VENDORS: VendorSummary[] = [
     category: 'Food',
     areas: [{ id: 'area-ikeja', name: 'Ikeja' }],
     isOpen: true,
+    opensAt: null,
     logoUrl: null,
   },
 ];
@@ -80,6 +82,8 @@ const product = (
   vendorId: vendor.id,
   vendorName: vendor.name,
   vendorSlug: vendor.slug,
+  vendorIsOpen: true,
+  vendorOpensAt: null,
   isAddOn: false,
 });
 

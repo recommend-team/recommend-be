@@ -14,7 +14,10 @@ export interface VendorSummary {
   slug: string | null;
   category: string | null;
   areas: { id: string; name: string }[];
+  /** Can be bought from right now: not paused, and inside opening hours if set. */
   isOpen: boolean;
+  /** When a closed vendor next opens (ISO) — null if open, paused, or no hours open. */
+  opensAt: string | null;
   logoUrl: string | null;
 }
 
@@ -28,6 +31,10 @@ export interface ProductSummary {
   vendorName: string | null;
   /** Needed so a product card can open its vendor menu via GET /store/:slug. */
   vendorSlug: string | null;
+  /** Its vendor can be bought from right now — see `VendorSummary.isOpen`. */
+  vendorIsOpen: boolean;
+  /** When its closed vendor next opens (ISO), or null. */
+  vendorOpensAt: string | null;
   /** Sold only with a main item from the same vendor. Never in search results. */
   isAddOn: boolean;
 }

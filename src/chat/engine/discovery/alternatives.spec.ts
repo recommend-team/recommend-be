@@ -18,6 +18,8 @@ const product = (name: string, vendorName = 'Mama Put'): ProductSummary => ({
   vendorId: 'v1',
   vendorName,
   vendorSlug: 'mama-put',
+  vendorIsOpen: true,
+  vendorOpensAt: null,
   isAddOn: false,
 });
 
@@ -28,6 +30,7 @@ const vendor = (name: string, category: string): VendorSummary => ({
   category,
   areas: [{ id: 'ajah', name: 'Ajah' }],
   isOpen: true,
+  opensAt: null,
   logoUrl: null,
 });
 

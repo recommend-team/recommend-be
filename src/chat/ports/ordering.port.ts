@@ -65,6 +65,8 @@ export interface CartRejection {
     dishName?: string;
     groupName?: string;
     optionName?: string | null;
+    /** On a closed vendor: when they next open (ISO), or null. */
+    opensAt?: string | null;
   }[];
 }
 

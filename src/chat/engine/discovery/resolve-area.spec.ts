@@ -76,6 +76,7 @@ describe('search_vendors', () => {
             { id: 'lekki', name: 'Lekki' },
           ],
           isOpen: true,
+          opensAt: null,
           logoUrl: null,
         },
       ]),

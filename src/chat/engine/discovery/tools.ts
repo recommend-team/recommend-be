@@ -16,6 +16,7 @@ import {
   vendorCategoriesFor,
 } from './alternatives';
 import { searchWithDishNames } from './dish-names';
+import { describeOpening } from '../../../common/utils/opening-hours.util';
 
 export const DISCOVERY_TOOLS = [
   {
@@ -361,7 +362,7 @@ export async function executeTool(
               id: vendor.id,
               name: sanitizeUntrusted(vendor.name, 80),
               category: sanitizeUntrusted(vendor.category, 60),
-              isOpen: vendor.isOpen,
+              ...openingForModel(vendor.isOpen, vendor.opensAt),
               deliversTo: vendor.areas.map((area) => area.name),
             })),
           );
@@ -476,7 +477,7 @@ function alternativesForModel(query: string, found: Alternatives): string {
           id: vendor.id,
           name: sanitizeUntrusted(vendor.name, 80),
           category: sanitizeUntrusted(vendor.category, 60),
-          isOpen: vendor.isOpen,
+          ...openingForModel(vendor.isOpen, vendor.opensAt),
           deliversTo: vendor.areas.map((area) => area.name),
         })),
       });
@@ -548,5 +549,25 @@ function forModel(product: ProductSummary) {
     price: product.price,
     vendorId: product.vendorId,
     vendorName: sanitizeUntrusted(product.vendorName, 80),
+    ...(product.vendorIsOpen
+      ? {}
+      : {
+          vendorOpen: false,
+          vendorOpens: opensInWords(product.vendorOpensAt),
+        }),
   };
+}
+
+/**
+ * Whether a vendor takes orders now and, if not, when they do — in words, since the
+ * model cannot be trusted to turn a timestamp into Lagos time.
+ */
+function openingForModel(isOpen: boolean, opensAt: string | null) {
+  return isOpen ? { isOpen } : { isOpen, opens: opensInWords(opensAt) };
+}
+
+function opensInWords(opensAt: string | null): string {
+  return opensAt
+    ? describeOpening(new Date(opensAt), new Date())
+    : 'not taking orders for now';
 }

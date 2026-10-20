@@ -5,6 +5,7 @@ import { User } from '../../modules/auth/entities/auth.entity';
 import { Product } from '../../modules/products/entities/product.entity';
 import { Role } from '../../common/enums/roles.enum';
 import { SellerStatus } from '../../common/enums/seller-status.enum';
+import { openingStatus } from '../../common/utils/opening-hours.util';
 import {
   CatalogPort,
   CategorySummary,
@@ -110,14 +111,19 @@ export class LocalCatalogAdapter implements CatalogPort {
       );
     }
 
-    // Open vendors first — a closed one is a dead end in a conversation.
+    // Open vendors first — a closed one is a dead end in a conversation. Paused ones
+    // sort last in the query; who is inside their opening hours depends on the clock,
+    // not a column, so a few more are read and sorted here.
     const vendors = await qb
       .orderBy('vendor.isOpen', 'DESC')
       .addOrderBy('vendor.createdAt', 'DESC')
-      .take(limit)
+      .take(limit * OVERFETCH)
       .getMany();
 
-    return vendors.map(toVendorSummary);
+    return openFirst(
+      vendors.map(toVendorSummary),
+      (vendor) => vendor.isOpen,
+    ).slice(0, limit);
   }
 
   async getVendorById(vendorId: string): Promise<VendorSummary | null> {
@@ -189,13 +195,17 @@ export class LocalCatalogAdapter implements CatalogPort {
       );
     }
 
+    // Open vendors' items first, as in searchVendors.
     const products = await qb
       .orderBy('vendor.isOpen', 'DESC')
       .addOrderBy('product.createdAt', 'DESC')
-      .take(limit)
+      .take(limit * OVERFETCH)
       .getMany();
 
-    return products.map(toProductSummary);
+    return openFirst(
+      products.map(toProductSummary),
+      (product) => product.vendorIsOpen,
+    ).slice(0, limit);
   }
 
   async getProductById(productId: string): Promise<ProductSummary | null> {
@@ -263,6 +273,14 @@ export class LocalCatalogAdapter implements CatalogPort {
   }
 }
 
+/** How many times the limit a search reads, so open vendors can be sorted to the top. */
+const OVERFETCH = 3;
+
+/** Open ones first, keeping the query's order within each half. */
+function openFirst<T>(items: T[], isOpen: (item: T) => boolean): T[] {
+  return [...items.filter(isOpen), ...items.filter((item) => !isOpen(item))];
+}
+
 function clamp(value: number | undefined, fallback: number): number {
   return Math.min(20, Math.max(1, value ?? fallback));
 }
@@ -303,7 +321,7 @@ function toVendorSummary(vendor: User): VendorSummary {
       id: area.id,
       name: area.name,
     })),
-    isOpen: vendor.isOpen,
+    ...openNow(vendor),
     logoUrl: vendor.businessLogoUrl,
   };
 }
@@ -319,6 +337,25 @@ function toProductSummary(product: Product): ProductSummary {
     vendorName: product.vendor?.businessName ?? null,
     // Lets a product card open its vendor's menu via GET /store/:slug.
     vendorSlug: product.vendor?.slug ?? null,
+    ...vendorOpenNow(product.vendor),
     isAddOn: product.isAddOn,
   };
+}
+
+/** Open right now — the switch and the opening hours together. */
+function openNow(vendor: User): Pick<VendorSummary, 'isOpen' | 'opensAt'> {
+  const status = openingStatus(vendor, new Date());
+  return {
+    isOpen: status.openNow,
+    opensAt: status.opensAt?.toISOString() ?? null,
+  };
+}
+
+function vendorOpenNow(
+  vendor: User | undefined,
+): Pick<ProductSummary, 'vendorIsOpen' | 'vendorOpensAt'> {
+  // An extra read through its dish arrives without its vendor; checkout still decides.
+  if (!vendor) return { vendorIsOpen: true, vendorOpensAt: null };
+  const { isOpen, opensAt } = openNow(vendor);
+  return { vendorIsOpen: isOpen, vendorOpensAt: opensAt };
 }

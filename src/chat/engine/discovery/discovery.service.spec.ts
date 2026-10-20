@@ -302,6 +302,7 @@ describe('DiscoveryService (keyword fallback)', () => {
         category: 'Food',
         areas: [],
         isOpen: true,
+        opensAt: null,
         logoUrl: null,
       },
     ]);
@@ -328,6 +329,7 @@ describe('DiscoveryService (keyword fallback)', () => {
         category: 'Food',
         areas: [],
         isOpen: true,
+        opensAt: null,
         logoUrl: null,
       },
     ]);

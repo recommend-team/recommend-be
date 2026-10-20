@@ -1512,6 +1512,40 @@ describe('CheckoutFlow', () => {
       expect(replies[0].text).toContain('Nothing has been charged');
     });
 
+    it.each([
+      [
+        '2026-10-20T07:00:00.000Z',
+        'Jollof Rice — that vendor is closed now and opens tomorrow at 8am',
+      ],
+      [null, "Jollof Rice — that vendor isn't taking orders right now"],
+    ])('says when a closed vendor opens (%s)', async (opensAt, said) => {
+      // Monday 19 October 2026, 9pm in Lagos.
+      jest.useFakeTimers({
+        now: new Date('2026-10-19T21:00:00+01:00'),
+        doNotFake: ['nextTick', 'setImmediate'],
+      });
+      ordering.placeCheckout.mockRejectedValue(
+        new CartChangedError({
+          code: 'CART_CHANGED',
+          changes: [
+            {
+              productId: 'p1',
+              productName: 'Jollof Rice',
+              reason: 'VENDOR_CLOSED',
+              opensAt,
+            },
+          ],
+        }),
+      );
+
+      try {
+        const replies = await flow.handle(ready(), 'yes');
+        expect(replies[0].text).toContain(said);
+      } finally {
+        jest.useRealTimers();
+      }
+    });
+
     it('does not strand the buyer when payment setup fails', async () => {
       ordering.placeCheckout.mockRejectedValue(new Error('Paystack down'));
 

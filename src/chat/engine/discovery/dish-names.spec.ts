@@ -14,6 +14,8 @@ const product = (name: string): ProductSummary => ({
   vendorId: 'v1',
   vendorName: 'Iya Basira Buka',
   vendorSlug: 'iya-basira',
+  vendorIsOpen: true,
+  vendorOpensAt: null,
   isAddOn: false,
 });
 
