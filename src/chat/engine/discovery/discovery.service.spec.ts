@@ -86,6 +86,54 @@ describe('DiscoveryService (keyword fallback)', () => {
     service = module.get<DiscoveryService>(DiscoveryService);
   });
 
+  describe('a kind of thing asked for broadly', () => {
+    it('asks what they fancy and where they are — not "could not find"', async () => {
+      const result = await service.discover({
+        text: 'I need food',
+        areaId: null,
+        history: [],
+      });
+
+      expect(result.messages[0].text).toBe(
+        'We have vendors selling food. What would you like — rice, swallow, grills or snacks? And which area are you in?',
+      );
+      expect(catalog.searchProducts).not.toHaveBeenCalled();
+    });
+
+    it('shows who sells it in their area, and asks what they would like', async () => {
+      catalog.listCategories.mockResolvedValue([
+        { name: 'Barbecue, food', storeCount: 1 },
+      ]);
+      catalog.searchVendors.mockResolvedValue([
+        {
+          id: 'v1',
+          name: 'Bisi Grills',
+          slug: 'bisi-grills',
+          category: 'Barbecue, food',
+          areas: [YABA],
+          isOpen: true,
+          opensAt: null,
+          logoUrl: null,
+        },
+      ]);
+      locations.getAreaById.mockResolvedValue(YABA);
+
+      const result = await service.discover({
+        text: "I'm hungry",
+        areaId: YABA.id,
+        history: [],
+      });
+
+      expect(catalog.searchVendors).toHaveBeenCalledWith({
+        categories: ['Barbecue, food'],
+        areaId: YABA.id,
+      });
+      expect(result.messages[0].text).toBe(
+        "Here are vendors selling food around Yaba. Anything in particular you'd like — rice, swallow, grills or snacks?",
+      );
+    });
+  });
+
   describe('questions about Recommend', () => {
     const ask = (text: string, orderReferences: string[] = []) =>
       service.discover({ text, areaId: null, history: [], orderReferences });
@@ -526,10 +574,37 @@ describe('DiscoveryService (model)', () => {
   it('makes the model search when a message names a kind of thing', async () => {
     // Left to choose, it once answered "here are some options" having searched nothing.
     mockCreate.mockResolvedValueOnce(replies('Here you go.'));
-    await service.discover({ text: 'wears', areaId: null, history: [] });
+    await service.discover({ text: 'any bags?', areaId: null, history: [] });
 
     const [request] = mockCreate.mock.calls[0] as [{ tool_choice?: string }];
     expect(request.tool_choice).toBe('required');
+  });
+
+  it('shows who sells a kind of thing asked for broadly, when the area is known', async () => {
+    mockCreate.mockResolvedValueOnce(
+      replies('Here are vendors selling fashion.'),
+    );
+    await service.discover({ text: 'wears', areaId: 'ajah', history: [] });
+
+    const [request] = mockCreate.mock.calls[0] as [{ tool_choice?: unknown }];
+    expect(request.tool_choice).toEqual({
+      type: 'function',
+      function: { name: 'search_vendors' },
+    });
+    expect(systemMessages().join(' ')).toContain(
+      'asked for fashion in general',
+    );
+  });
+
+  it('asks what they fancy and where they are, rather than searching, when the area is not known', async () => {
+    mockCreate.mockResolvedValueOnce(
+      replies('We have vendors selling food. What would you like?'),
+    );
+    await service.discover({ text: 'I need food', areaId: null, history: [] });
+
+    const [request] = mockCreate.mock.calls[0] as [{ tool_choice?: unknown }];
+    expect(request.tool_choice).toBeUndefined();
+    expect(systemMessages().join(' ')).toContain('Do not search');
   });
 
   it('lets the model just talk when nothing is being looked for', async () => {

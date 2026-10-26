@@ -63,6 +63,8 @@ export interface TransactionSummary {
   buyerEmail: string | null;
   fulfillmentType: string;
   deliveryAddress: string | null;
+  /** Where the address was picked on the map, for the rider. Null when it was typed. */
+  deliveryPin: { latitude: number; longitude: number; placeId: string } | null;
   goodsTotal: number;
   deliveryFee: number;
   totalAmount: number;
@@ -118,6 +120,16 @@ function toTransactionSummary(
     buyerEmail: checkout.buyerEmail,
     fulfillmentType: checkout.fulfillmentType,
     deliveryAddress: checkout.deliveryAddress,
+    deliveryPin:
+      checkout.deliveryPlaceId &&
+      checkout.deliveryLat !== null &&
+      checkout.deliveryLng !== null
+        ? {
+            latitude: Number(checkout.deliveryLat),
+            longitude: Number(checkout.deliveryLng),
+            placeId: checkout.deliveryPlaceId,
+          }
+        : null,
     // Postgres hands decimals back as strings; the client should not have to know that.
     goodsTotal: Number(checkout.goodsTotal),
     deliveryFee: Number(checkout.deliveryFee),

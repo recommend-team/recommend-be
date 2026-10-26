@@ -160,15 +160,15 @@ export function alternativesLine(
 
   switch (found.kind) {
     case 'similar':
-      return `I couldn't find ${what}${where}, but these are close:`;
+      return `I don't see ${what} itself${where}, but these are close:`;
     case 'ask':
       return `I couldn't find ${what}${where}. What kind of thing is it — ${kindsList()}? Then I can show you who has that near you.`;
     case 'category':
-      return `I couldn't find ${what}${where}, but here's other ${kindOf(found.category)} near you:`;
+      return `I don't see ${what} listed by name${where}, but here are some other ${kindOf(found.category)} options near you:`;
     case 'vendors':
       return found.category
-        ? `I couldn't find ${what}${where}, but these ${kindOf(found.category)} vendors are near you — tap one to see what they have:`
-        : `I couldn't find ${what}${where}, but these vendors deliver there — tap one to see what they have:`;
+        ? `I don't see ${what} listed by name${where}, but these ${kindOf(found.category)} vendors are near you and may have it — tap one to see what they sell:`
+        : `I don't see ${what} listed by name${where}, but these vendors deliver there — tap one to see what they sell:`;
     case 'none':
       return found.category
         ? `I couldn't find ${what}${where}, and no ${kindOf(found.category)} vendors serve there yet. Try another area, or another search.`

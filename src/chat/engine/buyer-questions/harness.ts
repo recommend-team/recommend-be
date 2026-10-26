@@ -181,6 +181,7 @@ const locations: LocationPort = {
     );
   },
   recordUnplaced: () => Promise.resolve(),
+  verifyPlace: () => Promise.resolve(null),
   listAreas: () => Promise.resolve(AREAS),
   listServedAreas: () =>
     Promise.resolve(AREAS.filter((area) => SERVED.has(area.id))),

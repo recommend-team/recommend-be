@@ -259,7 +259,7 @@ describe('offering something when nothing matches', () => {
         'Ajah',
       );
       expect(line).toBe(
-        `I couldn't find "rice and beans" in Ajah, but these are close:`,
+        `I don't see "rice and beans" itself in Ajah, but these are close:`,
       );
     });
 
@@ -276,7 +276,7 @@ describe('offering something when nothing matches', () => {
           'Ajah',
         ),
       ).toBe(
-        `I couldn't find "amala" in Ajah, but here's other food near you:`,
+        `I don't see "amala" listed by name in Ajah, but here are some other food options near you:`,
       );
     });
   });
@@ -297,7 +297,7 @@ describe('the assistant searching', () => {
 
     const parsed = JSON.parse(answer) as { exactMatch: boolean; note: string };
     expect(parsed.exactMatch).toBe(false);
-    expect(parsed.note).toMatch(/could not find exactly/);
+    expect(parsed.note).toMatch(/don't see "rice and beans" itself/);
     expect(harvest.products.map((p) => p.name)).toContain('Jollof Rice');
     expect(harvest.unmet).toEqual([
       {
@@ -318,6 +318,68 @@ describe('the assistant searching', () => {
     );
 
     expect(harvest.unmet).toEqual([]);
+  });
+});
+
+describe('the assistant asked for a kind of thing', () => {
+  const AREA = 'f3c1c3a0-0000-4000-8000-000000000001';
+
+  it('shows who sells it, as a normal answer — never "could not find"', async () => {
+    const catalog = catalogue();
+    const harvest = emptyHarvest();
+    const answer = await executeTool(
+      'search_products',
+      { query: 'food' },
+      { catalog, locations: {} as never, areaId: AREA },
+      harvest,
+    );
+
+    const parsed = JSON.parse(answer) as {
+      broadRequest: boolean;
+      note: string;
+      exactMatch?: boolean;
+    };
+    expect(parsed.broadRequest).toBe(true);
+    expect(parsed.exactMatch).toBeUndefined();
+    expect(parsed.note).toMatch(/never say you could not find/);
+    // Both kitchens, however they filed themselves — and only food.
+    expect(harvest.vendors.map((v) => v.name).sort()).toEqual([
+      'Bisi Grills',
+      'Mama Put',
+    ]);
+    // Not a product search for "food", and not a want we failed to meet.
+    expect(catalog.productQueries).toEqual([]);
+    expect(harvest.unmet).toEqual([]);
+  });
+
+  it('asks what they fancy and where they are when the area is not known', async () => {
+    const catalog = catalogue();
+    const harvest = emptyHarvest();
+    const answer = await executeTool(
+      'search_products',
+      { query: 'food' },
+      { catalog, locations: {} as never, areaId: null },
+      harvest,
+    );
+
+    const parsed = JSON.parse(answer) as { note: string };
+    expect(parsed.note).toMatch(/which area they are in/);
+    expect(catalog.vendorQueries).toEqual([]);
+    expect(harvest.vendors).toEqual([]);
+  });
+
+  it('says kindly when nobody sells it in the area', async () => {
+    const harvest = emptyHarvest();
+    const answer = await executeTool(
+      'search_products',
+      { query: 'clothes' },
+      { catalog: catalogue(), locations: {} as never, areaId: AREA },
+      harvest,
+    );
+
+    expect((JSON.parse(answer) as { note: string }).note).toMatch(
+      /No vendors selling fashion serve their area yet/,
+    );
   });
 });
 

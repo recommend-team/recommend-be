@@ -3,6 +3,7 @@ import {
   Logger,
   BadRequestException,
   ConflictException,
+  Optional,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { ConfigService } from '@nestjs/config';
@@ -24,6 +25,8 @@ import { FulfillmentType } from '../../common/enums/fulfillment-type.enum';
 import { SellerStatus } from '../../common/enums/seller-status.enum';
 import { CheckoutSource } from '../../common/enums/checkout-source.enum';
 import { toOrderLines } from './order-lines';
+import { PlacesService } from '../places/places.service';
+import type { DeliveryPlace } from '../places/places.service';
 import { openingStatus } from '../../common/utils/opening-hours.util';
 
 const FALLBACK_PLATFORM_FEE_RATE = 0.2;
@@ -99,6 +102,7 @@ export class CheckoutService {
     private readonly paymentsService: PaymentsService,
     private readonly configService: ConfigService,
     private readonly dataSource: DataSource,
+    @Optional() private readonly places?: PlacesService,
   ) {}
 
   /**
@@ -153,6 +157,23 @@ export class CheckoutService {
       : CheckoutSource.CHAT,
   ): Promise<CheckoutResult> {
     const storefront = source === CheckoutSource.STOREFRONT;
+
+    // An address picked from Google: its signature checked, so nobody posts an address
+    // no one picked, and its address and area used — Google is never asked twice.
+    const place =
+      dto.deliveryPlace && dto.fulfillmentType === FulfillmentType.DELIVERY
+        ? this.verifiedPlace(dto.deliveryPlace.token)
+        : null;
+    if (place) {
+      dto = {
+        ...dto,
+        deliveryAddress: [dto.deliveryPlace?.details, place.address]
+          .filter(Boolean)
+          .join(', '),
+        // Where the pin is, over a guess at the area.
+        areaId: place.areaId ?? dto.areaId,
+      };
+    }
 
     // A storefront buyer may never open the chat; email is how the receipt and the
     // delivery code reach them, and how their order finds its way into the chat.
@@ -224,6 +245,7 @@ export class CheckoutService {
       totalAmount,
       createdByAdminId,
       source,
+      place,
     });
 
     // A storefront buyer paying on Paystack's own page comes back to their order on the
@@ -336,6 +358,17 @@ export class CheckoutService {
         [...grouped.values()].reduce((sum, group) => sum + group.subtotal, 0),
       ),
     };
+  }
+
+  /** A picked address's token, checked — or refused when the app can't check it. */
+  private verifiedPlace(token: string): DeliveryPlace {
+    if (!this.places) {
+      throw new BadRequestException({
+        code: 'PLACE_INVALID',
+        message: 'Type the delivery address instead.',
+      });
+    }
+    return this.places.verify(token);
   }
 
   // ─── Validation ─────────────────────────────────────────────────────────────
@@ -781,8 +814,14 @@ export class CheckoutService {
       totalAmount: number;
       createdByAdminId: string | null;
       source: CheckoutSource;
+      place: DeliveryPlace | null;
     },
   ): Promise<Checkout> {
+    const where = {
+      deliveryPlaceId: totals.place?.placeId ?? null,
+      deliveryLat: totals.place?.latitude ?? null,
+      deliveryLng: totals.place?.longitude ?? null,
+    };
     return this.dataSource.transaction(async (manager) => {
       const checkout = manager.create(Checkout, {
         reference: totals.reference,
@@ -792,6 +831,7 @@ export class CheckoutService {
         buyerEmail: dto.buyerEmail ?? null,
         fulfillmentType: dto.fulfillmentType,
         deliveryAddress: dto.deliveryAddress ?? null,
+        ...where,
         notes: dto.notes ?? null,
         goodsTotal: totals.goodsTotal,
         deliveryFee: totals.deliveryFee,
@@ -826,6 +866,7 @@ export class CheckoutService {
           fulfillmentType: dto.fulfillmentType,
           status: OrderStatus.PENDING_PAYMENT,
           deliveryAddress: dto.deliveryAddress ?? null,
+          ...where,
           notes: dto.notes ?? null,
           paidAt: null,
         });

@@ -179,6 +179,21 @@ export const googleConfig = registerAs('google', () => ({
   backendUrl: process.env.BACKEND_URL || 'http://localhost:4000',
 }));
 
+/**
+ * Google Places, for picking a delivery address instead of typing one. The countries
+ * suggestions come from are a setting, not a hardcoded Lagos: "ng" today, more as
+ * Recommend grows.
+ */
+export const placesConfig = registerAs('places', () => ({
+  apiKey: process.env.GOOGLE_PLACES_API_KEY,
+  countries: (process.env.PLACES_COUNTRIES || 'ng')
+    .split(',')
+    .map((code) => code.trim().toLowerCase())
+    .filter(Boolean),
+  // Signs a picked place, so checkout trusts it without asking Google again.
+  signingSecret: process.env.PLACES_SIGNING_SECRET || process.env.JWT_SECRET,
+}));
+
 export const chatConfig = registerAs('chat', () => ({
   /** What the assistant calls itself — in the greeting and in the model's persona. */
   assistantName: process.env.ASSISTANT_NAME?.trim() || 'James',

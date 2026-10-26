@@ -4,6 +4,7 @@ import { AdminOrderService } from './admin-order.service';
 import { ConversationService } from '../conversation/conversation.service';
 import { HandoverService } from './handover.service';
 import { ORDERING_PORT } from '../ports/ordering.port';
+import { LOCATION_PORT } from '../ports/location.port';
 import { CartChangedError } from '../adapters/local-ordering.adapter';
 import type { Conversation } from '../conversation/entities/conversation.entity';
 
@@ -44,6 +45,7 @@ describe('AdminOrderService', () => {
   let ordering: { placeCheckout: jest.Mock; listOrders: jest.Mock };
   let conversations: { findById: jest.Mock; mergeContext: jest.Mock };
   let handover: { send: jest.Mock };
+  let locations: { verifyPlace: jest.Mock };
 
   beforeEach(async () => {
     ordering = {
@@ -55,6 +57,16 @@ describe('AdminOrderService', () => {
       mergeContext: jest.fn().mockResolvedValue(null),
     };
     handover = { send: jest.fn().mockResolvedValue({ text: 'sent' }) };
+    locations = {
+      verifyPlace: jest.fn().mockResolvedValue({
+        placeId: 'ChIJallen',
+        address: 'Allen Avenue, Ikeja, Lagos, Nigeria',
+        latitude: 6.6018,
+        longitude: 3.3515,
+        areaId: 'a-ikeja',
+        areaName: 'Ikeja',
+      }),
+    };
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -62,6 +74,7 @@ describe('AdminOrderService', () => {
         { provide: ORDERING_PORT, useValue: ordering },
         { provide: ConversationService, useValue: conversations },
         { provide: HandoverService, useValue: handover },
+        { provide: LOCATION_PORT, useValue: locations },
       ],
     }).compile();
 
@@ -109,6 +122,86 @@ describe('AdminOrderService', () => {
           deliveryAddress: '9 Other Street, Yaba',
         }),
       );
+    });
+  });
+
+  describe('an address picked from Google', () => {
+    it('sends the pick, and writes the full address back to the thread', async () => {
+      await service.place('c1', ADMIN, {
+        lines,
+        deliveryPlace: { token: 'tok', details: ' House 4 ' },
+      });
+
+      expect(locations.verifyPlace).toHaveBeenCalledWith('tok');
+      expect(ordering.placeCheckout).toHaveBeenCalledWith(
+        expect.objectContaining({
+          deliveryAddress: 'House 4, Allen Avenue, Ikeja, Lagos, Nigeria',
+          deliveryPlace: { token: 'tok', details: 'House 4' },
+        }),
+      );
+      expect(patch().profile).toEqual(
+        expect.objectContaining({
+          address: 'House 4, Allen Avenue, Ikeja, Lagos, Nigeria',
+        }),
+      );
+      expect(patch().addressPlace).toEqual({
+        token: 'tok',
+        details: 'House 4',
+      });
+    });
+
+    it('refuses a pick that has expired, placing nothing', async () => {
+      locations.verifyPlace.mockResolvedValue(null);
+
+      await expect(
+        service.place('c1', ADMIN, { lines, deliveryPlace: { token: 'old' } }),
+      ).rejects.toThrow('Pick the delivery address again');
+      expect(ordering.placeCheckout).not.toHaveBeenCalled();
+    });
+
+    it("keeps the buyer's own pick when the admin leaves the address alone", async () => {
+      conversations.findById.mockResolvedValue(
+        conversationWith({
+          context: {
+            profile: {
+              name: 'Ada Obi',
+              phone: '+2348012345678',
+              address: 'House 4, Allen Avenue, Ikeja, Lagos, Nigeria',
+            },
+            addressPlace: { token: 'buyer-tok', details: 'House 4' },
+          },
+        } as Partial<Conversation>),
+      );
+
+      await service.place('c1', ADMIN, { lines });
+
+      expect(locations.verifyPlace).not.toHaveBeenCalled();
+      expect(ordering.placeCheckout).toHaveBeenCalledWith(
+        expect.objectContaining({
+          deliveryPlace: { token: 'buyer-tok', details: 'House 4' },
+        }),
+      );
+    });
+
+    it('drops the pin when the admin types a different address', async () => {
+      conversations.findById.mockResolvedValue(
+        conversationWith({
+          context: {
+            profile: { name: 'Ada Obi', phone: '+2348012345678' },
+            addressPlace: { token: 'buyer-tok' },
+          },
+        } as Partial<Conversation>),
+      );
+
+      await service.place('c1', ADMIN, {
+        lines,
+        deliveryAddress: '9 Other Street, Yaba',
+      });
+
+      expect(ordering.placeCheckout).toHaveBeenCalledWith(
+        expect.objectContaining({ deliveryPlace: undefined }),
+      );
+      expect(patch().addressPlace).toBeUndefined();
     });
   });
 

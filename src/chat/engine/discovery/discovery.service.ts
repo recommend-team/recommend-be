@@ -36,10 +36,14 @@ import {
 } from './tools';
 import { UnmetSearchService } from './unmet-search.service';
 import { enforcePriceIntegrity } from './price-guard';
-import { alternativesLine, findAlternatives } from './alternatives';
+import {
+  alternativesLine,
+  findAlternatives,
+  vendorCategoriesFor,
+} from './alternatives';
 import { searchWithDishNames } from './dish-names';
 import { stripCardEcho } from './card-echo';
-import { categoriesFor } from './synonyms';
+import { broadKindOf, categoriesFor, examplesOf, spokenKind } from './synonyms';
 import {
   areaChoicesPayload,
   productListPayload,
@@ -267,11 +271,45 @@ export class DiscoveryService {
       { role: 'user', content: request.text },
     ];
 
+    // "I need food", "I'm hungry": browsing, not a product search. With an area, who
+    // sells it there; without one, what they fancy and where they are.
+    const broad = broadKindOf(request.text);
+    if (broad) {
+      const said = spokenKind(broad);
+      messages.push({
+        role: 'system',
+        content: areaId
+          ? `The buyer asked for ${said} in general, not a particular item. Call ` +
+            `search_vendors with category "${said}" to show who sells it in ` +
+            `${area?.name ?? 'their area'}, then say something like "Here are vendors ` +
+            `selling ${said} around ${area?.name ?? 'you'}" and ask what they are in ` +
+            `the mood for — ${examplesOf(broad)}, say. Never say you could not find ` +
+            'anything.'
+          : `The buyer asked for ${said} in general, not a particular item, and their ` +
+            'area is not known. Do not search. Reply as a friendly shop assistant: we ' +
+            `have vendors selling ${said}; what would they like — ${examplesOf(broad)}, ` +
+            'say — and which area are they in? One short message.',
+      });
+    }
+
     let reply = '';
     // A message naming a kind of thing — "wears", "any bags?", "no fashion vendors?" — is
     // never answered from memory: the first round must use a tool. Left to choose, the
     // model once said "here are some options" having searched nothing.
     const mustLook = categoriesFor(request.text).length > 0;
+    // Broad with an area: straight to who sells it. Broad without one: a question first.
+    const firstRound = broad
+      ? areaId
+        ? {
+            tool_choice: {
+              type: 'function' as const,
+              function: { name: 'search_vendors' },
+            },
+          }
+        : {}
+      : mustLook
+        ? { tool_choice: 'required' as const }
+        : {};
 
     for (let round = 0; round <= this.maxToolRounds; round++) {
       const completion = await client.chat.completions.create({
@@ -279,9 +317,7 @@ export class DiscoveryService {
         temperature: this.temperature,
         messages,
         tools: DISCOVERY_TOOLS as ChatCompletionTool[],
-        ...(mustLook && round === 0
-          ? { tool_choice: 'required' as const }
-          : {}),
+        ...(round === 0 ? firstRound : {}),
       });
 
       const choice = completion.choices[0]?.message;
@@ -515,6 +551,12 @@ export class DiscoveryService {
       harvest.areas.push(...areas);
     }
 
+    // "I need food": who sells it, not a search for a dish called "food".
+    const broad = broadKindOf(request.text);
+    if (broad) {
+      return this.browseKind(broad, areaId, areas, harvest, modelFailed);
+    }
+
     // Nothing asked for, only where they are — "I live in Ikeja", "what can I get?". Show
     // who is there rather than searching for a dish called "live".
     if (!query) {
@@ -582,6 +624,45 @@ export class DiscoveryService {
             : DID_NOT_CATCH;
 
     return this.assemble(reply, harvest, { usedFallback: true, modelFailed });
+  }
+
+  private async browseKind(
+    kind: string,
+    areaId: string | null,
+    named: AreaSummary[],
+    harvest: ToolHarvest,
+    modelFailed: boolean,
+  ): Promise<DiscoveryResult> {
+    const options = { usedFallback: true, modelFailed };
+    const said = spokenKind(kind);
+    const examples = examplesOf(kind);
+
+    if (!areaId) {
+      harvest.searched = false;
+      return this.assemble(
+        `We have vendors selling ${said}. What would you like — ${examples}? And which area are you in?`,
+        harvest,
+        options,
+      );
+    }
+
+    const typed = await vendorCategoriesFor(this.catalog, [kind], areaId);
+    if (typed.length > 0) {
+      harvest.vendors.push(
+        ...(await this.catalog.searchVendors({ categories: typed, areaId })),
+      );
+    }
+    const area =
+      named.find((candidate) => candidate.id === areaId) ??
+      (await this.locations.getAreaById(areaId));
+    const place = area?.name ?? 'your area';
+    return this.assemble(
+      harvest.vendors.length > 0
+        ? `Here are vendors selling ${said} around ${place}. Anything in particular you'd like — ${examples}?`
+        : `We don't have vendors selling ${said} in ${place} yet. Tell me another area and I'll look there.`,
+      harvest,
+      options,
+    );
   }
 
   private async whoIsNear(

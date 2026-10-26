@@ -92,6 +92,19 @@ export class Order {
   @Column({ type: 'text', nullable: true })
   deliveryAddress!: string | null;
 
+  /**
+   * Picked from Google Places: the place and its pin, for the rider. Null when the
+   * buyer typed the address by hand.
+   */
+  @Column({ type: 'varchar', length: 300, nullable: true })
+  deliveryPlaceId!: string | null;
+
+  @Column({ type: 'decimal', precision: 9, scale: 6, nullable: true })
+  deliveryLat!: number | null;
+
+  @Column({ type: 'decimal', precision: 9, scale: 6, nullable: true })
+  deliveryLng!: number | null;
+
   @Column({ type: 'text', nullable: true })
   notes!: string | null;
 

@@ -1,4 +1,5 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Optional } from '@nestjs/common';
+import { PlacesService } from '../../modules/places/places.service';
 import { OnEvent } from '@nestjs/event-emitter';
 import { PLACES_CHANGED_EVENT } from '../../common/events/places-changed.event';
 import { InjectRepository } from '@nestjs/typeorm';
@@ -12,7 +13,11 @@ import {
   normalisePlace,
   placeCandidates,
 } from '../../modules/locations/place-match';
-import { AreaSummary, LocationPort } from '../ports/location.port';
+import {
+  AreaSummary,
+  LocationPort,
+  PickedAddress,
+} from '../ports/location.port';
 import { Role } from '../../common/enums/roles.enum';
 import { SellerStatus } from '../../common/enums/seller-status.enum';
 
@@ -41,7 +46,17 @@ export class LocalLocationAdapter implements LocationPort {
     private readonly aliasesRepository: Repository<AreaAlias>,
     @InjectRepository(UnplacedLocation)
     private readonly unplacedRepository: Repository<UnplacedLocation>,
+    @Optional() private readonly placesService?: PlacesService,
   ) {}
+
+  async verifyPlace(token: string): Promise<PickedAddress | null> {
+    if (!this.placesService) return null;
+    try {
+      return Promise.resolve(this.placesService.verify(token));
+    } catch {
+      return null;
+    }
+  }
 
   async searchAreas(
     text: string,

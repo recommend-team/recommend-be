@@ -99,6 +99,7 @@ export class LocalOrderingAdapter implements OrderingPort {
               ? FulfillmentType.DELIVERY
               : FulfillmentType.PICKUP,
           deliveryAddress: input.deliveryAddress,
+          deliveryPlace: input.deliveryPlace,
           notes: input.notes,
         },
         input.createdByAdminId ?? null,

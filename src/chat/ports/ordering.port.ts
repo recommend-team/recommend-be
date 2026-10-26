@@ -38,6 +38,8 @@ export interface PlaceCheckoutInput {
   buyerEmail?: string;
   fulfillmentType: 'PICKUP' | 'DELIVERY';
   deliveryAddress?: string;
+  /** Picked from Google: the token, and the house number or landmark Google can't know. */
+  deliveryPlace?: { token: string; details?: string };
   notes?: string;
   createdByAdminId?: string;
 }

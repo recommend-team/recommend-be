@@ -385,12 +385,11 @@ export class CheckoutFlow {
         ConversationState.COLLECTING_ADDRESS,
       );
       return [
-        {
-          text:
-            readFulfillment(answer) === 'PICKUP'
-              ? `${PICKUP_UNAVAILABLE} ${ASK_ADDRESS}`
-              : ASK_ADDRESS,
-        },
+        askAddress(
+          readFulfillment(answer) === 'PICKUP'
+            ? `${PICKUP_UNAVAILABLE} ${ASK_ADDRESS}`
+            : ASK_ADDRESS,
+        ),
       ];
     }
 
@@ -460,6 +459,7 @@ export class CheckoutFlow {
     if (choice === 'SAME') {
       await this.conversationService.mergeContext(conversation.id, {
         profile: { fulfillmentType: 'DELIVERY', address: lastAddress },
+        addressPlace: undefined,
       });
       return this.advanceFrom(conversation, ConversationState.CONFIRMING_ORDER);
     }
@@ -473,7 +473,7 @@ export class CheckoutFlow {
       conversation.id,
       ConversationState.COLLECTING_ADDRESS,
     );
-    return [{ text: ASK_NEW_ADDRESS }];
+    return [askAddress(ASK_NEW_ADDRESS)];
   }
 
   /**
@@ -490,6 +490,17 @@ export class CheckoutFlow {
     const context = fresh?.context ?? conversation.context ?? {};
     const draft = context.addressDraft;
 
+    if (draft?.stage === 'LANDMARK' && draft.placeToken) {
+      // Google has the street, not the door: the house number is the one thing asked.
+      const details = answer.trim().slice(0, 200);
+      if (isSkip(answer) || details.length < 2) {
+        return [{ text: ASK_HOUSE_AGAIN }];
+      }
+      return this.finishAddress(conversation, `${details}, ${draft.text}`, {
+        token: draft.placeToken,
+        details,
+      });
+    }
     if (draft?.stage === 'LANDMARK') {
       return this.finishAddress(
         conversation,
@@ -509,7 +520,7 @@ export class CheckoutFlow {
       !this.ordering.pickupEnabled() &&
       readFulfillment(answer) === 'PICKUP'
     ) {
-      return [{ text: `${PICKUP_UNAVAILABLE} ${ASK_ADDRESS}` }];
+      return [askAddress(`${PICKUP_UNAVAILABLE} ${ASK_ADDRESS}`)];
     }
 
     // Asked once for the house number and street. Asked twice, the buyer may simply not
@@ -536,7 +547,7 @@ export class CheckoutFlow {
       : named.length === 0
         ? ((
             await this.locations.searchAreas(
-              answer.split(/s+/).slice(-5).join(' '),
+              answer.split(/\s+/).slice(-5).join(' '),
               1,
               { guesses: true },
             )
@@ -648,8 +659,11 @@ export class CheckoutFlow {
       ];
     }
 
-    // Said separately, so it joins the address the rider will read.
-    return this.checkArea(conversation, `${draft.text}, ${area.name}`, area);
+    // Said separately, so it joins the address the rider will read — unless Google's
+    // address already says where it is.
+    return draft.placeToken
+      ? this.checkArea(conversation, draft.text, area, draft.placeToken)
+      : this.checkArea(conversation, `${draft.text}, ${area.name}`, area);
   }
 
   /**
@@ -660,14 +674,16 @@ export class CheckoutFlow {
     conversation: Conversation,
     address: string,
     area: AreaSummary,
+    /** Picked from Google: the house number is asked next, not a landmark. */
+    placeToken?: string,
   ): Promise<OutboundMessage[]> {
     const served = await this.locations.listServedAreas();
     if (!served.some((candidate) => candidate.id === area.id)) {
       await this.clearAddressDraft(conversation.id);
       return [
-        {
-          text: `We don't deliver to ${area.name} yet — right now we cover ${listNames(served)}. Could you give an address in one of those?`,
-        },
+        askAddress(
+          `We don't deliver to ${area.name} yet — right now we cover ${listNames(served)}. Could you give an address in one of those?`,
+        ),
       ];
     }
 
@@ -679,18 +695,18 @@ export class CheckoutFlow {
       await this.clearAddressDraft(conversation.id);
       const theirs = unserved.areas.map((candidate) => candidate.name);
       return [
-        {
-          text:
-            `${unserved.name} doesn't deliver to ${area.name}` +
+        askAddress(
+          `${unserved.name} doesn't deliver to ${area.name}` +
             (theirs.length ? ` — they deliver to ${listNames(theirs)}.` : '.') +
             ' Could you give an address there, or say "cancel" to change your order?',
-        },
+        ),
       ];
     }
 
     await this.conversationService.mergeContext(conversation.id, {
-      addressDraft: { text: address, stage: 'LANDMARK' },
+      addressDraft: { text: address, stage: 'LANDMARK', placeToken },
     });
+    if (placeToken) return [{ text: ASK_HOUSE }];
     return [
       {
         text: 'Any landmark or bus stop near it, to help the rider find you?',
@@ -702,9 +718,12 @@ export class CheckoutFlow {
   private async finishAddress(
     conversation: Conversation,
     address: string,
+    /** Picked from Google: checkout is given the token, and trusts it. */
+    place?: { token: string; details?: string },
   ): Promise<OutboundMessage[]> {
     await this.conversationService.mergeContext(conversation.id, {
       profile: { address },
+      addressPlace: place,
       addressDraft: undefined,
       addressRetried: undefined,
     });
@@ -801,6 +820,11 @@ export class CheckoutFlow {
         fulfillmentType:
           profile.fulfillmentType === 'DELIVERY' ? 'DELIVERY' : 'PICKUP',
         deliveryAddress: profile.address,
+        // Picked from Google: the place and its pin go with the order.
+        deliveryPlace:
+          profile.fulfillmentType === 'DELIVERY'
+            ? fresh?.context?.addressPlace
+            : undefined,
       });
 
       // Recorded whether or not the payment succeeds. An abandoned checkout still
@@ -1071,6 +1095,53 @@ export class CheckoutFlow {
     return [...extras.values()];
   }
 
+  // ─── An address picked from Google ──────────────────────────────────────────
+
+  /**
+   * The buyer picked their address in the card. Checked, then on as if they had typed
+   * it — but with the area Google's address says, and the house number asked next.
+   * `said` is the buyer's side of the thread; null when the card was stale.
+   */
+  async usePickedAddress(
+    conversation: Conversation,
+    token: string,
+  ): Promise<{ said: string | null; replies: OutboundMessage[] }> {
+    if (conversation.state !== ConversationState.COLLECTING_ADDRESS) {
+      return { said: null, replies: [] };
+    }
+    const place = await this.locations.verifyPlace(token);
+    if (!place) {
+      return {
+        said: null,
+        replies: [
+          askAddress('That address has expired — search for it again.'),
+        ],
+      };
+    }
+
+    const area = place.areaId
+      ? await this.locations.getAreaById(place.areaId)
+      : null;
+    if (!area) {
+      await this.conversationService.mergeContext(conversation.id, {
+        addressDraft: { text: place.address, stage: 'AREA', placeToken: token },
+      });
+      const served = await this.locations.listServedAreas();
+      return {
+        said: place.address,
+        replies: [
+          {
+            text: `Which area is that in? We deliver to ${listNames(served)}.`,
+          },
+        ],
+      };
+    }
+    return {
+      said: place.address,
+      replies: await this.checkArea(conversation, place.address, area, token),
+    };
+  }
+
   // ─── Choices a cart left unanswered ─────────────────────────────────────────
 
   /**
@@ -1182,6 +1253,7 @@ export class CheckoutFlow {
 
   private async reset(conversationId: string): Promise<void> {
     await this.conversationService.mergeContext(conversationId, {
+      addressPlace: undefined,
       pendingCart: [],
       // A new order is offered extras again.
       addOnsOffered: false,
@@ -1201,6 +1273,16 @@ export class CheckoutFlow {
 
 const ASK_ADDRESS =
   "What's the full delivery address? House number, street and area.";
+const ASK_HOUSE =
+  "What's the house or flat number? Add a landmark if it helps the rider find you.";
+const ASK_HOUSE_AGAIN =
+  "The rider needs the house or flat number — or a landmark, if there isn't one.";
+
+/** An address question, with the card to search for it — typing below still works. */
+function askAddress(text: string): OutboundMessage {
+  return { text, payload: { kind: 'address_picker', data: {} } };
+}
+
 const ASK_NEW_ADDRESS =
   "What's the new address? House number, street and area.";
 const ADDRESS_TOO_SHORT =
@@ -1266,7 +1348,7 @@ function promptFor(
             payload: fulfillmentChoices(),
           };
     case ConversationState.COLLECTING_ADDRESS:
-      return { text: ASK_ADDRESS };
+      return askAddress(ASK_ADDRESS);
     default:
       return { text: 'Shall I go ahead?' };
   }

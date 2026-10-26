@@ -1,4 +1,9 @@
-import { CATEGORIES, categoriesFor, standardCategoriesOf } from './synonyms';
+import {
+  CATEGORIES,
+  broadKindOf,
+  categoriesFor,
+  standardCategoriesOf,
+} from './synonyms';
 
 describe('categoriesFor', () => {
   it('maps the word that started all this', () => {
@@ -94,5 +99,33 @@ describe('categoriesFor', () => {
     // "seafood" ends in "food" but a substring match would also catch "foodie",
     // "fanatic" for "fan", and "pcs" for "pc". Tokens, not substrings.
     expect(categoriesFor('seafood platter')).toEqual([]);
+  });
+});
+
+describe('broadKindOf', () => {
+  it.each([
+    ['I need food', CATEGORIES.restaurant],
+    ['food', CATEGORIES.restaurant],
+    ["I'm hungry", CATEGORIES.restaurant],
+    ['abeg I need something to eat', CATEGORIES.restaurant],
+    ['any food vendors around?', CATEGORIES.restaurant],
+    ['I want food in Ajah', CATEGORIES.restaurant],
+    ['I want to buy clothes', CATEGORIES.fashion],
+    ['do you have wears?', CATEGORIES.fashion],
+    ['show me gadgets', CATEGORIES.gadgets],
+  ])('reads "%s" as browsing for a kind', (text, kind) => {
+    expect(broadKindOf(text)).toBe(kind);
+  });
+
+  it.each([
+    'I need jollof rice',
+    'food and a charger',
+    'clothes and food',
+    'I want shoes',
+    'iphone 13',
+    'where is my order',
+    'hello',
+  ])('does not read "%s" as browsing', (text) => {
+    expect(broadKindOf(text)).toBeNull();
   });
 });

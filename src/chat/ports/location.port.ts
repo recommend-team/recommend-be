@@ -16,6 +16,16 @@ export interface AreaSummary {
   guess?: boolean;
 }
 
+/** An address the buyer picked from Google, checked: where it is, and our area for it. */
+export interface PickedAddress {
+  placeId: string;
+  address: string;
+  latitude: number;
+  longitude: number;
+  areaId: string | null;
+  areaName: string | null;
+}
+
 export interface LocationPort {
   /**
    * The areas what the buyer typed points to: by our area names, then by the other names
@@ -29,6 +39,8 @@ export interface LocationPort {
   ): Promise<AreaSummary[]>;
   /** A place a buyer named that matched nothing — counted, for an admin to place. */
   recordUnplaced(text: string): Promise<void>;
+  /** The address a picked-place token stands for, or null if it was altered or is old. */
+  verifyPlace(token: string): Promise<PickedAddress | null>;
   listAreas(limit?: number): Promise<AreaSummary[]>;
   /**
    * Areas a buyer can actually order in: at least one approved vendor serves them. What

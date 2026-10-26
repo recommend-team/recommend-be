@@ -20,7 +20,9 @@ export interface MessagePayload {
     /** The receipt-email card at checkout: an email box, its code, and Skip. */
     | 'email_capture'
     /** "Anything to go with it?" — each cart vendor's add-ons, with steppers. */
-    | 'addon_offer';
+    | 'addon_offer'
+    /** The delivery address, searched and picked from Google — or typed below it. */
+    | 'address_picker';
   data?: Record<string, unknown>;
 }
 

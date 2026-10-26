@@ -16,6 +16,7 @@ import configuration, {
   walletConfig,
   pushConfig,
   chatConfig,
+  placesConfig,
 } from './configuration';
 import { validate } from './config.validation';
 
@@ -33,6 +34,7 @@ import { validate } from './config.validation';
         openaiConfig,
         paymentConfig,
         googleConfig,
+        placesConfig,
         deliveryConfig,
         contactConfig,
         brandConfig,

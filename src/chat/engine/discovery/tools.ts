@@ -8,7 +8,14 @@ import { AreaSummary, LocationPort } from '../../ports/location.port';
 import type { OrderingPort } from '../../ports/ordering.port';
 import { orderForModel, orderPrices } from './my-orders';
 import { sanitizeUntrusted } from './sanitize';
-import { categoriesFor, kindsList, standardCategoriesOf } from './synonyms';
+import {
+  broadKindOf,
+  categoriesFor,
+  examplesOf,
+  kindsList,
+  spokenKind,
+  standardCategoriesOf,
+} from './synonyms';
 import {
   AlternativeKind,
   Alternatives,
@@ -280,6 +287,18 @@ export async function executeTool(
     case 'search_products': {
       harvest.searched = true;
       const query = typeof args.query === 'string' ? args.query : '';
+
+      // "food", "clothes": a kind of thing, not an item. Who sells it, not a search for
+      // a product called "food" that ends in "I couldn't find exactly what you asked for".
+      const broad = broadKindOf(query);
+      if (broad)
+        return browseKind(
+          broad,
+          query,
+          { ...context, areaId: areaId ?? null },
+          harvest,
+        );
+
       // In the buyer's words, then in vendors' — "ewa agoyin" is on menus as beans.
       const products = await searchWithDishNames(context.catalog, {
         text: query,
@@ -443,6 +462,74 @@ function collectProducts(
   harvest.prices.push(...products.map((product) => product.price));
 }
 
+/** How a buyer says a kind, for the notes: "food", "fashion". */
+function kindWord(category: string | null): string {
+  return category ? spokenKind(category) : 'similar';
+}
+
+/**
+ * A kind of thing asked for broadly — "food", "clothes". The vendors that sell it in the
+ * buyer's area, shown as a shop assistant would: here's who sells it, what do you fancy?
+ * Never a failed search. Without an area there is nothing to show yet: ask for it.
+ */
+async function browseKind(
+  kind: string,
+  query: string,
+  context: ToolContext,
+  harvest: ToolHarvest,
+): Promise<string> {
+  const said = spokenKind(kind);
+  const examples = examplesOf(kind);
+  if (!context.areaId) {
+    return JSON.stringify({
+      broadRequest: true,
+      note:
+        `"${sanitizeUntrusted(query, 80)}" is a kind of thing, not a particular ` +
+        `item, and their area is not known yet. Do not search again. Say we have ` +
+        `vendors selling ${said}, and ask what they would like — ${examples}, say — ` +
+        'and which area they are in. One short, friendly message.',
+    });
+  }
+
+  const typed = await vendorCategoriesFor(
+    context.catalog,
+    [kind],
+    context.areaId,
+  );
+  const vendors =
+    typed.length > 0
+      ? await context.catalog.searchVendors({
+          categories: typed,
+          areaId: context.areaId,
+        })
+      : [];
+  harvest.vendors.push(...vendors);
+
+  if (vendors.length === 0) {
+    return JSON.stringify({
+      broadRequest: true,
+      note:
+        `No vendors selling ${said} serve their area yet. Say so kindly, and offer ` +
+        'to look in another area they name.',
+    });
+  }
+  return JSON.stringify({
+    broadRequest: true,
+    note:
+      `They asked for ${said} in general, not a particular item. These vendors sell ` +
+      `${said} in their area. Say something like "Here are vendors selling ${said} ` +
+      `near you", then ask what they are in the mood for — ${examples}, say. This ` +
+      'is not a failed search: never say you could not find anything. Shown as cards.',
+    vendors: vendors.map((vendor) => ({
+      id: vendor.id,
+      name: sanitizeUntrusted(vendor.name, 80),
+      category: sanitizeUntrusted(vendor.category, 60),
+      ...openingForModel(vendor.isOpen, vendor.opensAt),
+      deliversTo: vendor.areas.map((area) => area.name),
+    })),
+  });
+}
+
 /**
  * What the model is told when nothing matched exactly: that it did not, and what is
  * being offered instead — so it says both, in that order, and never passes an
@@ -457,21 +544,26 @@ function alternativesForModel(query: string, found: Alternatives): string {
       return JSON.stringify({
         exactMatch: false,
         note:
-          `Nothing matches "${asked}" exactly. These are the closest available ` +
-          (found.kind === 'similar'
-            ? 'items (sharing some of the words). '
-            : `items of the same kind (${found.category ?? 'similar'}). `) +
-          'Say first that you could not find exactly what they asked for, then that ' +
-          'these are close. They are shown as cards.',
+          found.kind === 'similar'
+            ? `Nothing is listed as "${asked}" itself. These items share some of its ` +
+              `words. Say naturally that you don't see "${asked}" itself, then offer ` +
+              'these as close options. Never present one as what they asked for. They ' +
+              'are shown as cards.'
+            : `No item is listed as "${asked}" by name. These are other ` +
+              `${kindWord(found.category)} items near them. Say you don't see ` +
+              `"${asked}" listed by name, but here are some ${kindWord(found.category)} ` +
+              'options near them that might suit — never present one as what they ' +
+              'asked for, and do not apologise at length. Then ask if they want ' +
+              'something in particular. They are shown as cards.',
         alternatives: found.products.map(forModel),
       });
     case 'vendors':
       return JSON.stringify({
         exactMatch: false,
         note:
-          `Nothing matches "${asked}" exactly, and no similar items either. These ` +
-          `${found.category ?? ''} vendors serve the area. Say first that you could ` +
-          'not find it, then suggest they tap a vendor to see what they have. They are ' +
+          `No item is listed as "${asked}" by name, but these vendors sell ` +
+          `${kindWord(found.category)} near them and may well have it. Say exactly ` +
+          'that, and suggest they tap a vendor to see everything they sell. They are ' +
           'shown as cards.',
         vendors: found.vendors.map((vendor) => ({
           id: vendor.id,

@@ -13,6 +13,7 @@ import { HandoverCodeService } from './handover-code.service';
 import { OrderStatusEvent } from './entities/order-status-event.entity';
 import { ProductChoiceGroup } from '../products/entities/product-choice.entity';
 import { PaymentsModule } from '../payments/payments.module';
+import { PlacesModule } from '../places/places.module';
 import { PaymentsController } from '../payments/payments.controller';
 import { WalletModule } from '../wallet/wallet.module';
 import { CommonModule } from '../../common/common.module';
@@ -31,6 +32,8 @@ import { StuckDeliveryService } from './stuck-delivery.service';
     ]),
     PaymentsModule,
     WalletModule,
+    // Delivery addresses picked from Google: checkout checks each one's signature.
+    PlacesModule,
     // EmailService, for the buyer's receipt and delivery-code emails.
     CommonModule,
   ],

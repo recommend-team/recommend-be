@@ -96,6 +96,17 @@ export const createCheckoutSchema = z
       .string()
       .min(5, 'Delivery address must be at least 5 characters')
       .optional(),
+    /**
+     * The address, picked from Google Places: the token `GET /places/resolve` gave, and
+     * what Google can't know — the house or flat number, a landmark. Used instead of
+     * `deliveryAddress`, which stays for an address typed by hand.
+     */
+    deliveryPlace: z
+      .object({
+        token: z.string().min(10).max(4000),
+        details: z.string().trim().max(200).optional(),
+      })
+      .optional(),
     notes: z.string().max(500).optional(),
     /**
      * The area the delivery goes to, from the vendor's own areas. Required for a
@@ -106,7 +117,8 @@ export const createCheckoutSchema = z
   .refine(
     (data) =>
       data.fulfillmentType !== FulfillmentType.DELIVERY ||
-      !!data.deliveryAddress,
+      !!data.deliveryAddress ||
+      !!data.deliveryPlace,
     {
       message: 'deliveryAddress is required for DELIVERY orders',
       path: ['deliveryAddress'],
@@ -155,6 +167,12 @@ export class CreateCheckoutRequestDto {
 
   @ApiPropertyOptional({ example: '12 Herbert Macaulay Way, Yaba, Lagos' })
   deliveryAddress?: string;
+
+  @ApiPropertyOptional({
+    description:
+      'Picked from Google: { token } from GET /places/resolve, and optional details — house number, landmark',
+  })
+  deliveryPlace?: { token: string; details?: string };
 
   @ApiPropertyOptional({ example: 'Extra spicy please' })
   notes?: string;

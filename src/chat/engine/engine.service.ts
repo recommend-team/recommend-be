@@ -411,6 +411,25 @@ export class EngineService {
     return this.deliver(conversation, replies);
   }
 
+  /** The buyer picked their delivery address in the address card. */
+  async usePickedAddress(
+    conversation: Conversation,
+    token: string,
+  ): Promise<OutboundMessage[]> {
+    const { said, replies } = await this.checkoutFlow.usePickedAddress(
+      conversation,
+      token,
+    );
+    if (replies.length === 0) return [];
+    if (said) {
+      await this.conversationService.recordInbound({
+        conversationId: conversation.id,
+        text: said,
+      });
+    }
+    return this.deliver(conversation, replies);
+  }
+
   /**
    * The buyer verified their email in the checkout's receipt card. Signing in happened
    * beside the conversation, so the checkout is moved on here — the next question

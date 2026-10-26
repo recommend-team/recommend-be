@@ -423,6 +423,51 @@ export class PwaGateway implements OnGatewayInit, OnGatewayConnection {
     }
   }
 
+  /** The buyer picked their delivery address in the address card. */
+  @SubscribeMessage('checkout:address')
+  async onCheckoutAddress(
+    @ConnectedSocket() socket: Socket,
+    @MessageBody() body: { token?: string },
+  ): Promise<void> {
+    const data = await this.awaitReady(socket);
+    if (!data) return this.notReady(socket);
+    const token =
+      typeof body?.token === 'string' ? body.token.slice(0, 4000) : '';
+    if (!token) return;
+
+    const verdict = await this.rateLimitService.consume(data.sessionId);
+    if (!verdict.allowed) {
+      socket.emit('chat:error', {
+        code: 'RATE_LIMITED',
+        message: "You're going a bit fast. Give it a moment and try again.",
+        retryAfter: verdict.retryAfter,
+      });
+      return;
+    }
+
+    const conversation = await this.conversationService.findById(
+      data.conversationId,
+    );
+    if (!conversation) return this.notReady(socket);
+
+    this.pwaChannel.emitTyping(data.sessionId, true);
+    try {
+      await this.engineService.usePickedAddress(conversation, token);
+    } catch (error) {
+      this.logger.error(
+        `Failed to use a picked address on ${data.conversationId}: ${
+          error instanceof Error ? error.message : 'unknown error'
+        }`,
+      );
+      socket.emit('chat:error', {
+        code: 'CHECKOUT_FAILED',
+        message: 'Something went wrong with that address. Please try again.',
+      });
+    } finally {
+      this.pwaChannel.emitTyping(data.sessionId, false);
+    }
+  }
+
   @SubscribeMessage('chat:history')
   async onHistory(
     @ConnectedSocket() socket: Socket,

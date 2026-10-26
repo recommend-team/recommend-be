@@ -23,6 +23,16 @@ const AREAS = [IKEJA, YABA, AJAH];
 const ASK_ADDRESS =
   "What's the full delivery address? House number, street and area.";
 
+/** A street picked from Google, its area known. */
+const PICKED = {
+  placeId: 'ChIJallen',
+  address: 'Allen Avenue, Ikeja, Lagos, Nigeria',
+  latitude: 6.6018,
+  longitude: 3.3515,
+  areaId: IKEJA.id,
+  areaName: IKEJA.name,
+};
+
 const conversationAt = (
   state: ConversationState,
   context: ConversationContext = {},
@@ -52,6 +62,7 @@ describe('CheckoutFlow', () => {
     searchAreas: jest.Mock;
     listServedAreas: jest.Mock;
     getAreaById: jest.Mock;
+    verifyPlace: jest.Mock;
   };
   /** Whatever findById should return next — the flow re-reads after every merge. */
   let stored: ConversationContext;
@@ -126,6 +137,8 @@ describe('CheckoutFlow', () => {
       getAreaById: jest.fn((id: string) =>
         Promise.resolve(AREAS.find((area) => area.id === id) ?? null),
       ),
+      // Every token is good unless a test says so: a street in Ikeja.
+      verifyPlace: jest.fn().mockResolvedValue(PICKED),
     };
 
     const module: TestingModule = await Test.createTestingModule({
@@ -1317,6 +1330,203 @@ describe('CheckoutFlow', () => {
 
       expect(stored.addressDraft).toBeUndefined();
       expect(stored.addressRetried).toBeUndefined();
+    });
+  });
+
+  describe('an address picked from Google', () => {
+    const at = (context: ConversationContext = {}) =>
+      conversationAt(ConversationState.COLLECTING_ADDRESS, context);
+
+    beforeEach(() => {
+      stored = { pendingCart: CART, profile: { fulfillmentType: 'DELIVERY' } };
+    });
+
+    it('offers the card with the address question — typing below still works', async () => {
+      ordering.pickupEnabled.mockReturnValue(false);
+      stored = {
+        profile: { name: 'Ada', phone: '+2348012345678' },
+        receiptEmailSkipped: true,
+      };
+
+      const replies = await flow.start(
+        conversationAt(ConversationState.DISCOVERY),
+        CART,
+      );
+
+      expect(replies[0].text).toBe(ASK_ADDRESS);
+      expect(replies[0].payload).toEqual({ kind: 'address_picker', data: {} });
+    });
+
+    it('takes the area from the pick and asks only for the house number', async () => {
+      const { said, replies } = await flow.usePickedAddress(at(), 'tok');
+
+      expect(locations.verifyPlace).toHaveBeenCalledWith('tok');
+      expect(said).toBe(PICKED.address);
+      expect(stored.addressDraft).toEqual({
+        text: PICKED.address,
+        stage: 'LANDMARK',
+        placeToken: 'tok',
+      });
+      expect(replies).toEqual([
+        {
+          text: "What's the house or flat number? Add a landmark if it helps the rider find you.",
+        },
+      ]);
+    });
+
+    it('puts the house number in front of the street, and keeps the token', async () => {
+      stored.addressDraft = {
+        text: PICKED.address,
+        stage: 'LANDMARK',
+        placeToken: 'tok',
+      };
+
+      const replies = await flow.handle(at(), 'House 12, blue gate');
+
+      expect(stored.profile?.address).toBe(
+        'House 12, blue gate, Allen Avenue, Ikeja, Lagos, Nigeria',
+      );
+      expect(stored.addressPlace).toEqual({
+        token: 'tok',
+        details: 'House 12, blue gate',
+      });
+      expect(replies[replies.length - 1].payload?.kind).toBe('order_summary');
+    });
+
+    it.each(['skip', 'x'])(
+      'asks again on "%s" — the rider needs the door, not just the street',
+      async (answer) => {
+        stored.addressDraft = {
+          text: PICKED.address,
+          stage: 'LANDMARK',
+          placeToken: 'tok',
+        };
+
+        const replies = await flow.handle(at(), answer);
+
+        expect(replies[0].text).toContain('house or flat number');
+        expect(stored.profile?.address).toBeUndefined();
+      },
+    );
+
+    it('says at once when the vendor does not deliver there, with the card again', async () => {
+      locations.verifyPlace.mockResolvedValue({
+        ...PICKED,
+        address: 'Abraham Adesanya, Ajah, Lagos, Nigeria',
+        areaId: AJAH.id,
+        areaName: AJAH.name,
+      });
+
+      const { replies } = await flow.usePickedAddress(at(), 'tok');
+
+      expect(replies[0].text).toContain("We don't deliver to Ajah yet");
+      expect(replies[0].payload?.kind).toBe('address_picker');
+      expect(stored.addressDraft).toBeUndefined();
+    });
+
+    it('asks the area when the pick could not be placed, without adding it to the address', async () => {
+      locations.verifyPlace.mockResolvedValue({
+        ...PICKED,
+        areaId: null,
+        areaName: null,
+      });
+
+      const first = await flow.usePickedAddress(at(), 'tok');
+      expect(first.replies[0].text).toBe(
+        'Which area is that in? We deliver to Ikeja and Yaba.',
+      );
+      expect(stored.addressDraft).toMatchObject({
+        stage: 'AREA',
+        placeToken: 'tok',
+      });
+
+      const replies = await flow.handle(at(), 'Ikeja');
+      expect(stored.addressDraft).toEqual({
+        text: PICKED.address,
+        stage: 'LANDMARK',
+        placeToken: 'tok',
+      });
+      expect(replies[0].text).toContain('house or flat number');
+    });
+
+    it('asks for it again when the token is altered or old', async () => {
+      locations.verifyPlace.mockResolvedValue(null);
+
+      const { said, replies } = await flow.usePickedAddress(at(), 'bad');
+
+      expect(said).toBeNull();
+      expect(replies[0]).toEqual({
+        text: 'That address has expired — search for it again.',
+        payload: { kind: 'address_picker', data: {} },
+      });
+    });
+
+    it('ignores a card picked after the address question has passed', async () => {
+      const { replies } = await flow.usePickedAddress(
+        conversationAt(ConversationState.CONFIRMING_ORDER),
+        'tok',
+      );
+
+      expect(replies).toEqual([]);
+      expect(locations.verifyPlace).not.toHaveBeenCalled();
+    });
+
+    it('forgets the pick when the buyer types an address instead', async () => {
+      stored.addressPlace = { token: 'tok', details: 'House 12' };
+      stored.addressDraft = {
+        text: '12 Allen Avenue, Ikeja',
+        stage: 'LANDMARK',
+      };
+
+      await flow.handle(at(), 'skip');
+
+      expect(stored.addressPlace).toBeUndefined();
+    });
+
+    it('sends the pick with a delivery order, so the pin goes with it', async () => {
+      stored = {
+        pendingCart: CART,
+        profile: {
+          name: 'Ada Obi',
+          phone: '+2348012345678',
+          fulfillmentType: 'DELIVERY',
+          address: 'House 12, Allen Avenue, Ikeja, Lagos, Nigeria',
+        },
+        addressPlace: { token: 'tok', details: 'House 12' },
+      };
+
+      await flow.handle(
+        conversationAt(ConversationState.CONFIRMING_ORDER),
+        'yes',
+      );
+
+      expect(ordering.placeCheckout).toHaveBeenCalledWith(
+        expect.objectContaining({
+          deliveryAddress: 'House 12, Allen Avenue, Ikeja, Lagos, Nigeria',
+          deliveryPlace: { token: 'tok', details: 'House 12' },
+        }),
+      );
+    });
+
+    it('never sends a pick with a pickup order', async () => {
+      stored = {
+        pendingCart: CART,
+        profile: {
+          name: 'Ada Obi',
+          phone: '+2348012345678',
+          fulfillmentType: 'PICKUP',
+        },
+        addressPlace: { token: 'tok' },
+      };
+
+      await flow.handle(
+        conversationAt(ConversationState.CONFIRMING_ORDER),
+        'yes',
+      );
+
+      expect(ordering.placeCheckout).toHaveBeenCalledWith(
+        expect.objectContaining({ deliveryPlace: undefined }),
+      );
     });
   });
 

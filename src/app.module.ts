@@ -15,6 +15,7 @@ import { OrdersModule } from './modules/orders/orders.module';
 import { PaymentsModule } from './modules/payments/payments.module';
 import { StoreModule } from './modules/store/store.module';
 import { LocationsModule } from './modules/locations/locations.module';
+import { PlacesModule } from './modules/places/places.module';
 import { ChatModule } from './chat/chat.module';
 import { NotificationsModule } from './modules/notifications/notifications.module';
 import { WalletModule } from './modules/wallet/wallet.module';
@@ -43,6 +44,7 @@ import { HttpExceptionFilter } from './common/filters/http-exception.filter';
     PaymentsModule,
     StoreModule,
     LocationsModule,
+    PlacesModule,
     ChatModule,
     NotificationsModule,
     WalletModule,

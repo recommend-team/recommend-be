@@ -64,6 +64,13 @@ const orderSchema = z.object({
     .string()
     .min(5, 'Delivery address must be at least 5 characters')
     .optional(),
+  /** Picked from Google: the token `GET /places/resolve` gave, and the house number. */
+  deliveryPlace: z
+    .object({
+      token: z.string().min(10).max(4000),
+      details: z.string().trim().max(200).optional(),
+    })
+    .optional(),
   notes: z.string().max(500).optional(),
 
   sendToBuyer: z.boolean().optional(),
@@ -92,6 +99,7 @@ class AdminOrderDto {
   buyerEmail?: string;
   fulfillmentType?: 'PICKUP' | 'DELIVERY';
   deliveryAddress?: string;
+  deliveryPlace?: { token: string; details?: string };
   notes?: string;
   sendToBuyer?: boolean;
 }
@@ -291,6 +299,7 @@ export class AdminChatController {
       buyerEmail: dto.buyerEmail,
       fulfillmentType: dto.fulfillmentType,
       deliveryAddress: dto.deliveryAddress,
+      deliveryPlace: dto.deliveryPlace,
       notes: dto.notes,
       sendToBuyer: dto.sendToBuyer,
     });

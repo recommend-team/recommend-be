@@ -298,3 +298,122 @@ export function categoriesFor(text: string | undefined): string[] {
 
   return [...found];
 }
+
+/**
+ * Words that name only a kind of thing — "food", "clothes", "gadgets" — never one item.
+ * Someone saying just these is browsing, not looking for a product called "food".
+ */
+const BROAD: Record<string, string[]> = {
+  [CATEGORIES.restaurant]: [
+    'food',
+    'chop',
+    'eat',
+    'eating',
+    'eatery',
+    'restaurant',
+    'canteen',
+    'buka',
+    'bukka',
+    'mama put',
+    'meal',
+    'lunch',
+    'dinner',
+    'breakfast',
+    'cooked food',
+    'hot meal',
+    'something to eat',
+    'kitchen',
+    'takeaway',
+    'hungry',
+    'starving',
+    'famished',
+  ],
+  [CATEGORIES.gadgets]: ['gadget', 'electronics', 'tech', 'device'],
+  [CATEGORIES.phoneAccessories]: [
+    'accessory',
+    'accessories',
+    'phone accessories',
+  ],
+  [CATEGORIES.homeAppliances]: ['appliance', 'home appliances'],
+  [CATEGORIES.fashion]: [
+    'fashion',
+    'clothes',
+    'clothing',
+    'wear',
+    'outfit',
+    'attire',
+  ],
+};
+
+/** What a few of each kind are, for asking "what are you in the mood for?". */
+const EXAMPLES: Record<string, string> = {
+  [CATEGORIES.restaurant]: 'rice, swallow, grills or snacks',
+  [CATEGORIES.gadgets]: 'a phone, a laptop or a tablet',
+  [CATEGORIES.phoneAccessories]: 'a charger, earphones or a power bank',
+  [CATEGORIES.homeAppliances]: 'a fridge, an AC or a blender',
+  [CATEGORIES.fashion]: 'clothes, shoes, bags or caps',
+};
+
+/**
+ * The words around a broad request that say nothing about what is wanted — "I need
+ * some …", "do you have any … vendors?", "abeg I'm hungry".
+ */
+const ASKING = new Set(
+  (
+    'i m am is are be a an the some any anything something me my we us you your u ' +
+    'need needs want wanna would like love get buy order find looking look for to ' +
+    'please pls plz abeg do does have has got sell sells selling show see can could ' +
+    'there where what which who whats good nice hi hello hey oh ok okay now today ' +
+    'right very so really just and of vendor vendors store stores shop shops seller ' +
+    'sellers place places option options available feel feeling kind type sort ' +
+    'around near nearby here'
+  ).split(' '),
+);
+
+/** "in Ajah", "around Lekki phase 1" — where, not what. */
+const PLACE_TAIL = /\b(?:in|at|around|near|for)\s+(?!to\b)[a-z0-9 ]*$/;
+
+/**
+ * The kind of thing, when the buyer asked only for a kind — "I need food", "any
+ * clothes?", "I'm hungry" — and nothing in particular. Null when they named an item
+ * ("I need jollof"), or more than one kind.
+ */
+export function broadKindOf(text: string | undefined): string | null {
+  if (!text) return null;
+  let rest = ` ${text
+    .toLowerCase()
+    .replace(/[^a-z0-9\s]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .replace(PLACE_TAIL, '')
+    .trim()} `;
+  if (!rest.trim()) return null;
+
+  const kinds = new Set<string>();
+  for (const [category, words] of Object.entries(BROAD)) {
+    for (const phrase of words.filter((word) => word.includes(' '))) {
+      if (rest.includes(` ${phrase} `)) {
+        kinds.add(category);
+        rest = rest.split(` ${phrase} `).join(' ');
+      }
+    }
+  }
+  for (const token of rest.trim().split(/\s+/).filter(Boolean)) {
+    const kind = Object.entries(BROAD).find(([, words]) =>
+      words.some((word) => word === token || word === singular(token)),
+    )?.[0];
+    if (kind) kinds.add(kind);
+    else if (!ASKING.has(token)) return null; // An item, or something else entirely.
+  }
+  return kinds.size === 1 ? [...kinds][0] : null;
+}
+
+/** How a buyer says a kind: "food", not "Restaurant". */
+export function spokenKind(category: string): string {
+  return category === CATEGORIES.restaurant ? 'food' : category.toLowerCase();
+}
+
+/** "rice, swallow, grills or snacks" — a few of a kind, to ask which they fancy. */
+export function examplesOf(category: string): string {
+  return EXAMPLES[category] ?? 'anything in particular';
+}

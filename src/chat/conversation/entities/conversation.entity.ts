@@ -80,7 +80,11 @@ export interface ConversationContext {
     text: string;
     stage: 'AREA' | 'LANDMARK';
     suggestedAreaId?: string;
+    /** Picked from Google rather than typed: the token checkout will be given. */
+    placeToken?: string;
   };
+  /** The delivery address was picked from Google: its token and the house number. */
+  addressPlace?: { token: string; details?: string };
   /** The buyer was asked once to add a house number and street — never twice. */
   addressRetried?: boolean;
 }

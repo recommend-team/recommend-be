@@ -10,7 +10,10 @@ import { ConversationService } from '../conversation/conversation.service';
 import { CartChangedError } from '../adapters/local-ordering.adapter';
 import { HandoverService } from './handover.service';
 import { formatNaira } from '../utils/phone.util';
+import type { ConversationContext } from '../conversation/entities/conversation.entity';
 import { ORDERING_PORT } from '../ports/ordering.port';
+import { LOCATION_PORT } from '../ports/location.port';
+import type { LocationPort } from '../ports/location.port';
 import type {
   BuyerOrderSummary,
   CartLine,
@@ -26,6 +29,8 @@ export interface AdminOrderInput {
   buyerEmail?: string;
   fulfillmentType?: 'PICKUP' | 'DELIVERY';
   deliveryAddress?: string;
+  /** Picked from Google instead of typed: the token, and the house number or landmark. */
+  deliveryPlace?: { token: string; details?: string };
   notes?: string;
   /** Default true. False leaves the admin to send the link themselves. */
   sendToBuyer?: boolean;
@@ -44,6 +49,7 @@ export class AdminOrderService {
     @Inject(ORDERING_PORT) private readonly ordering: OrderingPort,
     private readonly conversations: ConversationService,
     private readonly handover: HandoverService,
+    @Inject(LOCATION_PORT) private readonly locations: LocationPort,
   ) {}
 
   async place(
@@ -77,7 +83,10 @@ export class AdminOrderService {
     const buyerEmail = input.buyerEmail ?? profile.email;
     const fulfillmentType =
       input.fulfillmentType ?? profile.fulfillmentType ?? 'DELIVERY';
-    const deliveryAddress = input.deliveryAddress ?? profile.address;
+    const { deliveryAddress, deliveryPlace } = await this.addressFor(
+      input,
+      context,
+    );
 
     if (!buyerName) throw new BadRequestException('A buyer name is required');
     if (!buyerPhone) throw new BadRequestException('A buyer phone is required');
@@ -95,6 +104,7 @@ export class AdminOrderService {
       buyerEmail,
       fulfillmentType,
       deliveryAddress,
+      deliveryPlace: fulfillmentType === 'DELIVERY' ? deliveryPlace : undefined,
       notes: input.notes,
       createdByAdminId: adminId,
     });
@@ -117,6 +127,8 @@ export class AdminOrderService {
         fulfillmentType,
         address: deliveryAddress,
       },
+      // The buyer's next "same address" keeps the pin, or drops one that was replaced.
+      addressPlace: deliveryPlace,
       pendingCheckoutId: placed.checkoutId,
       pendingPaymentReference: placed.reference,
       orderReferences: [...history, placed.reference],
@@ -136,6 +148,44 @@ export class AdminOrderService {
         : await this.sendPaymentCard(conversationId, adminId, placed);
 
     return { ...placed, sent };
+  }
+
+  /**
+   * The address to deliver to: picked by the admin, typed by the admin, or else what the
+   * buyer gave in the chat — with its pin, when they picked it from Google.
+   *
+   * A pick is checked here rather than left to checkout, so the thread remembers the
+   * address the order actually went to.
+   */
+  private async addressFor(
+    input: AdminOrderInput,
+    context: ConversationContext,
+  ): Promise<{
+    deliveryAddress?: string;
+    deliveryPlace?: { token: string; details?: string };
+  }> {
+    if (input.deliveryPlace) {
+      const place = await this.locations.verifyPlace(input.deliveryPlace.token);
+      if (!place) {
+        throw new BadRequestException(
+          'Pick the delivery address again — that one has expired.',
+        );
+      }
+      const details = input.deliveryPlace.details?.trim() || undefined;
+      return {
+        deliveryAddress: [details, place.address].filter(Boolean).join(', '),
+        deliveryPlace: { token: input.deliveryPlace.token, details },
+      };
+    }
+    if (input.deliveryAddress) {
+      return { deliveryAddress: input.deliveryAddress };
+    }
+    return {
+      deliveryAddress: context.profile?.address,
+      deliveryPlace: context.profile?.address
+        ? context.addressPlace
+        : undefined,
+    };
   }
 
   /**
