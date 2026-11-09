@@ -1,4 +1,9 @@
-import { Injectable, Logger } from '@nestjs/common';
+import {
+  ConflictException,
+  Injectable,
+  Logger,
+  NotFoundException,
+} from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { EventEmitter2 } from '@nestjs/event-emitter';
 import { Brackets, In, IsNull, LessThan, Repository } from 'typeorm';
@@ -47,7 +52,13 @@ export interface ConversationSummary {
   handoverRequestedAt: Date | null;
   handoverReason: string | null;
   createdAt: Date;
+  /** Set only in the deleted list. */
+  deletedAt: Date | null;
 }
+
+/** Why a conversation was not deleted, in words an admin can act on. */
+export const HAS_ORDERS =
+  "This chat has orders, so it can't be deleted — the buyer needs it to see and confirm them.";
 
 /**
  * A conversation the buyer has started: they have sent at least one message.
@@ -131,6 +142,14 @@ export class ConversationService {
 
   async findById(id: string): Promise<Conversation | null> {
     return this.conversationsRepository.findOne({ where: { id } });
+  }
+
+  /** For admins only: a deleted conversation can still be read before restoring it. */
+  async findByIdIncludingDeleted(id: string): Promise<Conversation | null> {
+    return this.conversationsRepository.findOne({
+      where: { id },
+      withDeleted: true,
+    });
   }
 
   /**
@@ -252,6 +271,8 @@ export class ConversationService {
   async listForAdmin(query: {
     search?: string;
     needingAttention?: boolean;
+    /** The deleted ones instead, most recently deleted first. */
+    deleted?: boolean;
     page?: number;
     limit?: number;
   }): Promise<{
@@ -273,10 +294,19 @@ export class ConversationService {
       .where('c."mergedIntoId" IS NULL')
       // A visit that only got the greeting is not a conversation yet.
       .andWhere(buyerHasSpoken('c'))
-      .orderBy('c."lastMessageAt"', 'DESC', 'NULLS LAST')
-      .addOrderBy('c."createdAt"', 'DESC')
       .skip((page - 1) * limit)
       .take(limit);
+
+    if (query.deleted) {
+      builder
+        .withDeleted()
+        .andWhere('c."deletedAt" IS NOT NULL')
+        .orderBy('c."deletedAt"', 'DESC');
+    } else {
+      builder
+        .orderBy('c."lastMessageAt"', 'DESC', 'NULLS LAST')
+        .addOrderBy('c."createdAt"', 'DESC');
+    }
 
     if (query.needingAttention) {
       builder.andWhere(
@@ -333,12 +363,113 @@ export class ConversationService {
         handoverRequestedAt: row.handoverRequestedAt,
         handoverReason: row.handoverReason,
         createdAt: row.createdAt,
+        deletedAt: row.deletedAt ?? null,
       })),
       total,
       needingAttention,
       page,
       limit,
     };
+  }
+
+  /**
+   * An admin deletes conversations — soft, so they can be brought back. Gone from the
+   * inbox; a buyer coming back on that device starts a fresh chat.
+   *
+   * Never one with orders, or a payment waiting: the buyer's Orders tab reads them from
+   * here, and confirming receipt — which pays the vendor — goes through it. Each refused
+   * one says why. Any older threads folded into a deleted one go with it, so their
+   * devices start fresh too rather than following a pointer to nothing.
+   */
+  async deleteForAdmin(
+    ids: string[],
+    adminId: string,
+  ): Promise<{ deleted: string[]; refused: { id: string; reason: string }[] }> {
+    const unique = [...new Set(ids)];
+    const rows = await this.conversationsRepository.find({
+      where: { id: In(unique), mergedIntoId: IsNull() },
+    });
+    const found = new Map(rows.map((row) => [row.id, row]));
+
+    const deleted: string[] = [];
+    const refused: { id: string; reason: string }[] = [];
+    for (const id of unique) {
+      const row = found.get(id);
+      if (!row) {
+        refused.push({ id, reason: 'Conversation not found' });
+      } else if (hasOrders(row)) {
+        refused.push({ id, reason: HAS_ORDERS });
+      } else {
+        deleted.push(id);
+      }
+    }
+
+    if (deleted.length > 0) {
+      await this.conversationsRepository
+        .createQueryBuilder()
+        .update(Conversation)
+        .set({ deletedAt: () => 'now()', deletedByAdminId: adminId })
+        .where('("id" IN (:...ids) OR "mergedIntoId" IN (:...ids))', {
+          ids: deleted,
+        })
+        .execute();
+      this.logger.log(
+        `Admin ${adminId} deleted ${deleted.length} conversation(s)`,
+      );
+    }
+    return { deleted, refused };
+  }
+
+  /**
+   * Brings a deleted conversation back, with any threads deleted along with it. Refused
+   * when the buyer has started a new chat since — two live threads for one device, or
+   * one account, is what the unique indexes forbid.
+   */
+  async restoreForAdmin(id: string): Promise<void> {
+    const row = await this.conversationsRepository.findOne({
+      where: { id },
+      withDeleted: true,
+    });
+    if (!row?.deletedAt)
+      throw new NotFoundException('Deleted conversation not found');
+
+    if (await this.replacedSince(row)) {
+      throw new ConflictException(
+        "This buyer has started a new chat since, so this one can't be brought back.",
+      );
+    }
+
+    // Folded-in threads come back too, unless that device has moved on.
+    const folded = await this.conversationsRepository.find({
+      where: { mergedIntoId: id },
+      withDeleted: true,
+    });
+    const back = [id];
+    for (const thread of folded) {
+      if (thread.deletedAt && !(await this.replacedSince(thread))) {
+        back.push(thread.id);
+      }
+    }
+
+    await this.conversationsRepository
+      .createQueryBuilder()
+      .update(Conversation)
+      .set({ deletedAt: null, deletedByAdminId: null })
+      .where('"id" IN (:...ids)', { ids: back })
+      .execute();
+  }
+
+  /** Whether a live conversation has taken this deleted one's device or account. */
+  private async replacedSince(row: Conversation): Promise<boolean> {
+    const device = await this.conversationsRepository.count({
+      where: { channel: row.channel, channelAddress: row.channelAddress },
+    });
+    if (device > 0) return true;
+    if (!row.accountId || row.mergedIntoId) return false;
+    const account = await this.conversationsRepository.count({
+      where: { accountId: row.accountId, mergedIntoId: IsNull() },
+    });
+    return account > 0;
   }
 
   /**
@@ -517,4 +648,14 @@ export class ConversationService {
       { lastMessageAt: new Date() },
     );
   }
+}
+
+/** Orders placed from it, or a payment waiting — the buyer still needs this thread. */
+function hasOrders(conversation: Conversation): boolean {
+  const context = conversation.context ?? {};
+  return (
+    (context.orderReferences?.length ?? 0) > 0 ||
+    !!context.pendingPaymentReference ||
+    !!context.pendingCheckoutId
+  );
 }

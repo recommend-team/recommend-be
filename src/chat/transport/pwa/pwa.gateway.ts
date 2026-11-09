@@ -206,15 +206,17 @@ export class PwaGateway implements OnGatewayInit, OnGatewayConnection {
       return;
     }
 
-    const conversation = await this.conversationService.findById(
+    let conversation = await this.conversationService.findById(
       data.conversationId,
     );
     if (!conversation) {
-      socket.emit('chat:error', {
-        code: 'NO_CONVERSATION',
-        message: 'Conversation not found.',
-      });
-      return;
+      // Deleted by an admin while this device was open: carry on in a fresh chat.
+      conversation = await this.conversationService.findOrCreate(
+        ChatChannel.PWA,
+        data.sessionId,
+      );
+      await this.moveTo(socket, data, conversation);
+      await this.sendHistory(socket, conversation.id);
     }
 
     // Checked before any model work, so a throttled message costs nothing.

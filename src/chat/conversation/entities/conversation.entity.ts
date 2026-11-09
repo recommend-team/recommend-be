@@ -129,6 +129,10 @@ export class Conversation extends BaseEntity {
   @Column({ type: 'uuid', nullable: true })
   mergedIntoId!: string | null;
 
+  /** The admin who deleted it (soft — `deletedAt`). Cleared again on restore. */
+  @Column({ type: 'uuid', nullable: true })
+  deletedByAdminId!: string | null;
+
   @Column({
     type: 'enum',
     enum: ConversationState,

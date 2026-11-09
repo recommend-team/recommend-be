@@ -195,6 +195,7 @@ export const placesConfig = registerAs('places', () => ({
 }));
 
 export const chatConfig = registerAs('chat', () => ({
+  paused: process.env.CHAT_PAUSED === 'true',
   /** What the assistant calls itself — in the greeting and in the model's persona. */
   assistantName: process.env.ASSISTANT_NAME?.trim() || 'James',
   sessionSecret: process.env.CHAT_SESSION_SECRET,

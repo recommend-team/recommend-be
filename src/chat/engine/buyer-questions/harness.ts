@@ -28,6 +28,7 @@ import type {
   BuyerOrderSummary,
   OrderingPort,
 } from '../../ports/ordering.port';
+import type { WaitlistService } from '../../waitlist/waitlist.service';
 
 /**
  * The real engine and discovery code, with the database replaced by a small, fixed
@@ -322,6 +323,8 @@ export async function converse(
     handover,
     config,
     ordering,
+    // Never paused here, so never asked to keep a list.
+    {} as unknown as WaitlistService,
   );
 
   const turns: Turn[] = [];

@@ -22,6 +22,7 @@ import { ConversationState } from '../enums/chat.enums';
 import { DiscoveryService } from './discovery/discovery.service';
 import { ORDERING_PORT } from '../ports/ordering.port';
 import type { BuyerOrderSummary, OrderingPort } from '../ports/ordering.port';
+import { WaitlistService, contactIn } from '../waitlist/waitlist.service';
 
 export interface InboundMessage {
   conversation: Conversation;
@@ -63,7 +64,9 @@ export class EngineService {
     private readonly handover: HandoverService,
     private readonly configService: ConfigService,
     @Inject(ORDERING_PORT) private readonly ordering: OrderingPort,
+    private readonly waitlist: WaitlistService,
   ) {
+    this.paused = this.configService.get<boolean>('chat.paused') === true;
     this.historyLimit =
       this.configService.get<number>('chat.maxHistoryMessages') ?? 20;
     this.assistantName =
@@ -72,6 +75,9 @@ export class EngineService {
 
   /** Same setting the discovery prompt reads, so the greeting and the persona agree. */
   private readonly assistantName: string;
+
+  /** `CHAT_PAUSED`: no assistant, just "we open soon" and the waitlist. */
+  private readonly paused: boolean;
 
   /**
    * The full round trip: persist the buyer's message, work out a reply, persist it,
@@ -104,6 +110,14 @@ export class EngineService {
 
     // Waiting for a person is not a reason to go quiet: the assistant keeps helping until
     // an admin actually takes the chat (above).
+
+    // Not open yet: every message gets the same kind word, and a phone number or email
+    // joins the waitlist. No model call, so it costs nothing.
+    if (this.paused) {
+      return this.deliver(conversation, [
+        await this.pausedReply(conversation, input.text),
+      ]);
+    }
 
     if (input.cart) {
       await this.conversationService.mergeContext(conversation.id, {
@@ -229,13 +243,26 @@ export class EngineService {
     return delivered;
   }
 
+  /** While paused: onto the waitlist if they gave a contact, else a kind "not yet". */
+  private async pausedReply(
+    conversation: Conversation,
+    text: string,
+  ): Promise<OutboundMessage> {
+    const contact = contactIn(text);
+    if (!contact) return { text: PAUSED_REPLY };
+
+    const { joined } = await this.waitlist.join(contact, conversation.id);
+    return { text: joined ? WAITLIST_JOINED : WAITLIST_ALREADY };
+  }
+
   /** The greeting a device gets when its conversation is brand new. */
   async greet(conversation: Conversation): Promise<OutboundMessage> {
     const reply: OutboundMessage = {
-      text:
-        `Hi! I'm ${this.assistantName} from Recommend. ` +
-        'What can I find for you today? Food, gadgets, anything at all — ' +
-        "tell me, and roughly where you are, and I'll find who has it near you.",
+      text: this.paused
+        ? PAUSED_GREETING
+        : `Hi! I'm ${this.assistantName} from Recommend. ` +
+          'What can I find for you today? Food, gadgets, anything at all — ' +
+          "tell me, and roughly where you are, and I'll find who has it near you.",
     };
 
     const persisted = await this.conversationService.recordOutbound({
@@ -384,6 +411,10 @@ export class EngineService {
       conversationId: conversation.id,
       text,
     });
+
+    // Ordering is not open yet — not even from a cart.
+    if (this.paused)
+      return this.deliver(conversation, [{ text: PAUSED_REPLY }]);
 
     const replies = await this.checkoutFlow.start(conversation, cart);
     return this.deliver(conversation, replies);
@@ -758,3 +789,22 @@ function isGreeting(text: string): boolean {
       normalised === greeting || normalised.startsWith(`${greeting} `),
   );
 }
+
+// ─── While the chat is paused (CHAT_PAUSED) ─────────────────────────────────
+
+const PAUSED_GREETING =
+  "Hi, welcome to Recommend! We're getting ready to launch. Right now we're bringing " +
+  "great vendors on board, so ordering isn't open just yet. Very soon you'll be able to " +
+  'get food, gadgets and more from vendors near you, just by chatting. Want to be the ' +
+  'first to know when we go live? Just send your phone number or email.';
+
+const PAUSED_REPLY =
+  "Thanks for your message! We're not taking orders just yet. We're onboarding " +
+  "vendors and will be live very soon. Send your phone number or email if you'd like " +
+  'us to tell you when we launch.';
+
+const WAITLIST_JOINED =
+  "You're on the list! We'll let you know the moment we launch. 🎉";
+
+const WAITLIST_ALREADY =
+  "You're already on the list — we'll let you know the moment we launch. 🎉";

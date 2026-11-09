@@ -13,6 +13,7 @@ import { DiscoveryService } from './discovery/discovery.service';
 import { CheckoutFlow } from './flows/checkout.flow';
 import { HandoverService } from './handover.service';
 import { ORDERING_PORT } from '../ports/ordering.port';
+import { WaitlistService } from '../waitlist/waitlist.service';
 
 const conversation = {
   id: 'c1',
@@ -104,6 +105,7 @@ describe('EngineService', () => {
           provide: ORDERING_PORT,
           useValue: { listOrders: jest.fn(), completeOrder: jest.fn() },
         },
+        { provide: WaitlistService, useValue: { join: jest.fn() } },
       ],
     }).compile();
 
@@ -515,5 +517,130 @@ describe('EngineService', () => {
       expect(replies).toHaveLength(1);
       expect(discovery.discover).toHaveBeenCalled();
     });
+  });
+});
+
+describe('EngineService while the chat is paused', () => {
+  let service: EngineService;
+  let waitlist: { join: jest.Mock };
+  let discovery: { discover: jest.Mock; hasModel: jest.Mock };
+  let checkoutFlow: { start: jest.Mock; handle: jest.Mock };
+  let handover: {
+    shouldStaySilent: jest.Mock;
+    announceBuyerWaiting: jest.Mock;
+  };
+  let recordOutbound: jest.Mock;
+
+  beforeEach(async () => {
+    waitlist = { join: jest.fn().mockResolvedValue({ joined: true }) };
+    discovery = {
+      discover: jest.fn(),
+      hasModel: jest.fn().mockReturnValue(true),
+    };
+    checkoutFlow = { start: jest.fn(), handle: jest.fn() };
+    handover = {
+      shouldStaySilent: jest.fn().mockResolvedValue(false),
+      announceBuyerWaiting: jest.fn(),
+    };
+    recordOutbound = jest
+      .fn()
+      .mockResolvedValue({ id: 'out-1', createdAt: new Date() });
+
+    const module: TestingModule = await Test.createTestingModule({
+      providers: [
+        EngineService,
+        {
+          provide: ConfigService,
+          useValue: {
+            get: (key: string) =>
+              key === 'chat.paused'
+                ? true
+                : key === 'chat.assistantName'
+                  ? 'James'
+                  : 12,
+          },
+        },
+        {
+          provide: ConversationService,
+          useValue: {
+            recordInbound: jest.fn().mockResolvedValue({ id: 'in-1' }),
+            recordOutbound,
+            mergeContext: jest.fn(),
+            getHistory: jest.fn().mockResolvedValue([]),
+            setArea: jest.fn(),
+          },
+        },
+        { provide: ChannelRegistry, useValue: { send: jest.fn() } },
+        { provide: DiscoveryService, useValue: discovery },
+        { provide: CheckoutFlow, useValue: checkoutFlow },
+        { provide: HandoverService, useValue: handover },
+        { provide: ORDERING_PORT, useValue: {} },
+        { provide: WaitlistService, useValue: waitlist },
+      ],
+    }).compile();
+
+    service = module.get(EngineService);
+  });
+
+  const say = async (text: string) =>
+    (await service.handleInbound({ conversation, text })).map((r) => r.text);
+
+  it('greets with "we open soon", and asks for a contact', async () => {
+    const greeting = await service.greet(conversation);
+
+    expect(greeting.text).toContain("We're getting ready to launch");
+    expect(greeting.text).toContain('send your phone number or email');
+  });
+
+  it('answers anything with a kind "not yet" — and never calls the model', async () => {
+    const replies = await say('I need jollof rice in Ajah');
+
+    expect(replies).toEqual([
+      expect.stringContaining("We're not taking orders just yet"),
+    ]);
+    expect(discovery.discover).not.toHaveBeenCalled();
+    expect(waitlist.join).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    [
+      'my number is 0803 123 4567',
+      { kind: 'PHONE', contact: '+2348031234567' },
+    ],
+    ['+234-803-123-4567', { kind: 'PHONE', contact: '+2348031234567' }],
+    ['Ada@Example.com', { kind: 'EMAIL', contact: 'ada@example.com' }],
+  ])('puts "%s" on the waitlist', async (text, contact) => {
+    const replies = await say(text);
+
+    expect(waitlist.join).toHaveBeenCalledWith(contact, 'c1');
+    expect(replies).toEqual([
+      "You're on the list! We'll let you know the moment we launch. 🎉",
+    ]);
+  });
+
+  it('says so, kindly, when they were already on it', async () => {
+    waitlist.join.mockResolvedValue({ joined: false });
+
+    expect(await say('08031234567')).toEqual([
+      expect.stringContaining("You're already on the list"),
+    ]);
+  });
+
+  it('stays quiet while an admin is replying — they can still help in person', async () => {
+    handover.shouldStaySilent.mockResolvedValue(true);
+
+    expect(await say('hello?')).toEqual([]);
+    expect(recordOutbound).not.toHaveBeenCalled();
+  });
+
+  it('does not start a checkout from a cart', async () => {
+    const replies = await service.startCheckout(conversation, [
+      { productId: 'p1', quantity: 1 },
+    ]);
+
+    expect(checkoutFlow.start).not.toHaveBeenCalled();
+    expect(replies.map((r) => r.text)).toEqual([
+      expect.stringContaining("We're not taking orders just yet"),
+    ]);
   });
 });

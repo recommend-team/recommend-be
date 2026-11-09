@@ -12,6 +12,9 @@ import { ChatRateLimitService } from './session/rate-limit.service';
 import { EngineService } from './engine/engine.service';
 import { DeliveryEtaNoticeService } from './engine/delivery-eta-notice.service';
 import { UnmetSearch } from './engine/discovery/unmet-search.entity';
+import { WaitlistSignup } from './waitlist/waitlist-signup.entity';
+import { WaitlistService } from './waitlist/waitlist.service';
+import { AdminWaitlistController } from './transport/admin/admin-waitlist.controller';
 import { UnmetSearchService } from './engine/discovery/unmet-search.service';
 import { HandoverService } from './engine/handover.service';
 import { AdminOrderService } from './engine/admin-order.service';
@@ -75,12 +78,13 @@ import { WelcomeEmailService } from '../common/services/welcome-email.service';
       UnplacedLocation,
       Checkout,
       UnmetSearch,
+      WaitlistSignup,
     ]),
     JwtModule.register({}),
     OrdersModule,
     NotificationsModule,
   ],
-  controllers: [AdminChatController],
+  controllers: [AdminChatController, AdminWaitlistController],
   providers: [
     ConversationService,
     ConversationCleanupService,
@@ -101,6 +105,7 @@ import { WelcomeEmailService } from '../common/services/welcome-email.service';
     AdminChatGateway,
     DiscoveryService,
     UnmetSearchService,
+    WaitlistService,
     { provide: CATALOG_PORT, useClass: LocalCatalogAdapter },
     { provide: LOCATION_PORT, useClass: LocalLocationAdapter },
     { provide: ORDERING_PORT, useClass: LocalOrderingAdapter },

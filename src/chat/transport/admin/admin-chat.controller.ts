@@ -1,6 +1,8 @@
 import {
   Body,
+  ConflictException,
   Controller,
+  Delete,
   Get,
   HttpCode,
   HttpStatus,
@@ -24,7 +26,10 @@ import { cartLineSchema, type CartLineInput } from '../cart-line.schema';
 import { HandoverService } from '../../engine/handover.service';
 import { AdminOrderService } from '../../engine/admin-order.service';
 import { AdminCatalogService } from '../../engine/admin-catalog.service';
-import { ConversationService } from '../../conversation/conversation.service';
+import {
+  ConversationService,
+  HAS_ORDERS,
+} from '../../conversation/conversation.service';
 import { CurrentUser } from '../../../modules/auth/decorators/current-user.decorator';
 import { Roles } from '../../../modules/auth/decorators/roles.decorator';
 import { Role } from '../../../common/enums/roles.enum';
@@ -76,12 +81,23 @@ const orderSchema = z.object({
   sendToBuyer: z.boolean().optional(),
 });
 
+const deleteSchema = z.object({
+  ids: z
+    .array(z.string().uuid('Each id must be a valid UUID'))
+    .min(1, 'Choose at least one conversation')
+    .max(100, 'At most 100 at a time'),
+});
+
 const areaSchema = z.object({
   areaId: z.string().uuid('areaId must be a valid UUID'),
 });
 
 class AdminMessageDto {
   text!: string;
+}
+
+class DeleteConversationsDto {
+  ids!: string[];
 }
 
 class AdminAreaDto {
@@ -130,6 +146,13 @@ export class AdminChatController {
     description: 'Name, phone or email',
   })
   @ApiQuery({ name: 'needingAttention', required: false, example: 'true' })
+  @ApiQuery({
+    name: 'deleted',
+    required: false,
+    example: 'true',
+    description:
+      'The deleted conversations instead, most recently deleted first',
+  })
   @ApiQuery({ name: 'page', required: false })
   @ApiQuery({ name: 'limit', required: false })
   @ApiResponse({ status: 200, description: 'Conversations' })
@@ -138,15 +161,81 @@ export class AdminChatController {
     @Query('needingAttention') needingAttention?: string,
     @Query('page') page?: string,
     @Query('limit') limit?: string,
+    @Query('deleted') deleted?: string,
   ) {
     const data = await this.conversations.listForAdmin({
       search,
       needingAttention: needingAttention === 'true',
+      deleted: deleted === 'true',
       page: page ? parseInt(page, 10) : undefined,
       limit: limit ? parseInt(limit, 10) : undefined,
     });
 
     return { message: 'Conversations retrieved successfully', data };
+  }
+
+  @Post('delete')
+  @HttpCode(200)
+  @ApiOperation({
+    summary: 'Delete conversations',
+    description:
+      'Soft: they leave the inbox and can be restored. One with orders, or a payment ' +
+      'waiting, is never deleted — the buyer needs it to see and confirm them — and is ' +
+      'listed under `refused` with the reason. A buyer whose chat was deleted starts a ' +
+      'fresh one next time.',
+  })
+  @ApiBody({ type: DeleteConversationsDto })
+  @ApiResponse({
+    status: 200,
+    description: 'What was deleted, and what was not',
+  })
+  async deleteMany(
+    @CurrentUser() admin: { id: string },
+    @Body(new ZodValidationPipe(deleteSchema)) dto: DeleteConversationsDto,
+  ) {
+    const data = await this.conversations.deleteForAdmin(dto.ids, admin.id);
+    return {
+      message:
+        data.refused.length === 0
+          ? `Deleted ${data.deleted.length} conversation(s).`
+          : `Deleted ${data.deleted.length}; ${data.refused.length} could not be deleted.`,
+      data,
+    };
+  }
+
+  @Delete(':id')
+  @ApiOperation({ summary: 'Delete one conversation (soft)' })
+  @ApiParam({ name: 'id', description: 'Conversation id' })
+  @ApiResponse({ status: 200, description: 'Deleted' })
+  @ApiResponse({ status: 404, description: 'No such conversation' })
+  @ApiResponse({
+    status: 409,
+    description: 'It has orders, or a payment waiting',
+  })
+  async deleteOne(
+    @CurrentUser() admin: { id: string },
+    @Param('id', ParseUUIDPipe) id: string,
+  ) {
+    const { refused } = await this.conversations.deleteForAdmin([id], admin.id);
+    const reason = refused[0]?.reason;
+    if (reason === HAS_ORDERS) throw new ConflictException(reason);
+    if (reason) throw new NotFoundException(reason);
+    return { message: 'Conversation deleted.', data: { id } };
+  }
+
+  @Post(':id/restore')
+  @HttpCode(200)
+  @ApiOperation({ summary: 'Bring back a deleted conversation' })
+  @ApiParam({ name: 'id', description: 'Conversation id' })
+  @ApiResponse({ status: 200, description: 'Restored' })
+  @ApiResponse({ status: 404, description: 'No such deleted conversation' })
+  @ApiResponse({
+    status: 409,
+    description: 'The buyer has started a new chat since',
+  })
+  async restore(@Param('id', ParseUUIDPipe) id: string) {
+    await this.conversations.restoreForAdmin(id);
+    return { message: 'Conversation restored.', data: { id } };
   }
 
   @Get(':id')
@@ -160,7 +249,9 @@ export class AdminChatController {
   @ApiResponse({ status: 200, description: 'Transcript' })
   @ApiResponse({ status: 404, description: 'No such conversation' })
   async transcript(@Param('id', ParseUUIDPipe) id: string) {
-    const found = await this.conversations.findById(id);
+    // Deleted ones open too, read-only in the panel, so an admin can check before
+    // bringing one back.
+    const found = await this.conversations.findByIdIncludingDeleted(id);
     if (!found) throw new NotFoundException('Conversation not found');
     // An old link — an alert, a bookmark — to one folded into a signed-in buyer's
     // thread opens that thread. `id` in the answer says which it is.
@@ -185,6 +276,7 @@ export class AdminChatController {
         attentionReason: conversation.attentionReason,
         handoverRequestedAt: conversation.handoverRequestedAt,
         handoverReason: conversation.handoverReason,
+        deletedAt: conversation.deletedAt ?? null,
         messages: messages.map((message) => ({
           id: message.id,
           direction: message.direction,

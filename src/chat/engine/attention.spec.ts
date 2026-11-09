@@ -7,6 +7,7 @@ import { DiscoveryService } from './discovery/discovery.service';
 import { CheckoutFlow } from './flows/checkout.flow';
 import { HandoverService } from './handover.service';
 import { ORDERING_PORT } from '../ports/ordering.port';
+import { WaitlistService } from '../waitlist/waitlist.service';
 import { Conversation } from '../conversation/entities/conversation.entity';
 import {
   ChatChannel,
@@ -108,6 +109,7 @@ describe('attention and handover', () => {
         },
         { provide: HandoverService, useValue: handover },
         { provide: ORDERING_PORT, useValue: {} },
+        { provide: WaitlistService, useValue: {} },
       ],
     }).compile();
 
