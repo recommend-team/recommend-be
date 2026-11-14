@@ -48,7 +48,13 @@ async function main(): Promise<void> {
     api_secret: process.env.CLOUDINARY_API_SECRET,
   });
 
-  const db = new DataSource(getTypeOrmConfig());
+  // The app's connection settings, but never its migrations: running this must change
+  // documents and nothing else. And no query log — the output is the report.
+  const db = new DataSource({
+    ...getTypeOrmConfig(),
+    migrationsRun: false,
+    logging: false,
+  });
   await db.initialize();
 
   const columns = KYC_DOCUMENTS.map((c) => `"${c}"`).join(', ');
