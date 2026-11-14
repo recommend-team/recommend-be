@@ -5,6 +5,7 @@ import {
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import * as brevo from '@getbrevo/brevo';
+import { maskEmail } from '../utils/redact.util';
 
 export interface EmailOptions {
   to: string;
@@ -54,17 +55,15 @@ export class EmailService {
     }
 
     try {
-      console.log('📧 Attempting to send email...');
-      console.log('From:', senderEmail);
-      console.log('To:', options.to);
-      console.log('Subject:', options.subject);
-
       await this.sendWithBREVO({
         from: senderEmail,
         ...options,
       });
     } catch (error) {
-      console.error('Email sending failed:', error);
+      console.error(
+        `Email "${options.subject}" to ${maskEmail(options.to)} failed:`,
+        error instanceof Error ? error.message : 'unknown error',
+      );
       throw new InternalServerErrorException('Failed to send email');
     }
   }
@@ -93,17 +92,19 @@ export class EmailService {
 
     try {
       const result = await this.apiInstance.sendTransacEmail(sendSmtpEmail);
-      console.log(`✅ Email sent successfully to ${options.to}`);
-      console.log('Brevo response:', JSON.stringify(result, null, 2));
+      console.log(
+        `Email "${options.subject}" sent to ${maskEmail(options.to)}${
+          result?.body?.messageId ? ` (${result.body.messageId})` : ''
+        }`,
+      );
     } catch (error) {
       const brevoError = error as {
         message?: string;
         response?: { data?: unknown; status?: number; statusText?: string };
       };
-      console.error('❌ Error sending email:', error);
-      console.error('Error details:', {
+      // Not the whole error: it carries the request, recipient and all.
+      console.error('Brevo refused the email:', {
         message: brevoError.message,
-        response: brevoError.response?.data,
         status: brevoError.response?.status,
         statusText: brevoError.response?.statusText,
       });

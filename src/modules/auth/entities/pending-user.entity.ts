@@ -61,6 +61,10 @@ export class PendingUser {
   @Column({ type: 'timestamp', nullable: true })
   verificationCodeExpiresAt!: Date;
 
+  /** Wrong codes tried. At five the sign-up is cancelled, so the code can't be guessed. */
+  @Column({ type: 'integer', default: 0 })
+  verificationAttempts!: number;
+
   @CreateDateColumn({ type: 'timestamp with time zone' })
   createdAt!: Date;
 

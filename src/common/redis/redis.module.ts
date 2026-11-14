@@ -37,6 +37,10 @@ class MockRedisClient {
     return Promise.resolve({});
   }
 
+  incr(): Promise<number> {
+    return Promise.resolve(1);
+  }
+
   expire(): Promise<number> {
     return Promise.resolve(0);
   }

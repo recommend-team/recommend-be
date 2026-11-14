@@ -4,6 +4,7 @@ import { Repository } from 'typeorm';
 import { User } from '../auth/entities/auth.entity';
 import { Role } from '../../common/enums/roles.enum';
 import { SellerStatus } from '../../common/enums/seller-status.enum';
+import { maskEmail } from '../../common/utils/redact.util';
 
 @Injectable()
 export class BootstrapSuperAdminService implements OnApplicationBootstrap {
@@ -42,7 +43,7 @@ export class BootstrapSuperAdminService implements OnApplicationBootstrap {
       });
 
       await this.usersRepo.save(superAdmin);
-      this.logger.log(`Super Admin created: ${email}`);
+      this.logger.log(`Super Admin created: ${maskEmail(email)}`);
     } catch (error) {
       if (error instanceof Error && error.message.includes('does not exist')) {
         this.logger.warn(

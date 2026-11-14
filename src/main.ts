@@ -55,8 +55,15 @@ async function bootstrap() {
     .addBearerAuth()
     .addSecurityRequirements('default')
     .build();
-  const document = SwaggerModule.createDocument(app, config);
-  SwaggerModule.setup('api/docs', app, document);
+  // Not in production unless asked for: the docs map every route, which is a gift to
+  // anyone probing the API. SWAGGER_ENABLED=true turns them on.
+  const docsOn =
+    process.env.NODE_ENV !== 'production' ||
+    process.env.SWAGGER_ENABLED === 'true';
+  if (docsOn) {
+    const document = SwaggerModule.createDocument(app, config);
+    SwaggerModule.setup('api/docs', app, document);
+  }
 
   // Start server
   const port = configService.get<number>('app.port')!;

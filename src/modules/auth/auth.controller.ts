@@ -5,7 +5,10 @@ import {
   HttpCode,
   HttpStatus,
   Get,
+  UseGuards,
 } from '@nestjs/common';
+import { Throttle } from '@nestjs/throttler';
+import { ClientIpThrottlerGuard } from '../../common/guards/client-ip-throttler.guard';
 import {
   ApiTags,
   ApiOperation,
@@ -50,6 +53,8 @@ export class AuthController {
   // ─── Vendor registration ───────────────────────────────────────────────────
 
   @Public()
+  @UseGuards(ClientIpThrottlerGuard)
+  @Throttle(10, 600) // Per address; many share one on mobile networks.
   @Post('register/vendor')
   @HttpCode(HttpStatus.CREATED)
   @ApiOperation({
@@ -77,6 +82,8 @@ export class AuthController {
   // ─── Rider registration ────────────────────────────────────────────────────
 
   @Public()
+  @UseGuards(ClientIpThrottlerGuard)
+  @Throttle(10, 600) // Per address; many share one on mobile networks.
   @Post('register/rider')
   @HttpCode(HttpStatus.CREATED)
   @ApiOperation({
@@ -104,6 +111,8 @@ export class AuthController {
   // ─── Legacy register (vendor, backwards-compatible) ────────────────────────
 
   @Public()
+  @UseGuards(ClientIpThrottlerGuard)
+  @Throttle(10, 600) // Per address; many share one on mobile networks.
   @Post('register')
   @HttpCode(HttpStatus.CREATED)
   @ApiOperation({
@@ -124,6 +133,8 @@ export class AuthController {
   // ─── Login ─────────────────────────────────────────────────────────────────
 
   @Public()
+  @UseGuards(ClientIpThrottlerGuard)
+  @Throttle(20, 60) // Slows password guessing; each account also locks after 5 misses.
   @Post('login')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Login' })
@@ -166,6 +177,8 @@ export class AuthController {
   // ─── Email verification ────────────────────────────────────────────────────
 
   @Public()
+  @UseGuards(ClientIpThrottlerGuard)
+  @Throttle(20, 600) // Each sign-up also allows only 5 wrong codes.
   @Post('verify-email')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Verify email with 6-digit code' })
@@ -187,6 +200,8 @@ export class AuthController {
   }
 
   @Public()
+  @UseGuards(ClientIpThrottlerGuard)
+  @Throttle(5, 600) // Each one sends an email.
   @Post('resend-verification')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Resend email verification code' })
@@ -199,6 +214,8 @@ export class AuthController {
   // ─── Password management ───────────────────────────────────────────────────
 
   @Public()
+  @UseGuards(ClientIpThrottlerGuard)
+  @Throttle(5, 600) // Each one sends an email.
   @Post('forgot-password')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Request password reset link' })
@@ -212,6 +229,8 @@ export class AuthController {
   }
 
   @Public()
+  @UseGuards(ClientIpThrottlerGuard)
+  @Throttle(10, 600) // Reset tokens are long, but no endless guessing.
   @Post('reset-password')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Reset password using token from email' })

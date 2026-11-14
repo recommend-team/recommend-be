@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Post, Query } from '@nestjs/common';
+import { Body, Controller, Get, Post, Query, UseGuards } from '@nestjs/common';
 import {
   ApiTags,
   ApiOperation,
@@ -17,6 +17,8 @@ import { RequiresPassword } from '../auth/decorators/requires-password.decorator
 import { User } from '../auth/entities/auth.entity';
 import { Role } from '../../common/enums/roles.enum';
 import { ZodValidationPipe } from '../../common/pipes/zod-validation.pipes';
+import { Throttle } from '@nestjs/throttler';
+import { UserThrottlerGuard } from '../../common/guards/user-throttler.guard';
 
 const MAX_PAGE_SIZE = 100;
 
@@ -116,6 +118,9 @@ export class WalletController {
   @Post('withdrawals')
   @ApprovedOnly()
   @RequiresPassword()
+  // Far more than any vendor needs; stops a script sending request after request.
+  @UseGuards(UserThrottlerGuard)
+  @Throttle(10, 3600)
   @ApiOperation({
     summary: 'Withdraw to a payout account',
     description:
