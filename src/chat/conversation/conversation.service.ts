@@ -32,6 +32,8 @@ export interface RecordInboundInput {
   conversationId: string;
   text: string;
   clientMessageId?: string;
+  /** Their name, number, email or address — kept from the AI model. */
+  personal?: boolean;
 }
 
 /** One row of the admin queue. Never the whole transcript — that is its own request. */
@@ -82,6 +84,8 @@ export interface RecordOutboundInput {
   channelMessageId?: string | null;
   /** Set when a person typed it. The author stays `ASSISTANT` either way. */
   adminId?: string | null;
+  /** Repeats someone's details, or gives out a delivery code — kept from the AI model. */
+  personal?: boolean;
 }
 
 @Injectable()
@@ -196,6 +200,7 @@ export class ConversationService {
       payload: null,
       channelMessageId: null,
       clientMessageId: input.clientMessageId ?? null,
+      personal: input.personal ?? false,
     });
 
     const saved = await this.messagesRepository.save(message);
@@ -219,6 +224,7 @@ export class ConversationService {
       channelMessageId: input.channelMessageId ?? null,
       clientMessageId: null,
       adminId: input.adminId ?? null,
+      personal: input.personal ?? false,
     });
 
     const saved = await this.messagesRepository.save(message);

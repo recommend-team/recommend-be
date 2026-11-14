@@ -73,4 +73,12 @@ export class ChatMessage extends BaseEntity {
   @Column({ type: 'uuid', nullable: true })
   @Index()
   adminId!: string | null;
+
+  /**
+   * Carries someone's details — a name, number, email or address given at checkout, the
+   * order read back, a delivery code. Shown in the thread as usual, but never sent to
+   * the AI model as history: it has no need of them.
+   */
+  @Column({ type: 'boolean', default: false })
+  personal!: boolean;
 }
