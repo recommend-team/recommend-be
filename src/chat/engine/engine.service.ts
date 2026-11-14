@@ -91,6 +91,8 @@ export class EngineService {
       conversationId: conversation.id,
       text: input.text,
       clientMessageId: input.clientMessageId,
+      // An answer to "what name / number / email / address?" — theirs, not the model's.
+      personal: GIVING_DETAILS.has(conversation.state),
     });
 
     // A retry of a message we have already answered. Staying silent is correct —
@@ -223,6 +225,10 @@ export class EngineService {
         conversationId: conversation.id,
         text: reply.text,
         payload: reply.payload,
+        // Replies to someone's details can repeat them; the order read back always does.
+        personal:
+          GIVING_DETAILS.has(conversation.state) ||
+          REPEATS_DETAILS.has(reply.payload?.kind ?? ''),
       });
 
       const outbound: OutboundMessage = {
@@ -456,6 +462,7 @@ export class EngineService {
       await this.conversationService.recordInbound({
         conversationId: conversation.id,
         text: said,
+        personal: true,
       });
     }
     return this.deliver(conversation, replies);
@@ -808,3 +815,17 @@ const WAITLIST_JOINED =
 
 const WAITLIST_ALREADY =
   "You're already on the list — we'll let you know the moment we launch. 🎉";
+
+/** Checkout steps where the buyer gives their details. */
+const GIVING_DETAILS: ReadonlySet<ConversationState> = new Set([
+  ConversationState.COLLECTING_NAME,
+  ConversationState.COLLECTING_PHONE,
+  ConversationState.COLLECTING_EMAIL,
+  ConversationState.COLLECTING_ADDRESS,
+]);
+
+/** Cards that read someone's details back to them. */
+const REPEATS_DETAILS: ReadonlySet<string> = new Set([
+  'order_summary',
+  'payment_link',
+]);

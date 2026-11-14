@@ -112,6 +112,52 @@ describe('EngineService', () => {
     service = module.get<EngineService>(EngineService);
   });
 
+  describe('keeping checkout details from the AI model', () => {
+    it('marks an answer given at a details step, and the replies to it', async () => {
+      checkoutFlow.handle.mockResolvedValue([{ text: 'Got it.' }]);
+
+      await service.handleInbound({
+        conversation: {
+          ...conversation,
+          state: ConversationState.COLLECTING_PHONE,
+        } as Conversation,
+        text: '08031234567',
+      });
+
+      expect(conversations.recordInbound).toHaveBeenCalledWith(
+        expect.objectContaining({ text: '08031234567', personal: true }),
+      );
+      expect(conversations.recordOutbound).toHaveBeenCalledWith(
+        expect.objectContaining({ personal: true }),
+      );
+    });
+
+    it('marks the order read back, whatever the step', async () => {
+      checkoutFlow.start.mockResolvedValue([
+        {
+          text: 'So that is 2 × Jollof Rice, delivered to 12 Allen Avenue.',
+          payload: { kind: 'order_summary', data: {} },
+        },
+      ]);
+
+      await service.startCheckout(conversation, [
+        { productId: 'p1', quantity: 2 },
+      ]);
+
+      expect(conversations.recordOutbound).toHaveBeenCalledWith(
+        expect.objectContaining({ personal: true }),
+      );
+    });
+
+    it('leaves ordinary browsing unmarked', async () => {
+      await service.handleInbound({ conversation, text: 'any suya in Yaba?' });
+
+      expect(conversations.recordInbound).toHaveBeenCalledWith(
+        expect.objectContaining({ personal: false }),
+      );
+    });
+  });
+
   describe('a question in the middle of checkout', () => {
     const atAddress = {
       ...conversation,

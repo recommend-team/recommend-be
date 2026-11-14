@@ -99,7 +99,8 @@ function describe(request: AppreciationRequest): string {
   const vendors = request.vendorNames.join(', ');
 
   return [
-    `Buyer: ${request.buyerName}`,
+    // Their first name is all the note uses, so it is all that is sent.
+    `Buyer: ${request.buyerName.trim().split(/\s+/)[0] ?? ''}`,
     items ? `They bought: ${items}` : null,
     vendors ? `From: ${vendors}` : null,
   ]

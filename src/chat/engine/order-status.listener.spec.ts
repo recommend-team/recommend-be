@@ -175,6 +175,14 @@ describe('OrderStatusListener', () => {
       (registry.send.mock.calls[0] as [unknown, unknown, { alert?: string }])[2]
         .alert;
 
+    it('keeps the delivery code from the AI model', async () => {
+      await listener.onStatusChanged(event(OrderStatus.DISPATCHED));
+
+      expect(conversations.recordOutbound).toHaveBeenCalledWith(
+        expect.objectContaining({ personal: true }),
+      );
+    });
+
     it('marks the dispatch — the sound no longer depends on push', async () => {
       await listener.onStatusChanged(event(OrderStatus.DISPATCHED));
 

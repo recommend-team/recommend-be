@@ -47,6 +47,8 @@ export class OrderStatusListener {
       const persisted = await this.conversationService.recordOutbound({
         conversationId: conversation.id,
         text,
+        // Gives out the delivery code, which the model never needs to see.
+        personal: !!event.deliveryCode && text.includes(event.deliveryCode),
       });
 
       await this.channelRegistry.send(
