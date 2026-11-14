@@ -1,7 +1,11 @@
 import { ApiPropertyOptional } from '@nestjs/swagger';
 import { z } from 'zod';
 
-const urlField = z.string().url('Must be a valid URL');
+/** A privately uploaded document (POST /storage/kyc), never a link. */
+const urlField = z
+  .string()
+  .max(300)
+  .startsWith('kyc:', 'Upload the document through the app first');
 
 /** Accepted for REGISTERED vendors (CAC/TIN) */
 export const updateRegisteredKycSchema = z

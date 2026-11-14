@@ -278,10 +278,10 @@ describe('AdminVendorsService', () => {
   describe('documents', () => {
     it('takes the documents that fit the vendor’s type', async () => {
       await service.updateKyc('admin1', 'v1', {
-        ninDocumentUrl: 'https://res.cloudinary.com/x/nin.jpg',
+        ninDocumentUrl: 'kyc:image/recommend/kyc/v1/nin.jpg',
       });
       expect(sellers.updateKyc).toHaveBeenCalledWith('v1', {
-        ninDocumentUrl: 'https://res.cloudinary.com/x/nin.jpg',
+        ninDocumentUrl: 'kyc:image/recommend/kyc/v1/nin.jpg',
       });
     });
 

@@ -22,6 +22,8 @@ import { NotificationsModule } from '../notifications/notifications.module';
 import { VendorAdminEdit } from './entities/vendor-admin-edit.entity';
 import { AdminVendorsController } from './admin-vendors.controller';
 import { AdminVendorsService } from './admin-vendors.service';
+import { StorageModule } from '../storage/storage.module';
+import { AdminKycController } from './admin-kyc.controller';
 
 @Module({
   // OrdersModule for `confirmByReference` — the admin's "check with Paystack" must
@@ -46,8 +48,15 @@ import { AdminVendorsService } from './admin-vendors.service';
     SellersModule,
     ProductsModule,
     NotificationsModule,
+    // Short-lived links to identity documents.
+    StorageModule,
   ],
-  controllers: [AdminController, AdminVendorsController, SuperAdminController],
+  controllers: [
+    AdminController,
+    AdminVendorsController,
+    SuperAdminController,
+    AdminKycController,
+  ],
   providers: [
     AdminService,
     AdminVendorsService,

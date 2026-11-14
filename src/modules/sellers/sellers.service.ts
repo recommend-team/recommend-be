@@ -23,6 +23,7 @@ import { LocationsService } from '../locations/locations.service';
 import { uniqueSlug } from '../../common/utils/slug.util';
 import { toOrderLines } from '../orders/order-lines';
 import { openingFields } from '../../common/utils/opening-hours.util';
+import { isKycRefFor } from '../storage/kyc-ref';
 
 export interface VendorProfileResponse {
   id: string;
@@ -160,6 +161,16 @@ export class SellersService {
       throw new BadRequestException(
         'Vendor type is not set. Please complete your profile first.',
       );
+    }
+
+    // Only documents uploaded privately for this account — never someone else's, and
+    // never an outside link.
+    for (const value of Object.values(body)) {
+      if (typeof value === 'string' && !isKycRefFor(value, vendor.id)) {
+        throw new BadRequestException(
+          'That document was not uploaded for this account. Upload it again.',
+        );
+      }
     }
 
     if (vendor.vendorType === VendorType.REGISTERED) {

@@ -374,6 +374,16 @@ export class AdminService {
         'businessName',
         'isEmailVerified',
         'createdAt',
+        // Whether each document is there — references, not links; viewing one goes
+        // through GET /admin/users/:id/kyc/:document.
+        'cacDocumentUrl',
+        'tinDocumentUrl',
+        'ninDocumentUrl',
+        'passportPhotoUrl',
+        'bankStatementUrl',
+        'utilityBillUrl',
+        'governmentIdUrl',
+        'selfieUrl',
       ],
       skip,
       take: limit,
