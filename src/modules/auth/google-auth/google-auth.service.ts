@@ -117,12 +117,12 @@ export class GoogleAuthService {
   validateGoogleProfile(profile: PassportUser): PassportUser {
     // Profile comes from Passport strategy's validate method, already validated
     if (!profile.email) {
-      console.error('Invalid profile structure - missing email:', profile);
+      console.error('Google sign-in without an email');
       throw new Error('Email not provided by Google');
     }
 
     if (!profile.googleId) {
-      console.error('Invalid profile structure - missing googleId:', profile);
+      console.error('Google sign-in without a Google id');
       throw new Error('Google ID not provided');
     }
 

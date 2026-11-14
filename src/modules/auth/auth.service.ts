@@ -9,7 +9,8 @@ import { ConfigService } from '@nestjs/config';
 import { JwtService } from '@nestjs/jwt';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
-import { randomBytes, createHash } from 'crypto';
+import { randomBytes, randomInt, createHash, timingSafeEqual } from 'crypto';
+import * as argon2 from 'argon2';
 import { RefreshToken } from './entities/refresh-token.entity';
 import { PendingUser } from './entities/pending-user.entity';
 import {
@@ -91,7 +92,9 @@ export class AuthService {
     const pendingUser = this.pendingUsersRepository.create({
       email: dto.email,
       phoneNumber: dto.phoneNumber,
-      password: dto.password,
+      // Hashed now, not at verification: a pending sign-up never holds it as typed.
+      // The account's own hook leaves an argon2 hash as it is.
+      password: await argon2.hash(dto.password),
       firstName: dto.firstName,
       lastName: dto.lastName,
       role: Role.SELLER,
@@ -127,7 +130,9 @@ export class AuthService {
     const pendingUser = this.pendingUsersRepository.create({
       email: dto.email,
       phoneNumber: dto.phoneNumber,
-      password: dto.password,
+      // Hashed now, not at verification: a pending sign-up never holds it as typed.
+      // The account's own hook leaves an argon2 hash as it is.
+      password: await argon2.hash(dto.password),
       firstName: dto.firstName,
       lastName: dto.lastName,
       role: Role.RIDER,
@@ -252,13 +257,25 @@ export class AuthService {
     verifyEmailDto: VerifyEmailDto,
   ): Promise<{ message: string; data: { user: SafeUser } }> {
     const pendingUser = await this.pendingUsersRepository.findOne({
-      where: {
-        email: verifyEmailDto.email,
-        verificationCode: verifyEmailDto.code,
-      },
+      where: { email: verifyEmailDto.email },
     });
 
     if (!pendingUser) {
+      throw new BadRequestException('Invalid email or verification code');
+    }
+
+    if (!sameCode(pendingUser.verificationCode, verifyEmailDto.code)) {
+      // Five wrong guesses and the sign-up is gone: a 6-digit code is only safe if it
+      // can't be tried a million times.
+      pendingUser.verificationAttempts =
+        (pendingUser.verificationAttempts ?? 0) + 1;
+      if (pendingUser.verificationAttempts >= MAX_CODE_ATTEMPTS) {
+        await this.pendingUsersRepository.remove(pendingUser);
+        throw new BadRequestException(
+          'Too many wrong codes. Please register again.',
+        );
+      }
+      await this.pendingUsersRepository.save(pendingUser);
       throw new BadRequestException('Invalid email or verification code');
     }
 
@@ -350,6 +367,7 @@ export class AuthService {
 
     const verificationCode = this.generateSixDigitCode();
     pendingUser.verificationCode = verificationCode;
+    pendingUser.verificationAttempts = 0;
     pendingUser.verificationCodeExpiresAt = new Date(
       Date.now() + 5 * 60 * 1000,
     );
@@ -621,8 +639,9 @@ export class AuthService {
     return safe as SafeUser;
   }
 
+  /** From the operating system's secure generator, not `Math.random`. */
   private generateSixDigitCode(): string {
-    return Math.floor(100000 + Math.random() * 900000).toString();
+    return randomInt(100000, 1000000).toString();
   }
 
   private generateResetToken(): string {
@@ -685,4 +704,14 @@ export class AuthService {
       console.error('Failed to send password changed email:', error);
     }
   }
+}
+
+/** Wrong sign-up codes allowed before the sign-up is cancelled. */
+const MAX_CODE_ATTEMPTS = 5;
+
+/** Compared in constant time, so timing gives nothing away about the code. */
+function sameCode(expected: string, given: string): boolean {
+  const a = Buffer.from(expected ?? '');
+  const b = Buffer.from(String(given ?? '').trim());
+  return a.length === b.length && timingSafeEqual(a, b);
 }

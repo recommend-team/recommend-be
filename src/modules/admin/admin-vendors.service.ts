@@ -40,6 +40,7 @@ import {
   type UpdateRegisteredKycDto,
 } from '../sellers/dto/update-kyc.dto';
 import { ZodValidationPipe } from '../../common/pipes/zod-validation.pipes';
+import { maskEmail } from '../../common/utils/redact.util';
 
 /** How each store field reads in a summary or a notification. */
 const FIELD_LABELS: Record<string, string> = {
@@ -250,7 +251,7 @@ export class AdminVendorsService {
       })
       .catch((error: unknown) =>
         this.logger.warn(
-          `Could not tell ${oldEmail} their login email changed: ${
+          `Could not tell ${maskEmail(oldEmail)} their login email changed: ${
             error instanceof Error ? error.message : 'unknown error'
           }`,
         ),

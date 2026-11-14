@@ -464,7 +464,7 @@ export class DiscoveryService {
       if (found.length === 0) await this.locations.recordUnplaced(place);
     } catch (error) {
       this.logger.warn(
-        `Could not note unplaced "${place}": ${
+        `Could not note an unplaced place (${place.length} chars): ${
           error instanceof Error ? error.message : 'unknown error'
         }`,
       );
@@ -477,7 +477,8 @@ export class DiscoveryService {
       return areas.length === 1 ? areas[0] : null;
     } catch (error) {
       this.logger.warn(
-        `Could not pre-resolve an area from "${text}": ${
+        // Not the message itself: it is a buyer's words.
+        `Could not pre-resolve an area from a message: ${
           error instanceof Error ? error.message : 'unknown error'
         }`,
       );

@@ -33,7 +33,8 @@ export class GoogleOAuthStrategy extends PassportStrategy(Strategy, 'google') {
       const { name, emails, photos } = profile;
 
       if (!emails || !emails.length) {
-        console.error('Google profile has no emails:', profile);
+        // The profile's id only — not the profile, which is someone's name and photos.
+        console.error(`Google profile ${profile.id} has no email`);
         return done(new Error('Email not provided by Google'), false);
       }
 

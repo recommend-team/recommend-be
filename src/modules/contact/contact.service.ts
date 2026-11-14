@@ -10,6 +10,7 @@ import { ConfigService } from '@nestjs/config';
 import type Redis from 'ioredis';
 import { EmailService } from '../../common/services/email.service';
 import type { ContactMessage } from './contact.schema';
+import { maskEmail, maskIp } from '../../common/utils/redact.util';
 
 const HOUR_SECONDS = 60 * 60;
 
@@ -36,7 +37,7 @@ export class ContactService {
     // Bots fill every field. Pretend it worked, so they learn nothing.
     if (message.website?.trim()) {
       this.logger.warn(
-        `Dropped a contact message caught by the honeypot (${clientIp})`,
+        `Dropped a contact message caught by the honeypot (${maskIp(clientIp)})`,
       );
       return;
     }
@@ -61,7 +62,7 @@ export class ContactService {
       });
     } catch (error) {
       this.logger.error(
-        `Contact message from ${message.email} could not be sent: ${
+        `Contact message from ${maskEmail(message.email)} could not be sent: ${
           error instanceof Error ? error.message : 'unknown error'
         }`,
       );

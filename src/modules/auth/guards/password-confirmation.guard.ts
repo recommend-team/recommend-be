@@ -1,6 +1,8 @@
 import {
   CanActivate,
   ExecutionContext,
+  HttpException,
+  HttpStatus,
   Inject,
   Injectable,
   Optional,
@@ -24,6 +26,11 @@ type AuthedRequest = Omit<Request, 'body'> & {
  * The window exists so a vendor doing several things in one sitting types it once. Asking
  * on every action pushes people to a password they can type quickly, or to one saved in
  * the browser — either of which hands it to the same attacker this is meant to stop.
+ *
+ * Wrong passwords are counted per account: after five in fifteen minutes, no more are
+ * checked until the fifteen minutes are up. Without that, someone holding a stolen
+ * session could guess here for as long as they liked — the login page's lock-out never
+ * sees these attempts.
  */
 @Injectable()
 export class PasswordConfirmationGuard implements CanActivate {
@@ -57,14 +64,31 @@ export class PasswordConfirmationGuard implements CanActivate {
       });
     }
 
+    const failuresKey = `pwconfirm:fail:${user.id}`;
+    const failures = Number((await this.redis?.get(failuresKey)) ?? 0);
+    if (failures >= MAX_WRONG_PASSWORDS) {
+      throw new HttpException(
+        {
+          code: 'PASSWORD_LOCKED',
+          message:
+            'Too many wrong passwords. Try again in 15 minutes, or reset your password.',
+        },
+        HttpStatus.TOO_MANY_REQUESTS,
+      );
+    }
+
     if (!user.password || !(await argon2.verify(user.password, supplied))) {
-      // Deliberately not cleared on failure — a wrong attempt must not end a window the
-      // legitimate user already opened.
+      // Counted, and the count lasts fifteen minutes from the first miss. Deliberately
+      // not clearing the window — a wrong attempt must not end one the legitimate user
+      // already opened.
+      const count = await this.redis?.incr(failuresKey);
+      if (count === 1) await this.redis?.expire(failuresKey, LOCK_SECONDS);
       throw new UnauthorizedException({
         code: 'PASSWORD_INCORRECT',
         message: 'That password is not correct.',
       });
     }
+    await this.redis?.del(failuresKey);
 
     const minutes =
       this.config.get<number>('wallet.passwordConfirmationMinutes') ?? 15;
@@ -73,3 +97,9 @@ export class PasswordConfirmationGuard implements CanActivate {
     return true;
   }
 }
+
+/** Wrong passwords allowed before the check stops for a while. */
+const MAX_WRONG_PASSWORDS = 5;
+
+/** How long the count, and the wait once it is reached, lasts. */
+const LOCK_SECONDS = 15 * 60;

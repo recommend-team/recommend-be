@@ -1,7 +1,11 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { Reflector } from '@nestjs/core';
 import { ConfigService } from '@nestjs/config';
-import { ExecutionContext, UnauthorizedException } from '@nestjs/common';
+import {
+  ExecutionContext,
+  HttpException,
+  UnauthorizedException,
+} from '@nestjs/common';
 import * as argon2 from 'argon2';
 import { PasswordConfirmationGuard } from './password-confirmation.guard';
 
@@ -18,7 +22,13 @@ const contextFor = (
 describe('PasswordConfirmationGuard', () => {
   let guard: PasswordConfirmationGuard;
   let reflector: { getAllAndOverride: jest.Mock };
-  let redis: { get: jest.Mock; setex: jest.Mock };
+  let redis: {
+    get: jest.Mock;
+    setex: jest.Mock;
+    incr: jest.Mock;
+    expire: jest.Mock;
+    del: jest.Mock;
+  };
   let hashed: string;
 
   beforeAll(async () => {
@@ -27,7 +37,13 @@ describe('PasswordConfirmationGuard', () => {
 
   beforeEach(async () => {
     reflector = { getAllAndOverride: jest.fn().mockReturnValue(true) };
-    redis = { get: jest.fn().mockResolvedValue(null), setex: jest.fn() };
+    redis = {
+      get: jest.fn().mockResolvedValue(null),
+      setex: jest.fn(),
+      incr: jest.fn().mockResolvedValue(1),
+      expire: jest.fn(),
+      del: jest.fn(),
+    };
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -70,6 +86,47 @@ describe('PasswordConfirmationGuard', () => {
       UnauthorizedException,
     );
     expect(redis.setex).not.toHaveBeenCalled();
+  });
+
+  it('counts a wrong password, for fifteen minutes from the first', async () => {
+    const context = contextFor(
+      { id: 'u1', password: hashed },
+      { currentPassword: 'wrong' },
+    );
+
+    await expect(guard.canActivate(context)).rejects.toBeInstanceOf(
+      UnauthorizedException,
+    );
+    expect(redis.incr).toHaveBeenCalledWith('pwconfirm:fail:u1');
+    expect(redis.expire).toHaveBeenCalledWith('pwconfirm:fail:u1', 900);
+  });
+
+  it('stops checking after five wrong passwords — even the right one waits', async () => {
+    redis.get.mockImplementation((key: string) =>
+      Promise.resolve(key === 'pwconfirm:fail:u1' ? '5' : null),
+    );
+    const context = contextFor(
+      { id: 'u1', password: hashed },
+      { currentPassword: 'correct horse' },
+    );
+
+    const refusal = guard.canActivate(context);
+    await expect(refusal).rejects.toBeInstanceOf(HttpException);
+    await expect(refusal).rejects.toMatchObject({ status: 429 });
+    expect(redis.setex).not.toHaveBeenCalled();
+  });
+
+  it('forgets the misses once the right password is given', async () => {
+    redis.get.mockImplementation((key: string) =>
+      Promise.resolve(key === 'pwconfirm:fail:u1' ? '3' : null),
+    );
+    const context = contextFor(
+      { id: 'u1', password: hashed },
+      { currentPassword: 'correct horse' },
+    );
+
+    await expect(guard.canActivate(context)).resolves.toBe(true);
+    expect(redis.del).toHaveBeenCalledWith('pwconfirm:fail:u1');
   });
 
   it('demands a password when none was given and no window is open', async () => {

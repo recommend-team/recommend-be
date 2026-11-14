@@ -2,29 +2,14 @@ import {
   BadRequestException,
   Controller,
   Get,
-  Injectable,
   Query,
   UseGuards,
 } from '@nestjs/common';
 import { ApiOperation, ApiQuery, ApiTags } from '@nestjs/swagger';
-import { Throttle, ThrottlerGuard } from '@nestjs/throttler';
+import { Throttle } from '@nestjs/throttler';
 import { Public } from '../auth/decorators/public.decorator';
 import { PlacesService } from './places.service';
-
-/**
- * Counted per buyer, not per server: behind Heroku's router every request comes from
- * the router, so the buyer's address is the first one it forwarded.
- */
-@Injectable()
-class PerBuyerThrottlerGuard extends ThrottlerGuard {
-  protected getTracker(req: Record<string, unknown>): string {
-    const forwarded = (req.headers as Record<string, string | undefined>)?.[
-      'x-forwarded-for'
-    ];
-    const ip = typeof req.ip === 'string' ? req.ip : 'unknown';
-    return forwarded?.split(',')[0]?.trim() || ip;
-  }
-}
+import { ClientIpThrottlerGuard } from '../../common/guards/client-ip-throttler.guard';
 
 const SESSION = /^[A-Za-z0-9_-]{8,64}$/;
 
@@ -43,7 +28,7 @@ function session(token?: string): string | undefined {
 @ApiTags('Places')
 @Controller('places')
 @Public()
-@UseGuards(PerBuyerThrottlerGuard)
+@UseGuards(ClientIpThrottlerGuard)
 export class PlacesController {
   constructor(private readonly places: PlacesService) {}
 
