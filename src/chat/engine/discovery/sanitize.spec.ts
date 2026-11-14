@@ -1,4 +1,4 @@
-import { sanitizeUntrusted, wasSanitised } from './sanitize';
+import { sanitizeUntrusted, wasSanitised, withoutContacts } from './sanitize';
 
 describe('sanitizeUntrusted', () => {
   it('leaves an ordinary dish name alone', () => {
@@ -94,5 +94,25 @@ describe('sanitizeUntrusted', () => {
     it('is false for empty input', () => {
       expect(wasSanitised(null)).toBe(false);
     });
+  });
+});
+
+describe('withoutContacts', () => {
+  it.each([
+    ['call me on 08031234567', 'call me on [phone]'],
+    ['my number na 0803 123 4567', 'my number na [phone]'],
+    ['+234-803-123-4567 is mine', '[phone] is mine'],
+    ['email ada.obi@gmail.com pls', 'email [email] pls'],
+  ])('takes the contact out of "%s"', (text, expected) => {
+    expect(withoutContacts(text)).toBe(expected);
+  });
+
+  it.each([
+    'Jollof rice for 2 in Yaba',
+    'I have 12,000 naira',
+    'order REC-1A2B',
+    'delivery around 4pm, 2 plates',
+  ])('leaves "%s" alone', (text) => {
+    expect(withoutContacts(text)).toBe(text);
   });
 });

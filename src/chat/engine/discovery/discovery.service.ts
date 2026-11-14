@@ -21,7 +21,7 @@ import {
   describeAreas,
 } from './knowledge';
 import { describeLatestOrder, orderPrices, orderProgress } from './my-orders';
-import { sanitizeUntrusted } from './sanitize';
+import { withoutContacts } from './sanitize';
 import { isAside, onlySaysNotHeard } from '../flows/aside';
 import { OutboundMessage } from '../../transport/channel.interface';
 import { ChatMessage } from '../../conversation/entities/message.entity';
@@ -187,7 +187,8 @@ export class DiscoveryService {
                 'question — that follows automatically. If you do not know, say so.',
             },
             ...this.toModelHistory(request.history),
-            { role: 'user', content: request.text },
+            // Like the history: any phone number or email taken out first.
+            { role: 'user', content: withoutContacts(request.text) },
           ],
         });
         const reply = completion.choices[0]?.message?.content?.trim() ?? '';
@@ -268,7 +269,9 @@ export class DiscoveryService {
           ]
         : []),
       ...this.toModelHistory(request.history),
-      { role: 'user', content: request.text },
+      // The model's copy only, with any phone number or email taken out. Everything of
+      // ours — area detection, search logging, the fallback — still reads the original.
+      { role: 'user', content: withoutContacts(request.text) },
     ];
 
     // "I need food", "I'm hungry": browsing, not a product search. With an area, who
@@ -408,9 +411,10 @@ export class DiscoveryService {
         : '- Has not ordered from us before (or not on this device). Name not known yet.',
     );
     if (request.lastDeliveryAddress) {
-      // Typed by the buyer, so neutralised like any other text from outside.
+      // That there is one, not what it is: checkout offers it to them itself, and the
+      // model has no need of where they live.
       lines.push(
-        `- Last delivery went to: ${sanitizeUntrusted(request.lastDeliveryAddress, 160)}`,
+        '- Has a delivery address saved from their last order; checkout offers it to them.',
       );
     }
     lines.push(
@@ -852,14 +856,22 @@ export class DiscoveryService {
     };
   }
 
+  /**
+   * The thread as the model sees it: without checkout answers, the order read back or
+   * delivery codes (`personal`), and with any other phone number or email taken out.
+   * Finding vendors and answering questions needs none of them.
+   */
   private toModelHistory(history: ChatMessage[]): ChatCompletionMessageParam[] {
-    return history.slice(-this.maxHistory).map((message) => ({
-      role:
-        message.author === MessageAuthor.BUYER
-          ? ('user' as const)
-          : ('assistant' as const),
-      content: message.text,
-    }));
+    return history
+      .filter((message) => !message.personal)
+      .slice(-this.maxHistory)
+      .map((message) => ({
+        role:
+          message.author === MessageAuthor.BUYER
+            ? ('user' as const)
+            : ('assistant' as const),
+        content: withoutContacts(message.text),
+      }));
   }
 }
 

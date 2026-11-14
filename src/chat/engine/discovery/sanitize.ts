@@ -69,3 +69,24 @@ export function wasSanitised(original: string | null | undefined): boolean {
     sanitizeUntrusted(original, Number.MAX_SAFE_INTEGER) !== original.trim()
   );
 }
+
+/** An email address anywhere in a message. */
+const EMAIL_IN_TEXT =
+  /[^\s@<>()"',;:]+@[a-z0-9-]+(?:\.[a-z0-9-]+)*\.[a-z]{2,}/gi;
+
+/**
+ * A phone number anywhere in a message: +234…, 0803…, or any run of 10+ digits that
+ * spaces or dashes break up. An amount like 12,000 is not one.
+ */
+const PHONE_IN_TEXT = /(?<![\d,.])\+?\d(?:[\s-]?\d){9,14}(?![\d,.])/g;
+
+/**
+ * A buyer's message with any phone number or email taken out, before it goes to the
+ * model as history. Checkout answers are kept back whole (`ChatMessage.personal`); this
+ * catches a number or email given anywhere else in the chat.
+ */
+export function withoutContacts(text: string): string {
+  return text
+    .replace(EMAIL_IN_TEXT, '[email]')
+    .replace(PHONE_IN_TEXT, '[phone]');
+}

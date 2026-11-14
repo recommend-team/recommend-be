@@ -46,11 +46,12 @@ describe("the buyer's own orders", () => {
     });
   });
 
-  it('shows the model the code and where to collect, but only the rider’s first name', () => {
+  it('shows the model where the order is, but never the code, the address or the rider’s phone', () => {
     const shown = orderForModel(
       order({
         status: 'DISPATCHED',
         handoverCode: '4821',
+        deliveryAddress: '12 Herbert Macaulay Way, Yaba',
         rider: { name: 'Tunde Bakare', phone: '+2348000000000' },
       }),
     );
@@ -59,9 +60,12 @@ describe("the buyer's own orders", () => {
       reference: 'REC-1A2B',
       progress: 'on its way with Tunde',
       rider: 'Tunde',
-      code: '4821',
+      code: expect.stringContaining('Orders tab') as unknown,
     });
-    expect(JSON.stringify(shown)).not.toContain('+2348000000000');
+    const said = JSON.stringify(shown);
+    expect(said).not.toContain('4821');
+    expect(said).not.toContain('Herbert Macaulay');
+    expect(said).not.toContain('+2348000000000');
   });
 
   describe('"where is my order?" without a model', () => {

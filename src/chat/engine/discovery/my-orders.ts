@@ -42,7 +42,8 @@ export function orderForModel(order: BuyerOrderSummary) {
     placed: order.createdAt,
     progress: orderProgress(order),
     fulfillment: order.fulfillmentType === 'PICKUP' ? 'pickup' : 'delivery',
-    deliveryAddress: order.deliveryAddress,
+    // Not the delivery address or the code: neither is the model's to know. Where to find
+    // the code is enough to answer "what's my code?".
     items: order.vendors.flatMap((vendor) =>
       vendor.items.map((item) => ({
         name: sanitizeUntrusted(item.name, 80),
@@ -54,8 +55,9 @@ export function orderForModel(order: BuyerOrderSummary) {
     ),
     totalAmount: order.totalAmount,
     rider: order.rider ? firstName(order.rider.name) : null,
-    // Shown to the buyer in their Orders tab already; theirs to read to the rider.
-    code: order.handoverCode,
+    code: order.handoverCode
+      ? 'Shown to them in their Orders tab, to read to the rider. Never say it.'
+      : null,
     collectFrom:
       order.vendors
         .map((vendor) => vendor.pickupAddress)

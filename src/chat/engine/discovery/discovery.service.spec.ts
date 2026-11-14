@@ -553,6 +553,59 @@ describe('DiscoveryService (model)', () => {
       .map((message) => message.content);
   };
 
+  it('keeps checkout answers and phone numbers out of what the model reads', async () => {
+    mockCreate.mockResolvedValueOnce(replies('Here you go.'));
+
+    await service.discover({
+      text: 'any suya?',
+      areaId: null,
+      history: [
+        { author: 'BUYER', text: 'jollof please', personal: false },
+        {
+          author: 'ASSISTANT',
+          text: 'What number can we reach you on?',
+          personal: false,
+        },
+        { author: 'BUYER', text: '08031234567', personal: true },
+        {
+          author: 'BUYER',
+          text: '12 Herbert Macaulay Way, Yaba',
+          personal: true,
+        },
+        { author: 'BUYER', text: 'or call 0803 123 4567', personal: false },
+      ] as never,
+    });
+
+    const [request] = mockCreate.mock.calls[0] as [
+      { messages: { role: string; content: string }[] },
+    ];
+    const read = request.messages.map((message) => message.content).join('\n');
+    expect(read).toContain('jollof please');
+    expect(read).not.toContain('Herbert Macaulay');
+    expect(read).not.toContain('08031234567');
+    expect(read).not.toContain('0803 123 4567');
+    expect(read).toContain('or call [phone]');
+  });
+
+  it('takes a phone number or email out of the message being answered, too', async () => {
+    mockCreate.mockResolvedValueOnce(replies('Happy to help.'));
+
+    await service.discover({
+      text: 'any suya? call me on 0803 123 4567 or ada@gmail.com',
+      areaId: null,
+      history: [],
+    });
+
+    const [request] = mockCreate.mock.calls[0] as [
+      { messages: { role: string; content: string }[] },
+    ];
+    const asked = request.messages[request.messages.length - 1];
+    expect(asked).toEqual({
+      role: 'user',
+      content: 'any suya? call me on [phone] or [email]',
+    });
+  });
+
   it('tells the model the area by name, and that the place just named is in it', async () => {
     // Given only an id, it once said "Lekki Phase 1 is also in Ajah".
     modelLocations.searchAreas.mockResolvedValue([
@@ -713,7 +766,9 @@ describe('DiscoveryService (model)', () => {
       content.startsWith('ABOUT THIS BUYER'),
     );
     expect(note).toContain('Ada, who has ordered from us before');
-    expect(note).toContain('Last delivery went to: 12 Herbert Macaulay Way');
+    // That there is a saved address — never the address itself.
+    expect(note).toContain('Has a delivery address saved');
+    expect(note).not.toContain('Herbert Macaulay');
     expect(note).toContain('Signed in');
     expect(note).toContain('Latest order REC-9Z: on its way with Tunde');
   });
