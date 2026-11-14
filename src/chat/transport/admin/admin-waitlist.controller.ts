@@ -1,4 +1,4 @@
-import { Controller, Get, Header, Query } from '@nestjs/common';
+import { Controller, Get, Query, StreamableFile } from '@nestjs/common';
 import {
   ApiBearerAuth,
   ApiOperation,
@@ -36,11 +36,13 @@ export class AdminWaitlistController {
   }
 
   @Get('export')
-  @Header('Content-Type', 'text/csv; charset=utf-8')
-  @Header('Content-Disposition', 'attachment; filename="waitlist.csv"')
   @ApiOperation({ summary: 'Everyone on the waitlist, as CSV' })
   @ApiResponse({ status: 200, description: 'CSV: kind, contact, joinedAt' })
-  async export(): Promise<string> {
-    return this.waitlist.csv();
+  async export(): Promise<StreamableFile> {
+    // A file, so the response wrapper leaves it alone — a string would be sent as JSON.
+    return new StreamableFile(Buffer.from(await this.waitlist.csv(), 'utf8'), {
+      type: 'text/csv; charset=utf-8',
+      disposition: 'attachment; filename="waitlist.csv"',
+    });
   }
 }

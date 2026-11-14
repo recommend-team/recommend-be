@@ -3,6 +3,7 @@ import {
   NestInterceptor,
   ExecutionContext,
   CallHandler,
+  StreamableFile,
 } from '@nestjs/common';
 import { Observable } from 'rxjs';
 import { map } from 'rxjs/operators';
@@ -17,14 +18,17 @@ export interface ApiResponse<T> {
 @Injectable()
 export class ResponseInterceptor<T> implements NestInterceptor<
   T,
-  ApiResponse<T>
+  ApiResponse<T> | StreamableFile
 > {
   intercept(
     _context: ExecutionContext,
     next: CallHandler,
-  ): Observable<ApiResponse<T>> {
+  ): Observable<ApiResponse<T> | StreamableFile> {
     return next.handle().pipe(
       map((response) => {
+        // A file — a CSV export, say — goes out as it is, never wrapped in JSON.
+        if (response instanceof StreamableFile) return response;
+
         // If the service returns { message, data } extract both
         if (
           response !== null &&
