@@ -296,10 +296,8 @@ export class DiscoveryService {
     }
 
     let reply = '';
-    // A message naming a kind of thing — "wears", "any bags?", "no fashion vendors?" — is
-    // never answered from memory: the first round must use a tool. Left to choose, the
-    // model once said "here are some options" having searched nothing.
-    const mustLook = categoriesFor(request.text).length > 0;
+    const mustLook =
+      categoriesFor(request.text).length > 0 || asksForSomething(request.text);
     // Broad with an area: straight to who sells it. Broad without one: a question first.
     const firstRound = broad
       ? areaId
@@ -953,6 +951,99 @@ function stripFiller(text: string): string {
     .join(' ')
     .trim();
 }
+
+export function asksForSomething(text: string): boolean {
+  const words = text
+    .toLowerCase()
+    .replace(/[^a-z0-9\s]/g, ' ')
+    .split(/\s+/)
+    .filter(Boolean);
+  if (!words.some((word) => REQUEST_WORDS.has(word))) return false;
+  return words.some(
+    (word) =>
+      word.length > 1 &&
+      !FILLER.has(word) &&
+      !REQUEST_WORDS.has(word) &&
+      !NOT_A_THING.has(word),
+  );
+}
+
+const REQUEST_WORDS = new Set([
+  'want',
+  'wanna',
+  'need',
+  'buy',
+  'looking',
+  'find',
+  'order',
+  'get',
+  'any',
+  'have',
+  'sell',
+  'sells',
+  'selling',
+  'vendor',
+  'vendors',
+  'store',
+  'stores',
+  'shop',
+  'shops',
+  'seller',
+  'sellers',
+]);
+
+/** Words that never name the thing wanted. */
+const NOT_A_THING = new Set([
+  'just',
+  'one',
+  'really',
+  'also',
+  'more',
+  'else',
+  'still',
+  'now',
+  'today',
+  'please',
+  'pls',
+  'how',
+  'why',
+  'when',
+  'where',
+  'who',
+  'does',
+  'did',
+  'it',
+  'this',
+  'that',
+  'them',
+  'your',
+  'name',
+  'help',
+  'talk',
+  'speak',
+  'person',
+  'human',
+  'someone',
+  'refund',
+  'cancel',
+  'track',
+  'status',
+  'pay',
+  'payment',
+  'checkout',
+  'cart',
+  'delivery',
+  'deliver',
+  'pickup',
+  'receipt',
+  'account',
+  'yes',
+  'no',
+  'ok',
+  'okay',
+  'thanks',
+  'thank',
+]);
 
 /**
  * The place in "I live in X", "I'm at X", "deliver to X", "vendors in X" — or null.

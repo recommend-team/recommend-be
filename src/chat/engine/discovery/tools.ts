@@ -102,11 +102,18 @@ export const DISCOVERY_TOOLS = [
     type: 'function' as const,
     function: {
       name: 'search_vendors',
-      description: 'Find vendors or stores, optionally by area or category.',
+      description:
+        'Find vendors by name or by what they sell, optionally by area or category. ' +
+        'For "hair vendors in Lekki" pass query "hair": a vendor selling hair is found ' +
+        'through its items even if its name does not say so.',
       parameters: {
         type: 'object',
         properties: {
-          query: { type: 'string' },
+          query: {
+            type: 'string',
+            description:
+              'A vendor name, or the thing they sell, in the buyer’s words — "hair", not "hair vendors"',
+          },
           areaId: { type: 'string' },
           category: { type: 'string' },
         },
@@ -357,6 +364,34 @@ export async function executeTool(
               areaId,
             });
 
+      // Nobody by that name: the vendors who sell it. "hair vendors in Lekki" is a
+      // question about what is sold, and a vendor's name and blurb rarely list their
+      // stock — so the items are searched too, whatever category the vendor filed
+      // under. Shown as the items under their vendor, so the buyer sees the hair.
+      if (vendors.length === 0) {
+        // The category too: "hair" is Beauty, and no vendor here may be filed as Beauty
+        // while one filed as anything else sells the wigs.
+        const wanted = withoutVendorWords(text ?? category);
+        if (wanted) {
+          const products = await searchWithDishNames(context.catalog, {
+            text: wanted,
+            areaId,
+          });
+          if (products.length > 0) {
+            collectProducts(products, harvest);
+            return JSON.stringify({
+              matchedOn: 'items',
+              note:
+                `No vendor is named after "${sanitizeUntrusted(wanted, 80)}", but these ` +
+                'vendors sell items matching it. Say which vendors have it, naturally ' +
+                '("Jollof Pot has a couple of options"). Never say no vendor sells it. ' +
+                'The items are shown as cards under each vendor.',
+              items: await withOptions(context.catalog, products),
+            });
+          }
+        }
+      }
+
       // A name that matched nobody: stores of the kind the words point at, if any.
       if (vendors.length === 0 && text) {
         const named = categoriesFor(text);
@@ -375,7 +410,7 @@ export async function executeTool(
       harvest.vendors.push(...vendors);
 
       return vendors.length === 0
-        ? 'No open stores match that.'
+        ? 'No vendors match that, by name or by anything they sell.'
         : JSON.stringify(
             vendors.map((vendor) => ({
               id: vendor.id,
@@ -420,6 +455,34 @@ export async function executeTool(
       return `Unknown tool "${name}".`;
   }
 }
+
+/**
+ * "hair vendors", "shops selling wigs" → "hair", "wigs". Every word of an item search
+ * must match, and no item is called "vendors".
+ */
+export function withoutVendorWords(text: string | undefined): string {
+  return (text ?? '')
+    .split(/\s+/)
+    .filter((word) => word && !VENDOR_WORDS.has(word.toLowerCase()))
+    .join(' ')
+    .trim();
+}
+
+const VENDOR_WORDS = new Set([
+  'vendor',
+  'vendors',
+  'store',
+  'stores',
+  'shop',
+  'shops',
+  'seller',
+  'sellers',
+  'sell',
+  'sells',
+  'selling',
+  'that',
+  'who',
+]);
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 

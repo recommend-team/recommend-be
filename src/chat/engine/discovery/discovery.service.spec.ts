@@ -491,6 +491,7 @@ describe('DiscoveryService (keyword fallback)', () => {
  */
 describe('DiscoveryService (model)', () => {
   let service: DiscoveryService;
+  let module: TestingModule;
   const modelLocations = {
     searchAreas: jest.fn(),
     listServedAreas: jest.fn().mockResolvedValue([YABA]),
@@ -510,7 +511,7 @@ describe('DiscoveryService (model)', () => {
     modelOrdering.listOrders.mockReset().mockResolvedValue([]);
     modelOrdering.deliveryFeeFor.mockReset().mockReturnValue(1500);
 
-    const module: TestingModule = await Test.createTestingModule({
+    module = await Test.createTestingModule({
       providers: [
         DiscoveryService,
         {
@@ -666,6 +667,93 @@ describe('DiscoveryService (model)', () => {
 
     const [request] = mockCreate.mock.calls[0] as [{ tool_choice?: string }];
     expect(request.tool_choice).toBeUndefined();
+  });
+
+  describe('asking for a thing we have no category for', () => {
+    const toolChoiceFor = async (text: string) => {
+      mockCreate.mockResolvedValueOnce(replies('Here you go.'));
+      await service.discover({ text, areaId: null, history: [] });
+      const [request] = mockCreate.mock.calls[0] as [{ tool_choice?: string }];
+      return request.tool_choice;
+    };
+
+    it.each([
+      'i want to buy hair',
+      'hair vendors in lekki',
+      'any one, i just want to buy hair',
+      'do you have hair?',
+    ])('makes the model search for "%s"', async (text) => {
+      // Left to choose, it once repeated "no hair vendors" from memory instead.
+      expect(await toolChoiceFor(text)).toBe('required');
+    });
+
+    it.each([
+      'hello',
+      'thank you',
+      'yes',
+      'who are you?',
+      'my name is Chidi',
+      'where is my order',
+      'I want a refund for my order',
+      'i want to talk to a person',
+      'how do I order?',
+      'i want to pay',
+    ])('lets the model just talk for "%s"', async (text) => {
+      expect(await toolChoiceFor(text)).toBeUndefined();
+    });
+  });
+
+  it('finds the hair from "hair vendors in lekki" — the screenshot conversation', async () => {
+    const LEKKI = { id: 'area-lekki', name: 'Lekki', stateName: 'Lagos' };
+    modelLocations.searchAreas.mockResolvedValue([LEKKI]);
+    const catalog = module.get<Record<string, jest.Mock>>(CATALOG_PORT);
+    catalog.getDishOptions = jest.fn().mockResolvedValue([]);
+    // No vendor is called anything like "hair"; Jollof Pot sells the wigs.
+    catalog.searchProducts.mockResolvedValue([
+      product({
+        id: 'p-wig',
+        name: 'Deep Wave Human Hair Wig',
+        price: 50000,
+        vendorId: 'v-jollof',
+        vendorName: 'Jollof Pot',
+        vendorIsOpen: true,
+      }),
+    ]);
+    mockCreate
+      .mockResolvedValueOnce({
+        choices: [
+          {
+            message: {
+              role: 'assistant',
+              content: null,
+              tool_calls: [
+                {
+                  id: 'call-1',
+                  type: 'function',
+                  function: {
+                    name: 'search_vendors',
+                    arguments: JSON.stringify({ query: 'hair' }),
+                  },
+                },
+              ],
+            },
+          },
+        ],
+      })
+      .mockResolvedValueOnce(replies('Jollof Pot has a couple of options.'));
+
+    const result = await service.discover({
+      text: 'hair vendors in lekki',
+      areaId: null,
+      history: [],
+    });
+
+    expect(result.foundNothing).toBe(false);
+    expect(result.resolvedAreaId).toBe('area-lekki');
+    expect(result.messages[0].payload?.kind).toBe('product_list');
+    expect(JSON.stringify(result.messages[0].payload)).toContain(
+      'Deep Wave Human Hair Wig',
+    );
   });
 
   it('names a neighbourhood the area it is in', async () => {

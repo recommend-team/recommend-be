@@ -1,4 +1,4 @@
-import { LocalCatalogAdapter } from './local-catalog.adapter';
+import { LocalCatalogAdapter, singular } from './local-catalog.adapter';
 
 // Monday 19 October 2026, 8pm in Lagos.
 const MONDAY_EVENING = new Date('2026-10-19T20:00:00+01:00');
@@ -117,5 +117,23 @@ describe('LocalCatalogAdapter — open vendors first', () => {
       ['fried-rice', true, null],
       ['late-jollof', false, '2026-10-20T08:00:00.000Z'],
     ]);
+  });
+});
+
+describe('singular — so a plural search finds the singular item', () => {
+  it('drops a plural ending, since the substring still matches the plural', () => {
+    // "%wigs%" never matched "Deep Wave Human Hair Wig"; "%wig%" matches both.
+    expect(singular('wigs')).toBe('wig');
+    expect(singular('Shoes')).toBe('shoe');
+    expect(singular('dresses')).toBe('dress');
+    expect(singular('watches')).toBe('watch');
+    expect(singular('glasses')).toBe('glass');
+  });
+
+  it('leaves alone words that are not plurals, or too short to tell', () => {
+    expect(singular('dress')).toBe('dress');
+    expect(singular('hair')).toBe('hair');
+    expect(singular('gas')).toBe('gas');
+    expect(singular('rice')).toBe('rice');
   });
 });

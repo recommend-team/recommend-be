@@ -182,7 +182,7 @@ describe('offering something when nothing matches', () => {
     expect(found.vendors).toEqual([]);
     expect(catalog.vendorQueries).toEqual([]);
     expect(alternativesLine(found, 'kente', 'Ajah')).toBe(
-      `I couldn't find "kente" in Ajah. What kind of thing is it — food, gadgets, phone accessories, home appliances or fashion? Then I can show you who has that near you.`,
+      `I couldn't find "kente" in Ajah. What kind of thing is it — food, gadgets, phone accessories, home appliances, fashion or beauty? Then I can show you who has that near you.`,
     );
   });
 

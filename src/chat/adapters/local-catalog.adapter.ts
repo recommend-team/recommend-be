@@ -302,7 +302,21 @@ function tokenise(text: string | undefined, maxTokens = 6): string[] {
     .filter(
       (token) => token.length > 1 && !JOINING_WORDS.has(token.toLowerCase()),
     )
+    .map(singular)
     .slice(0, maxTokens);
+}
+
+/**
+ * "wigs" → "wig", "dresses" → "dress". Matched as a substring, so the singular still
+ * finds the plural — "%wig%" matches "Wigs" — but "%wigs%" never matches "Wig".
+ */
+export function singular(token: string): string {
+  const word = token.toLowerCase();
+  if (word.length > 4 && /(ss|sh|ch|x)es$/.test(word)) return word.slice(0, -2);
+  if (word.length > 3 && word.endsWith('s') && !word.endsWith('ss')) {
+    return word.slice(0, -1);
+  }
+  return word;
 }
 
 /**
