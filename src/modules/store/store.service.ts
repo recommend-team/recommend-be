@@ -19,6 +19,13 @@ export interface StorefrontResponse {
     businessLogoUrl: string | null;
     businessBannerUrl: string | null;
     whatsappNumber: string | null;
+    /**
+     * The owner's first name — "Run by Ngozi". A face behind the shop is what makes a
+     * buyer message them; the surname, phone and email stay private.
+     */
+    ownerFirstName: string | null;
+    /** When they joined Recommend (ISO) — "Selling on Recommend since March 2026". */
+    memberSince: string | null;
     /** Can be bought from right now: not paused, and inside opening hours if set. */
     isOpen: boolean;
     /** When it next opens (ISO) — null if open, paused, or no hours open. */
@@ -176,6 +183,8 @@ export class StoreService {
           businessLogoUrl: vendor.businessLogoUrl,
           businessBannerUrl: vendor.businessBannerUrl,
           whatsappNumber: vendor.whatsappNumber,
+          ownerFirstName: vendor.firstName?.trim() || null,
+          memberSince: vendor.createdAt?.toISOString() ?? null,
           ...openForBuyers(vendor, now),
           operatingHours: vendor.operatingHours,
           slug: vendor.slug,

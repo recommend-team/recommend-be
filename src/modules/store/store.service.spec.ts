@@ -70,6 +70,30 @@ describe('StoreService — open now, for buyers', () => {
     });
   });
 
+  it('names the owner by first name only, and when they joined', async () => {
+    const shop = serviceFor(
+      vendor({
+        firstName: ' Ngozi ',
+        lastName: 'Okafor',
+        email: 'ngozi@example.com',
+        phoneNumber: '+2348012345678',
+        createdAt: new Date('2026-03-04T10:00:00.000Z'),
+      }),
+    );
+
+    const { data } = await shop.getStorefront('mama-put');
+
+    expect(data.vendor).toMatchObject({
+      ownerFirstName: 'Ngozi',
+      memberSince: '2026-03-04T10:00:00.000Z',
+    });
+    // The rest of who they are stays private.
+    const sent = JSON.stringify(data.vendor);
+    expect(sent).not.toContain('Okafor');
+    expect(sent).not.toContain('ngozi@example.com');
+    expect(sent).not.toContain('8012345678');
+  });
+
   it('shows a paused vendor as closed in the store list, whatever their hours', async () => {
     const shop = serviceFor(
       vendor({ isOpen: false, operatingHours: hours('22:00') }),
