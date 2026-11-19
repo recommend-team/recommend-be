@@ -13,6 +13,7 @@ export const CATEGORIES = {
   phoneAccessories: 'Phone Accessories',
   homeAppliances: 'Home Appliances',
   fashion: 'Fashion',
+  beauty: 'Beauty',
 } as const;
 
 const SYNONYMS: Record<string, string[]> = {
@@ -106,6 +107,8 @@ const SYNONYMS: Record<string, string[]> = {
     'zobo',
     'chapman',
     'smoothie',
+    // Food, not a cream for the skin.
+    'ice cream',
   ],
   [CATEGORIES.gadgets]: [
     'gadget',
@@ -217,10 +220,49 @@ const SYNONYMS: Record<string, string[]> = {
     'handbag',
     'cap',
     'hat',
-    'wig',
-    'wigs',
     'jewellery',
     'jewelry',
+  ],
+  // Hair is the big one in Nigeria: wigs, attachments and braids, sold by vendors who
+  // file themselves as "Hair", "Hair & Beauty" or "Salon" — all read as Beauty.
+  [CATEGORIES.beauty]: [
+    'beauty',
+    'cosmetic',
+    'cosmetics',
+    'salon',
+    'hair',
+    'wig',
+    'wigs',
+    'attachment',
+    'attachments',
+    'braid',
+    'braids',
+    // Not 'extension' or 'bundle' alone: in Nigeria those are a power extension box
+    // and a data bundle.
+    'hair extensions',
+    'weave',
+    'weaves',
+    'frontal',
+    'closure',
+    'makeup',
+    'make up',
+    'lipstick',
+    'lip gloss',
+    'foundation',
+    'skincare',
+    'skin care',
+    'cream',
+    'body cream',
+    'lotion',
+    'body lotion',
+    'nail',
+    'nails',
+    'lash',
+    'lashes',
+    'perfume',
+    'perfumes',
+    'body spray',
+    'fragrance',
   ],
 };
 
@@ -260,7 +302,7 @@ export function standardCategoriesOf(vendorCategory: string | null): string[] {
   return exact ? [exact] : categoriesFor(vendorCategory);
 }
 
-/** "food, gadgets, phone accessories, home appliances or fashion" — for asking. */
+/** "food, gadgets, phone accessories, home appliances, fashion or beauty" — for asking. */
 export function kindsList(): string {
   const kinds = Object.values(CATEGORIES).map((category) =>
     category === CATEGORIES.restaurant ? 'food' : category.toLowerCase(),
@@ -343,6 +385,13 @@ const BROAD: Record<string, string[]> = {
     'outfit',
     'attire',
   ],
+  [CATEGORIES.beauty]: [
+    'beauty',
+    'cosmetic',
+    'cosmetics',
+    'beauty products',
+    'beauty supplies',
+  ],
 };
 
 /** What a few of each kind are, for asking "what are you in the mood for?". */
@@ -352,6 +401,7 @@ const EXAMPLES: Record<string, string> = {
   [CATEGORIES.phoneAccessories]: 'a charger, earphones or a power bank',
   [CATEGORIES.homeAppliances]: 'a fridge, an AC or a blender',
   [CATEGORIES.fashion]: 'clothes, shoes, bags or caps',
+  [CATEGORIES.beauty]: 'hair, makeup, skincare or perfume',
 };
 
 /**

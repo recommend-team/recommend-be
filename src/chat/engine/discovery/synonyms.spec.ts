@@ -2,6 +2,7 @@ import {
   CATEGORIES,
   broadKindOf,
   categoriesFor,
+  kindsList,
   standardCategoriesOf,
 } from './synonyms';
 
@@ -113,6 +114,8 @@ describe('broadKindOf', () => {
     ['I want to buy clothes', CATEGORIES.fashion],
     ['do you have wears?', CATEGORIES.fashion],
     ['show me gadgets', CATEGORIES.gadgets],
+    ['any beauty vendors in Lekki?', CATEGORIES.beauty],
+    ['I need cosmetics', CATEGORIES.beauty],
   ])('reads "%s" as browsing for a kind', (text, kind) => {
     expect(broadKindOf(text)).toBe(kind);
   });
@@ -127,5 +130,40 @@ describe('broadKindOf', () => {
     'hello',
   ])('does not read "%s" as browsing', (text) => {
     expect(broadKindOf(text)).toBeNull();
+  });
+});
+
+describe('Beauty', () => {
+  it.each([
+    'hair',
+    'wigs',
+    'braids',
+    'attachment',
+    'hair extensions',
+    'lashes',
+    'perfume',
+    'body cream',
+    'makeup',
+  ])('reads "%s" as beauty', (text) => {
+    expect(categoriesFor(text)).toEqual([CATEGORIES.beauty]);
+  });
+
+  it('reads a vendor filed as hair or a salon as beauty', () => {
+    expect(standardCategoriesOf('Hair & Beauty')).toEqual([CATEGORIES.beauty]);
+    expect(standardCategoriesOf('Salon')).toEqual([CATEGORIES.beauty]);
+    expect(standardCategoriesOf('Wigs')).toEqual([CATEGORIES.beauty]);
+  });
+
+  it('leaves Nigerian words that only sound like beauty alone', () => {
+    // Ice cream is food; an extension is a power box; a bundle is data.
+    expect(categoriesFor('ice cream')).toEqual([CATEGORIES.restaurant]);
+    expect(categoriesFor('extension box')).toEqual([]);
+    expect(categoriesFor('data bundle')).toEqual([]);
+  });
+
+  it('lists beauty when asking what kind of thing they want', () => {
+    expect(kindsList()).toBe(
+      'food, gadgets, phone accessories, home appliances, fashion or beauty',
+    );
   });
 });
