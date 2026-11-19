@@ -77,6 +77,7 @@ describe('StoreService — open now, for buyers', () => {
         lastName: 'Okafor',
         email: 'ngozi@example.com',
         phoneNumber: '+2348012345678',
+        whatsappNumber: '+2348099998888',
         createdAt: new Date('2026-03-04T10:00:00.000Z'),
       }),
     );
@@ -87,11 +88,14 @@ describe('StoreService — open now, for buyers', () => {
       ownerFirstName: 'Ngozi',
       memberSince: '2026-03-04T10:00:00.000Z',
     });
-    // The rest of who they are stays private.
+    // The rest of who they are stays private, and buyers reach them only through
+    // Recommend — no phone or WhatsApp to go round it.
     const sent = JSON.stringify(data.vendor);
     expect(sent).not.toContain('Okafor');
     expect(sent).not.toContain('ngozi@example.com');
     expect(sent).not.toContain('8012345678');
+    expect(sent).not.toContain('8099998888');
+    expect(data.vendor).not.toHaveProperty('whatsappNumber');
   });
 
   it('shows a paused vendor as closed in the store list, whatever their hours', async () => {

@@ -18,10 +18,10 @@ export interface StorefrontResponse {
     serviceAreas: { id: string; name: string }[];
     businessLogoUrl: string | null;
     businessBannerUrl: string | null;
-    whatsappNumber: string | null;
     /**
-     * The owner's first name — "Run by Ngozi". A face behind the shop is what makes a
-     * buyer message them; the surname, phone and email stay private.
+     * The owner's first name — "Run by Ngozi". A face behind the shop, without a way
+     * round Recommend: no surname, phone, WhatsApp or email is sent. Buyers reach a
+     * vendor only through Recommend.
      */
     ownerFirstName: string | null;
     /** When they joined Recommend (ISO) — "Selling on Recommend since March 2026". */
@@ -182,7 +182,6 @@ export class StoreService {
           })),
           businessLogoUrl: vendor.businessLogoUrl,
           businessBannerUrl: vendor.businessBannerUrl,
-          whatsappNumber: vendor.whatsappNumber,
           ownerFirstName: vendor.firstName?.trim() || null,
           memberSince: vendor.createdAt?.toISOString() ?? null,
           ...openForBuyers(vendor, now),
