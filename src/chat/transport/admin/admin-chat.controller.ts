@@ -1,11 +1,14 @@
 import {
   Body,
+  BadRequestException,
   ConflictException,
   Controller,
   Delete,
+  ForbiddenException,
   Get,
   HttpCode,
   HttpStatus,
+  Inject,
   NotFoundException,
   Param,
   ParseUUIDPipe,
@@ -24,6 +27,7 @@ import {
 import { z } from 'zod';
 import { cartLineSchema, type CartLineInput } from '../cart-line.schema';
 import { HandoverService } from '../../engine/handover.service';
+import { HandlingLogService } from '../../engine/handling-log.service';
 import { AdminOrderService } from '../../engine/admin-order.service';
 import { AdminCatalogService } from '../../engine/admin-catalog.service';
 import {
@@ -34,6 +38,8 @@ import { CurrentUser } from '../../../modules/auth/decorators/current-user.decor
 import { Roles } from '../../../modules/auth/decorators/roles.decorator';
 import { Role } from '../../../common/enums/roles.enum';
 import { ZodValidationPipe } from '../../../common/pipes/zod-validation.pipes';
+import { IDENTITY_PORT } from '../../ports/identity.port';
+import type { IdentityPort } from '../../ports/identity.port';
 
 const messageSchema = z.object({
   text: z.string().min(1, 'Say something').max(2000),
@@ -88,6 +94,10 @@ const deleteSchema = z.object({
     .max(100, 'At most 100 at a time'),
 });
 
+const reassignSchema = z.object({
+  adminId: z.string().uuid('adminId must be a valid UUID'),
+});
+
 const areaSchema = z.object({
   areaId: z.string().uuid('areaId must be a valid UUID'),
 });
@@ -98,6 +108,10 @@ class AdminMessageDto {
 
 class DeleteConversationsDto {
   ids!: string[];
+}
+
+class ReassignDto {
+  adminId!: string;
 }
 
 class AdminAreaDto {
@@ -123,22 +137,27 @@ class AdminOrderDto {
 @ApiTags('Admin — chat')
 @ApiBearerAuth()
 @Controller('admin/conversations')
-@Roles(Role.ADMIN)
+// Customer service answer buyers here; admins inherit it. Deleting and restoring stay
+// with admins (`@Roles(Role.ADMIN)` on those routes).
+@Roles(Role.SUPPORT)
 export class AdminChatController {
   constructor(
     private readonly handover: HandoverService,
     private readonly conversations: ConversationService,
     private readonly adminOrders: AdminOrderService,
     private readonly adminCatalog: AdminCatalogService,
+    @Inject(IDENTITY_PORT) private readonly identity: IdentityPort,
+    private readonly handlingLog: HandlingLogService,
   ) {}
 
   @Get()
   @ApiOperation({
-    summary: 'The queue',
+    summary: 'The inbox, or the queue',
     description:
-      'Conversations the assistant is struggling with come first, oldest-flagged at the ' +
-      'top — the buyer stuck longest is the one closest to leaving. Everything else ' +
-      'follows by recency, so the same screen still works for looking something up.',
+      'Every conversation, most recent activity first. With `needingAttention=true`, ' +
+      'only those waiting for a person, the longest-waiting first — the buyer stuck ' +
+      'longest is the one closest to leaving. `heldByName` says which colleague has ' +
+      'each chat; `waitingSince` when the buyer started waiting for a person.',
   })
   @ApiQuery({
     name: 'search',
@@ -157,12 +176,18 @@ export class AdminChatController {
   @ApiQuery({ name: 'limit', required: false })
   @ApiResponse({ status: 200, description: 'Conversations' })
   async list(
+    @CurrentUser() staff: { role: Role },
     @Query('search') search?: string,
     @Query('needingAttention') needingAttention?: string,
     @Query('page') page?: string,
     @Query('limit') limit?: string,
     @Query('deleted') deleted?: string,
   ) {
+    // Deleted chats are an admin's to look through and restore.
+    if (deleted === 'true' && staff.role === Role.SUPPORT) {
+      throw new ForbiddenException('Only admins can see deleted conversations');
+    }
+
     const data = await this.conversations.listForAdmin({
       search,
       needingAttention: needingAttention === 'true',
@@ -170,11 +195,26 @@ export class AdminChatController {
       page: page ? parseInt(page, 10) : undefined,
       limit: limit ? parseInt(limit, 10) : undefined,
     });
+    const names = await this.staffNames(
+      data.items.map((item) => item.heldByAdminId),
+    );
 
-    return { message: 'Conversations retrieved successfully', data };
+    return {
+      message: 'Conversations retrieved successfully',
+      data: {
+        ...data,
+        items: data.items.map((item) => ({
+          ...item,
+          heldByName: nameOf(names, item.heldByAdminId),
+          waitingSince:
+            item.handoverRequestedAt ?? item.needsAttentionAt ?? null,
+        })),
+      },
+    };
   }
 
   @Post('delete')
+  @Roles(Role.ADMIN)
   @HttpCode(200)
   @ApiOperation({
     summary: 'Delete conversations',
@@ -204,6 +244,7 @@ export class AdminChatController {
   }
 
   @Delete(':id')
+  @Roles(Role.ADMIN)
   @ApiOperation({ summary: 'Delete one conversation (soft)' })
   @ApiParam({ name: 'id', description: 'Conversation id' })
   @ApiResponse({ status: 200, description: 'Deleted' })
@@ -224,6 +265,7 @@ export class AdminChatController {
   }
 
   @Post(':id/restore')
+  @Roles(Role.ADMIN)
   @HttpCode(200)
   @ApiOperation({ summary: 'Bring back a deleted conversation' })
   @ApiParam({ name: 'id', description: 'Conversation id' })
@@ -242,13 +284,17 @@ export class AdminChatController {
   @ApiOperation({
     summary: 'The whole conversation',
     description:
-      'Oldest first, as it would read on the buyer’s screen. `adminId` on a message says ' +
-      'which person typed it — the buyer saw all of them as the assistant.',
+      'Oldest first, as it would read on the buyer’s screen. `adminId` and `adminName` ' +
+      'on a message say which colleague typed it — the buyer saw all of them as the ' +
+      'assistant.',
   })
   @ApiParam({ name: 'id', description: 'Conversation id' })
   @ApiResponse({ status: 200, description: 'Transcript' })
   @ApiResponse({ status: 404, description: 'No such conversation' })
-  async transcript(@Param('id', ParseUUIDPipe) id: string) {
+  async transcript(
+    @CurrentUser() staff: { role: Role },
+    @Param('id', ParseUUIDPipe) id: string,
+  ) {
     // Deleted ones open too, read-only in the panel, so an admin can check before
     // bringing one back.
     const found = await this.conversations.findByIdIncludingDeleted(id);
@@ -260,12 +306,21 @@ export class AdminChatController {
     const messages = await this.conversations.getHistory(conversation.id, {
       limit: 200,
     });
+    // A deleted chat is an admin's to open, like the deleted list.
+    if (conversation.deletedAt && staff.role === Role.SUPPORT) {
+      throw new NotFoundException('Conversation not found');
+    }
     const emails = await this.conversations.verifiedEmails([conversation]);
+    const names = await this.staffNames([
+      conversation.heldByAdminId,
+      ...messages.map((message) => message.adminId),
+    ]);
 
     return {
       message: 'Conversation retrieved successfully',
       data: {
         ...present(conversation),
+        heldByName: nameOf(names, conversation.heldByAdminId),
         channel: conversation.channel,
         buyerName: conversation.context?.profile?.name ?? null,
         buyerPhone: conversation.context?.profile?.phone ?? null,
@@ -282,6 +337,7 @@ export class AdminChatController {
           direction: message.direction,
           author: message.author,
           adminId: message.adminId,
+          adminName: nameOf(names, message.adminId),
           text: message.text,
           payload: message.payload,
           createdAt: message.createdAt,
@@ -297,20 +353,36 @@ export class AdminChatController {
     description:
       'The assistant stops replying immediately. Buyer messages are still recorded — ' +
       'they are simply left for you. The buyer is not told, and your replies reach them ' +
-      'looking exactly like the assistant’s.',
+      'looking exactly like the assistant’s. First come, first served: a colleague who ' +
+      'already has it keeps it.',
   })
   @ApiParam({ name: 'id', description: 'Conversation id' })
   @ApiResponse({ status: 200, description: 'Held by you' })
-  @ApiResponse({ status: 409, description: 'Another admin already holds it' })
+  @ApiResponse({ status: 409, description: 'A colleague already has it' })
   async take(
     @CurrentUser() admin: { id: string },
     @Param('id', ParseUUIDPipe) id: string,
   ) {
-    const conversation = await this.handover.take(id, admin.id);
-    return {
-      message: 'You are now answering this conversation',
-      data: present(conversation),
-    };
+    try {
+      const conversation = await this.handover.take(id, admin.id);
+      return {
+        message: 'You are now answering this conversation',
+        data: present(conversation),
+      };
+    } catch (error) {
+      // Say who, so the agent knows to leave it rather than wonder.
+      if (error instanceof ConflictException) {
+        const holder = await this.conversations.findById(id);
+        const names = await this.staffNames([holder?.heldByAdminId]);
+        const name = nameOf(names, holder?.heldByAdminId);
+        if (name) {
+          throw new ConflictException(
+            `${name} is already answering this conversation.`,
+          );
+        }
+      }
+      throw error;
+    }
   }
 
   @Post(':id/release')
@@ -321,19 +393,97 @@ export class AdminChatController {
       'Sends nothing. The assistant answers the next thing the buyer says, and stays ' +
       'quiet if the conversation is over. Any checkout in progress is reset to browsing ' +
       '— the buyer’s cart is in their own browser and is not lost, and a payment already ' +
-      'started still confirms.',
+      'started still confirms. Customer service hand back their own chats; an admin can ' +
+      'hand back anyone’s — for a chat left with an agent who has gone.',
   })
   @ApiParam({ name: 'id', description: 'Conversation id' })
   @ApiResponse({ status: 200, description: 'Back with the assistant' })
   @ApiResponse({ status: 409, description: 'Held by another admin' })
   async release(
-    @CurrentUser() admin: { id: string },
+    @CurrentUser() staff: { id: string; role: Role },
     @Param('id', ParseUUIDPipe) id: string,
   ) {
-    const conversation = await this.handover.release(id, admin.id);
+    const conversation = await this.handover.release(id, staff.id, {
+      override: staff.role !== Role.SUPPORT,
+    });
     return {
       message: 'Handed back to the assistant',
       data: present(conversation),
+    };
+  }
+
+  @Post(':id/reassign')
+  @Roles(Role.ADMIN)
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    summary: 'Pass a chat to a colleague',
+    description:
+      'For a chat stuck with someone away or overloaded. Only a chat being answered — ' +
+      'one in the queue is for whoever takes it. The colleague is alerted; the buyer ' +
+      'sees nothing change.',
+  })
+  @ApiParam({ name: 'id', description: 'Conversation id' })
+  @ApiBody({ type: ReassignDto })
+  @ApiResponse({ status: 200, description: 'Passed on' })
+  @ApiResponse({
+    status: 400,
+    description: 'Nobody has it, they already have it, or they cannot sign in',
+  })
+  async reassign(
+    @CurrentUser() admin: { id: string },
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body(new ZodValidationPipe(reassignSchema)) dto: ReassignDto,
+  ) {
+    const colleague = await this.identity.staffMember(dto.adminId);
+    if (!colleague) {
+      throw new BadRequestException(
+        'That person is not an active admin or customer service agent.',
+      );
+    }
+    const conversation = await this.handover.reassign(
+      id,
+      colleague.id,
+      admin.id,
+    );
+    return {
+      message: `Passed to ${colleague.name}`,
+      data: { ...present(conversation), heldByName: colleague.name },
+    };
+  }
+
+  @Get(':id/history')
+  @ApiOperation({
+    summary: 'Who has answered this chat',
+    description:
+      'Each spell of someone holding it, first to last: when they took it, how long the ' +
+      'buyer had waited, their first reply, and how it ended — handed back, passed on, ' +
+      'or released for going quiet.',
+  })
+  @ApiParam({ name: 'id', description: 'Conversation id' })
+  @ApiResponse({ status: 200, description: 'History' })
+  async history(@Param('id', ParseUUIDPipe) id: string) {
+    const spells = await this.handlingLog.history(id);
+    const names = await this.staffNames(
+      spells.flatMap((spell) => [
+        spell.adminId,
+        spell.assignedByAdminId,
+        spell.endedByAdminId,
+      ]),
+    );
+    return {
+      message: 'History retrieved successfully',
+      data: spells.map((spell) => ({
+        id: spell.id,
+        adminId: spell.adminId,
+        adminName: nameOf(names, spell.adminId),
+        waitingSince: spell.waitingSince,
+        takenAt: spell.takenAt,
+        firstReplyAt: spell.firstReplyAt,
+        assignedByName: nameOf(names, spell.assignedByAdminId),
+        endedAt: spell.endedAt,
+        endReason: spell.endReason,
+        endedByName: nameOf(names, spell.endedByAdminId),
+      })),
     };
   }
 
@@ -564,6 +714,22 @@ export class AdminChatController {
   ) {
     await this.handover.setTyping(id, admin.id, dto.isTyping);
   }
+
+  /** Names never cost an answer: without them, the list still loads. */
+  private staffNames(
+    ids: (string | null | undefined)[],
+  ): Promise<Map<string, string>> {
+    return this.identity
+      .staffNames(ids.filter((id): id is string => Boolean(id)))
+      .catch(() => new Map<string, string>());
+  }
+}
+
+function nameOf(
+  names: Map<string, string>,
+  adminId: string | null | undefined,
+): string | null {
+  return adminId ? (names.get(adminId) ?? null) : null;
 }
 
 function present(conversation: {

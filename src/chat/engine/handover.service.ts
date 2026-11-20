@@ -1,8 +1,10 @@
 import {
+  BadRequestException,
   ConflictException,
   Injectable,
   Logger,
   NotFoundException,
+  Optional,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { ConfigService } from '@nestjs/config';
@@ -17,11 +19,19 @@ import { OutboundMessage } from '../transport/channel.interface';
 import { ConversationState } from '../enums/chat.enums';
 import { EventEmitter2 } from '@nestjs/event-emitter';
 import {
+  CONVERSATION_ASSIGNED_EVENT,
   CONVERSATION_HANDED_OVER_EVENT,
+  ConversationAssignedEvent,
   ConversationHandedOverEvent,
   HELD_CONVERSATION_MESSAGE_EVENT,
   HeldConversationMessageEvent,
 } from '../../common/events/admin-alert.events';
+import { HandlingLogService } from './handling-log.service';
+import { HandlingEndReason } from '../conversation/entities/conversation-handling.entity';
+import {
+  CONVERSATION_HOLDER_CHANGED_EVENT,
+  ConversationHolderChangedEvent,
+} from '../transport/admin/admin-chat.events';
 
 @Injectable()
 export class HandoverService {
@@ -35,6 +45,9 @@ export class HandoverService {
     private readonly config: ConfigService,
     private readonly events: EventEmitter2,
     private readonly buyerPush: BuyerPushService,
+    // Who answered what, for the history and the team's figures. Optional: the hold
+    // itself never depends on it.
+    @Optional() private readonly handlingLog?: HandlingLogService,
   ) {}
 
   /**
@@ -226,6 +239,11 @@ export class HandoverService {
     }
 
     const now = new Date();
+    // Read before the update below changes them: how long the buyer had been waiting,
+    // and whether this is a fresh take or a refresh of their own.
+    const waitingSince =
+      conversation.handoverRequestedAt ?? conversation.needsAttentionAt ?? null;
+    const alreadyTheirs = conversation.heldByAdminId === adminId;
     await this.conversations.update(
       { id: conversationId },
       {
@@ -256,32 +274,115 @@ export class HandoverService {
       });
     }
 
+    if (!alreadyTheirs) {
+      await this.handlingLog?.started(conversationId, adminId, {
+        waitingSince,
+      });
+    }
+
     this.logger.log(`Admin ${adminId} took conversation ${conversationId}`);
+    this.announceHolder(conversationId, adminId);
     return this.load(conversationId);
   }
 
   /**
    * Give it back to the assistant.
+   *
+   * Your own, always. Someone else's only with `override` — an admin freeing a chat an
+   * agent took and left, so the buyer is not stuck waiting on someone who has gone.
    */
   async release(
     conversationId: string,
     adminId: string,
+    options: { override?: boolean } = {},
   ): Promise<Conversation> {
     const conversation = await this.load(conversationId);
 
     if (!conversation.heldByAdminId) return conversation;
 
-    if (conversation.heldByAdminId !== adminId) {
+    const someoneElses = conversation.heldByAdminId !== adminId;
+    if (someoneElses && !options.override) {
       throw new ConflictException(
         'That conversation is held by another admin.',
       );
     }
 
-    await this.clearHold(conversationId, conversation.state);
+    await this.clearHold(
+      conversationId,
+      conversation.state,
+      someoneElses
+        ? { reason: HandlingEndReason.RELEASED_BY_ADMIN, by: adminId }
+        : { reason: HandlingEndReason.RELEASED },
+    );
 
     this.logger.log(
-      `Admin ${adminId} released conversation ${conversationId} back to the assistant`,
+      someoneElses
+        ? `Admin ${adminId} released conversation ${conversationId} from ${conversation.heldByAdminId}`
+        : `Admin ${adminId} released conversation ${conversationId} back to the assistant`,
     );
+    return this.load(conversationId);
+  }
+
+  /**
+   * Pass a chat someone has to a colleague — an admin's call, for a chat stuck with an
+   * agent who is away or overloaded. Only a chat that is being answered: one waiting in
+   * the queue is for whoever picks it up.
+   *
+   * The new holder is told; the buyer is not — it is all Recommend to them.
+   */
+  async reassign(
+    conversationId: string,
+    toAdminId: string,
+    byAdminId: string,
+  ): Promise<Conversation> {
+    const conversation = await this.load(conversationId);
+
+    if (!conversation.heldByAdminId) {
+      throw new BadRequestException(
+        'Nobody is answering this conversation — it is in the queue for anyone to take.',
+      );
+    }
+    if (conversation.heldByAdminId === toAdminId) {
+      throw new BadRequestException('They already have this conversation.');
+    }
+
+    const previousHolder = conversation.heldByAdminId;
+    const now = new Date();
+    await this.conversations.update(
+      { id: conversationId },
+      { heldByAdminId: toAdminId, heldAt: now, lastAdminMessageAt: now },
+    );
+    await this.handlingLog?.ended(
+      conversationId,
+      HandlingEndReason.REASSIGNED,
+      byAdminId,
+    );
+    await this.handlingLog?.started(conversationId, toAdminId, {
+      waitingSince: null,
+      assignedByAdminId: byAdminId,
+    });
+
+    try {
+      this.events.emit(
+        CONVERSATION_ASSIGNED_EVENT,
+        new ConversationAssignedEvent(
+          conversationId,
+          toAdminId,
+          conversation.context?.profile?.name ?? null,
+        ),
+      );
+    } catch (error) {
+      this.logger.error(
+        `Failed to tell ${toAdminId} about conversation ${conversationId}: ${
+          error instanceof Error ? error.message : 'unknown error'
+        }`,
+      );
+    }
+
+    this.logger.log(
+      `Admin ${byAdminId} passed conversation ${conversationId} from ${previousHolder} to ${toAdminId}`,
+    );
+    this.announceHolder(conversationId, toAdminId);
     return this.load(conversationId);
   }
 
@@ -311,6 +412,7 @@ export class HandoverService {
       adminId,
       payload,
     });
+    await this.handlingLog?.replied(conversationId, adminId);
 
     await this.conversations.update(
       { id: conversationId },
@@ -382,7 +484,9 @@ export class HandoverService {
 
     if (idleMinutes < minutes) return true;
 
-    await this.clearHold(conversation.id, conversation.state);
+    await this.clearHold(conversation.id, conversation.state, {
+      reason: HandlingEndReason.IDLE,
+    });
     conversation.heldByAdminId = null;
     conversation.state = ConversationState.DISCOVERY;
 
@@ -397,6 +501,7 @@ export class HandoverService {
   private async clearHold(
     conversationId: string,
     state: ConversationState,
+    ending: { reason: HandlingEndReason; by?: string },
   ): Promise<void> {
     await this.conversations.update(
       { id: conversationId },
@@ -411,6 +516,28 @@ export class HandoverService {
           : { state: ConversationState.DISCOVERY }),
       },
     );
+    await this.handlingLog?.ended(
+      conversationId,
+      ending.reason,
+      ending.by ?? null,
+    );
+    this.announceHolder(conversationId, null);
+  }
+
+  /** Tell every agent's list who has this chat now. Never fails the change itself. */
+  private announceHolder(conversationId: string, adminId: string | null): void {
+    try {
+      this.events.emit(
+        CONVERSATION_HOLDER_CHANGED_EVENT,
+        new ConversationHolderChangedEvent(conversationId, adminId),
+      );
+    } catch (error) {
+      this.logger.error(
+        `Failed to announce who holds ${conversationId}: ${
+          error instanceof Error ? error.message : 'unknown error'
+        }`,
+      );
+    }
   }
 
   private async load(conversationId: string): Promise<Conversation> {

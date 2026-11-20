@@ -308,6 +308,16 @@ export class ConversationService {
         .withDeleted()
         .andWhere('c."deletedAt" IS NOT NULL')
         .orderBy('c."deletedAt"', 'DESC');
+    } else if (query.needingAttention) {
+      // The queue agents pick from: the buyer waiting longest first, so a shared queue
+      // is not worked from the easy end while the hard chats sit.
+      builder
+        .orderBy(
+          'COALESCE(c."handoverRequestedAt", c."needsAttentionAt")',
+          'ASC',
+          'NULLS LAST',
+        )
+        .addOrderBy('c."createdAt"', 'ASC');
     } else {
       builder
         .orderBy('c."lastMessageAt"', 'DESC', 'NULLS LAST')

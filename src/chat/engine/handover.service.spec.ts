@@ -2,8 +2,13 @@ import { BuyerPushService } from './buyer-push.service';
 import { Test, TestingModule } from '@nestjs/testing';
 import { ConfigService } from '@nestjs/config';
 import { getRepositoryToken } from '@nestjs/typeorm';
-import { ConflictException, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  ConflictException,
+  NotFoundException,
+} from '@nestjs/common';
 import { HandoverService, TEAM_IS_BUSY } from './handover.service';
+import { HandlingLogService } from './handling-log.service';
 import { Conversation } from '../conversation/entities/conversation.entity';
 import { ConversationService } from '../conversation/conversation.service';
 import { ChannelRegistry } from '../transport/channel.registry';
@@ -22,6 +27,17 @@ const minutesAgo = (n: number) => new Date(Date.now() - n * 60_000);
 
 const buyerPush = { notify: jest.fn() };
 beforeEach(() => buyerPush.notify.mockClear());
+
+const handlingLog = {
+  started: jest.fn(),
+  replied: jest.fn(),
+  ended: jest.fn(),
+};
+beforeEach(() => {
+  handlingLog.started.mockReset();
+  handlingLog.replied.mockReset();
+  handlingLog.ended.mockReset();
+});
 
 describe('HandoverService', () => {
   let service: HandoverService;
@@ -139,10 +155,119 @@ describe('HandoverService', () => {
           provide: EventEmitter2,
           useValue: events,
         },
+        { provide: HandlingLogService, useValue: handlingLog },
       ],
     }).compile();
 
     service = module.get(HandoverService);
+  });
+
+  describe('the record of who answered', () => {
+    it('opens a spell when someone takes it, with how long the buyer had waited', async () => {
+      const waiting = minutesAgo(6);
+      row = conversation({ handoverRequestedAt: waiting });
+
+      await service.take('c1', 'agent-1');
+
+      expect(handlingLog.started).toHaveBeenCalledWith('c1', 'agent-1', {
+        waitingSince: waiting,
+      });
+    });
+
+    it('does not start a second spell when they re-take their own', async () => {
+      row = conversation({ heldByAdminId: 'agent-1', heldAt: minutesAgo(2) });
+
+      await service.take('c1', 'agent-1');
+
+      expect(handlingLog.started).not.toHaveBeenCalled();
+    });
+
+    it('notes their first reply', async () => {
+      row = conversation({ heldByAdminId: 'agent-1', heldAt: new Date() });
+
+      await service.send('c1', 'agent-1', 'Hello, I can help.');
+
+      expect(handlingLog.replied).toHaveBeenCalledWith('c1', 'agent-1');
+    });
+
+    it('closes the spell when they hand it back', async () => {
+      row = conversation({ heldByAdminId: 'agent-1', heldAt: new Date() });
+
+      await service.release('c1', 'agent-1');
+
+      expect(handlingLog.ended).toHaveBeenCalledWith('c1', 'RELEASED', null);
+    });
+
+    it('says when a hold ended because they went quiet', async () => {
+      row = conversation({
+        heldByAdminId: 'agent-1',
+        heldAt: minutesAgo(STALE_MINUTES + 5),
+        lastAdminMessageAt: minutesAgo(STALE_MINUTES + 5),
+      });
+
+      await service.shouldStaySilent(row);
+
+      expect(handlingLog.ended).toHaveBeenCalledWith('c1', 'IDLE', null);
+    });
+  });
+
+  describe('an admin stepping in on a stuck chat', () => {
+    beforeEach(() => {
+      row = conversation({ heldByAdminId: 'agent-1', heldAt: minutesAgo(40) });
+    });
+
+    it('lets an admin hand back a colleague’s chat, and says who did', async () => {
+      await service.release('c1', 'admin-9', { override: true });
+
+      expect(row.heldByAdminId).toBeNull();
+      expect(handlingLog.ended).toHaveBeenCalledWith(
+        'c1',
+        'RELEASED_BY_ADMIN',
+        'admin-9',
+      );
+    });
+
+    it('still refuses without the override — customer service release only their own', async () => {
+      await expect(service.release('c1', 'agent-2')).rejects.toBeInstanceOf(
+        ConflictException,
+      );
+      expect(row.heldByAdminId).toBe('agent-1');
+    });
+
+    it('passes it to a colleague, who is told', async () => {
+      events.emit.mockClear();
+
+      await service.reassign('c1', 'agent-2', 'admin-9');
+
+      expect(row.heldByAdminId).toBe('agent-2');
+      expect(handlingLog.ended).toHaveBeenCalledWith(
+        'c1',
+        'REASSIGNED',
+        'admin-9',
+      );
+      expect(handlingLog.started).toHaveBeenCalledWith('c1', 'agent-2', {
+        waitingSince: null,
+        assignedByAdminId: 'admin-9',
+      });
+      expect(events.emit).toHaveBeenCalledWith(
+        'conversation.assigned',
+        expect.objectContaining({ conversationId: 'c1', adminId: 'agent-2' }),
+      );
+    });
+
+    it('will not assign a chat nobody has — the queue is for whoever takes it', async () => {
+      row = conversation();
+
+      await expect(
+        service.reassign('c1', 'agent-2', 'admin-9'),
+      ).rejects.toBeInstanceOf(BadRequestException);
+    });
+
+    it('will not pass it to the person who already has it', async () => {
+      await expect(
+        service.reassign('c1', 'agent-1', 'admin-9'),
+      ).rejects.toBeInstanceOf(BadRequestException);
+    });
   });
 
   describe('taking a conversation', () => {

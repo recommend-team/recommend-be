@@ -35,6 +35,18 @@ export class HeldConversationMessageEvent {
   ) {}
 }
 
+/** An admin passed a chat to a colleague, who is now the one the buyer is waiting on. */
+export const CONVERSATION_ASSIGNED_EVENT = 'conversation.assigned';
+
+export class ConversationAssignedEvent {
+  constructor(
+    readonly conversationId: string,
+    /** Who has it now. */
+    readonly adminId: string,
+    readonly buyerName: string | null,
+  ) {}
+}
+
 /**
  * The assistant handed a buyer to a teammate and has gone quiet. The most urgent thing an
  * admin can hear: someone is waiting on a person, and the clock is running.
@@ -55,10 +67,22 @@ export type AdminAlertKind =
   | 'CONVERSATION_HANDED_OVER'
   | 'CONVERSATION_FLAGGED'
   | 'HELD_CONVERSATION_MESSAGE'
+  | 'CONVERSATION_ASSIGNED'
   | 'NEW_PAID_ORDER'
   | 'VENDOR_ORDER_READY'
   | 'WITHDRAWAL_FAILED'
   | 'DELIVERY_STUCK';
+
+/**
+ * The alerts customer service receive as well as admins: the chat queue. Orders, payouts
+ * and deliveries stay with admins — an agent's bell rings only for buyers waiting.
+ */
+export const STAFF_ALERT_KINDS: readonly AdminAlertKind[] = [
+  'CONVERSATION_HANDED_OVER',
+  'CONVERSATION_FLAGGED',
+  'HELD_CONVERSATION_MESSAGE',
+  'CONVERSATION_ASSIGNED',
+];
 
 /**
  * One alert, ready to send. Carries its own id so a panel that hears it twice — over the

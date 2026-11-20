@@ -6,7 +6,7 @@ import {
   MessageBody,
   OnGatewayConnection,
 } from '@nestjs/websockets';
-import { Logger } from '@nestjs/common';
+import { Inject, Logger } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import { ConfigService } from '@nestjs/config';
 import { OnEvent } from '@nestjs/event-emitter';
@@ -15,15 +15,22 @@ import { allowedOrigins } from '../../../config/cors';
 import { Role } from '../../../common/enums/roles.enum';
 import {
   CHAT_MESSAGE_RECORDED_EVENT,
+  CONVERSATION_HOLDER_CHANGED_EVENT,
   ChatMessageRecordedEvent,
+  ConversationHolderChangedEvent,
 } from './admin-chat.events';
 import {
   ADMIN_ALERT_EVENT,
   AdminAlertEvent,
+  STAFF_ALERT_KINDS,
 } from '../../../common/events/admin-alert.events';
+import { IDENTITY_PORT } from '../../ports/identity.port';
+import type { IdentityPort } from '../../ports/identity.port';
 
 interface AdminSocketData {
-  adminId: string;
+  adminId?: string;
+  /** Settles once the account behind the token has been checked: true if let in. */
+  admitted?: Promise<boolean>;
 }
 
 /**
@@ -46,15 +53,26 @@ export class AdminChatGateway implements OnGatewayConnection {
   constructor(
     private readonly jwt: JwtService,
     private readonly config: ConfigService,
+    @Inject(IDENTITY_PORT) private readonly identity: IdentityPort,
   ) {}
 
   /**
-   * A socket with no valid admin token is closed rather than ignored.
+   * A socket with no valid staff token is closed rather than ignored.
    *
    * Silently accepting it would leave an admin staring at a screen that never updates,
-   * with nothing anywhere saying why.
+   * with nothing anywhere saying why. The role is read from the account, not the token:
+   * a token lasts days, and someone demoted to customer service or suspended since must
+   * not keep hearing what they no longer may.
    */
-  handleConnection(socket: Socket): void {
+  async handleConnection(socket: Socket): Promise<void> {
+    // Kept, so a watch sent the moment the socket opens waits for the account check
+    // instead of arriving before it and being dropped.
+    const admitted = this.admit(socket);
+    (socket.data as AdminSocketData).admitted = admitted;
+    await admitted;
+  }
+
+  private async admit(socket: Socket): Promise<boolean> {
     const token =
       (socket.handshake.auth?.token as string | undefined) ??
       socket.handshake.headers.authorization?.replace(/^Bearer\s+/i, '');
@@ -62,29 +80,36 @@ export class AdminChatGateway implements OnGatewayConnection {
     if (!token) {
       socket.emit('admin:error', { message: 'A token is required' });
       socket.disconnect(true);
-      return;
+      return false;
     }
 
+    let subject: string;
     try {
       const payload = this.jwt.verify<{ sub: string; role?: Role }>(token, {
         secret: this.config.get<string>('jwt.secret'),
       });
-
-      if (payload.role !== Role.ADMIN && payload.role !== Role.SUPER_ADMIN) {
-        socket.emit('admin:error', { message: 'Admins only' });
-        socket.disconnect(true);
-        return;
-      }
-
-      (socket.data as AdminSocketData).adminId = payload.sub;
-
-      // Alerts: one room every admin is in, and one per admin for what is theirs alone.
-      void socket.join(ALL_ADMINS);
-      void socket.join(adminRoom(payload.sub));
+      subject = payload.sub;
     } catch {
       socket.emit('admin:error', { message: 'That token is not valid' });
       socket.disconnect(true);
+      return false;
     }
+
+    const staff = await this.identity.staffMember(subject).catch(() => null);
+    if (!staff) {
+      socket.emit('admin:error', { message: 'Staff only' });
+      socket.disconnect(true);
+      return false;
+    }
+
+    (socket.data as AdminSocketData).adminId = staff.id;
+
+    // Alerts: one room for all staff (the chat queue), one for admins (orders, payouts,
+    // deliveries), and one per person for what is theirs alone.
+    void socket.join(ALL_STAFF);
+    if (staff.role !== Role.SUPPORT) void socket.join(ALL_ADMINS);
+    void socket.join(adminRoom(staff.id));
+    return true;
   }
 
   /**
@@ -95,12 +120,13 @@ export class AdminChatGateway implements OnGatewayConnection {
    * so leaving is symmetrical.
    */
   @SubscribeMessage('admin:watch')
-  watch(
+  async watch(
     @ConnectedSocket() socket: Socket,
     @MessageBody() data: { conversationId?: string },
-  ): void {
+  ): Promise<void> {
+    const admitted = await (socket.data as AdminSocketData).admitted;
     const adminId = (socket.data as AdminSocketData).adminId;
-    if (!adminId || !data?.conversationId) return;
+    if (!admitted || !adminId || !data?.conversationId) return;
 
     void socket.join(room(data.conversationId));
     this.logger.debug(
@@ -125,8 +151,14 @@ export class AdminChatGateway implements OnGatewayConnection {
    * second admin's window stays correct too.
    */
   @OnEvent(CHAT_MESSAGE_RECORDED_EVENT)
-  onMessageRecorded(event: ChatMessageRecordedEvent): void {
+  async onMessageRecorded(event: ChatMessageRecordedEvent): Promise<void> {
     const { message } = event;
+    // Which colleague typed it, so a second agent watching sees a name, not "you".
+    const names = message.adminId
+      ? await this.identity
+          .staffNames([message.adminId])
+          .catch(() => new Map<string, string>())
+      : new Map<string, string>();
 
     this.server?.to(room(message.conversationId)).emit('admin:message', {
       id: message.id,
@@ -134,6 +166,7 @@ export class AdminChatGateway implements OnGatewayConnection {
       direction: message.direction,
       author: message.author,
       adminId: message.adminId,
+      adminName: message.adminId ? (names.get(message.adminId) ?? null) : null,
       text: message.text,
       payload: message.payload,
       createdAt: message.createdAt,
@@ -142,7 +175,11 @@ export class AdminChatGateway implements OnGatewayConnection {
 
   @OnEvent(ADMIN_ALERT_EVENT)
   onAdminAlert(alert: AdminAlertEvent): void {
-    const target = alert.adminId ? adminRoom(alert.adminId) : ALL_ADMINS;
+    const target = alert.adminId
+      ? adminRoom(alert.adminId)
+      : STAFF_ALERT_KINDS.includes(alert.kind)
+        ? ALL_STAFF
+        : ALL_ADMINS;
 
     this.server?.to(target).emit('admin:alert', {
       id: alert.id,
@@ -153,8 +190,32 @@ export class AdminChatGateway implements OnGatewayConnection {
       createdAt: alert.createdAt,
     });
   }
+
+  /**
+   * Who has a chat now, to every agent's list — so nobody opens one a colleague has just
+   * taken, and a chat handed back shows as free straight away.
+   */
+  @OnEvent(CONVERSATION_HOLDER_CHANGED_EVENT)
+  async onHolderChanged(event: ConversationHolderChangedEvent): Promise<void> {
+    const names = event.heldByAdminId
+      ? await this.identity
+          .staffNames([event.heldByAdminId])
+          .catch(() => new Map<string, string>())
+      : new Map<string, string>();
+
+    this.server?.to(ALL_STAFF).emit('admin:conversation', {
+      conversationId: event.conversationId,
+      heldByAdminId: event.heldByAdminId,
+      heldByName: event.heldByAdminId
+        ? (names.get(event.heldByAdminId) ?? null)
+        : null,
+    });
+  }
 }
 
+/** Everyone working the panel: admins and customer service. */
+const ALL_STAFF = 'staff';
+/** Admins only — alerts about orders, payouts and deliveries. */
 const ALL_ADMINS = 'admins';
 
 function adminRoom(adminId: string): string {

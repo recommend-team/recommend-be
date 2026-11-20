@@ -17,6 +17,9 @@ import {
   ConversationNeedsAttentionEvent,
   HELD_CONVERSATION_MESSAGE_EVENT,
   HeldConversationMessageEvent,
+  CONVERSATION_ASSIGNED_EVENT,
+  ConversationAssignedEvent,
+  STAFF_ALERT_KINDS,
 } from '../../common/events/admin-alert.events';
 import {
   CHECKOUT_PAID_EVENT,
@@ -60,6 +63,7 @@ const FEED_TYPE: Record<AdminAlertKind, NotificationType> = {
   CONVERSATION_HANDED_OVER: NotificationType.ADMIN_CONVERSATION_HANDED_OVER,
   CONVERSATION_FLAGGED: NotificationType.ADMIN_CONVERSATION_FLAGGED,
   HELD_CONVERSATION_MESSAGE: NotificationType.ADMIN_HELD_CONVERSATION_MESSAGE,
+  CONVERSATION_ASSIGNED: NotificationType.ADMIN_CONVERSATION_ASSIGNED,
   NEW_PAID_ORDER: NotificationType.ADMIN_NEW_PAID_ORDER,
   VENDOR_ORDER_READY: NotificationType.ADMIN_VENDOR_ORDER_READY,
   WITHDRAWAL_FAILED: NotificationType.ADMIN_WITHDRAWAL_FAILED,
@@ -125,6 +129,20 @@ export class AdminAlertsService {
       tag: `conversation:${event.conversationId}`,
       // Only the admin holding it. Nobody else should be pulled into a conversation that
       // already has someone.
+      adminId: event.adminId,
+      delivery: CONVERSATION_DELIVERY,
+    });
+  }
+
+  /** An admin passed a chat to this agent: the buyer is theirs to answer now. */
+  @OnEvent(CONVERSATION_ASSIGNED_EVENT)
+  async onAssigned(event: ConversationAssignedEvent): Promise<void> {
+    await this.send({
+      kind: 'CONVERSATION_ASSIGNED',
+      title: `${event.buyerName ?? 'A buyer'} is yours now`,
+      body: 'An admin passed this conversation to you. The buyer is waiting for a reply.',
+      url: `/admin/conversations/${event.conversationId}`,
+      tag: `conversation:${event.conversationId}`,
       adminId: event.adminId,
       delivery: CONVERSATION_DELIVERY,
     });
@@ -262,7 +280,9 @@ export class AdminAlertsService {
     );
 
     const recipients: string[] = await (
-      alert.adminId ? Promise.resolve([alert.adminId]) : this.activeAdminIds()
+      alert.adminId
+        ? Promise.resolve([alert.adminId])
+        : this.activeAdminIds(alert.kind)
     ).catch((error: unknown) => {
       this.logger.error(
         `Failed to find admins for ${alert.kind}: ${
@@ -342,9 +362,13 @@ export class AdminAlertsService {
   }
 
   /** Every admin who can currently sign in — a suspended admin is not paged. */
-  private async activeAdminIds(): Promise<string[]> {
+  private async activeAdminIds(kind: AdminAlertKind): Promise<string[]> {
+    // Customer service hear about buyers waiting, and nothing else.
+    const roles = STAFF_ALERT_KINDS.includes(kind)
+      ? [Role.ADMIN, Role.SUPER_ADMIN, Role.SUPPORT]
+      : [Role.ADMIN, Role.SUPER_ADMIN];
     const admins = await this.users.find({
-      where: { role: In([Role.ADMIN, Role.SUPER_ADMIN]) },
+      where: { role: In(roles) },
       select: ['id', 'role', 'status', 'isEmailVerified'],
     });
     return admins.filter((admin) => admin.isActive()).map((admin) => admin.id);

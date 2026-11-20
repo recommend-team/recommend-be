@@ -17,6 +17,9 @@ import { WaitlistService } from './waitlist/waitlist.service';
 import { AdminWaitlistController } from './transport/admin/admin-waitlist.controller';
 import { UnmetSearchService } from './engine/discovery/unmet-search.service';
 import { HandoverService } from './engine/handover.service';
+import { HandlingLogService } from './engine/handling-log.service';
+import { SupportTeamController } from './transport/admin/support-team.controller';
+import { ConversationHandling } from './conversation/entities/conversation-handling.entity';
 import { AdminOrderService } from './engine/admin-order.service';
 import { AdminCatalogService } from './engine/admin-catalog.service';
 import { AdminChatController } from './transport/admin/admin-chat.controller';
@@ -79,12 +82,17 @@ import { WelcomeEmailService } from '../common/services/welcome-email.service';
       Checkout,
       UnmetSearch,
       WaitlistSignup,
+      ConversationHandling,
     ]),
     JwtModule.register({}),
     OrdersModule,
     NotificationsModule,
   ],
-  controllers: [AdminChatController, AdminWaitlistController],
+  controllers: [
+    AdminChatController,
+    AdminWaitlistController,
+    SupportTeamController,
+  ],
   providers: [
     ConversationService,
     ConversationCleanupService,
@@ -93,6 +101,7 @@ import { WelcomeEmailService } from '../common/services/welcome-email.service';
     EngineService,
     DeliveryEtaNoticeService,
     HandoverService,
+    HandlingLogService,
     AdminOrderService,
     AdminCatalogService,
     CheckoutFlow,

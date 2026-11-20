@@ -1,10 +1,14 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { In, Repository } from 'typeorm';
 import { User } from '../../modules/auth/entities/auth.entity';
-import { Role } from '../../common/enums/roles.enum';
+import { Role, STAFF_ROLES } from '../../common/enums/roles.enum';
 import { SellerStatus } from '../../common/enums/seller-status.enum';
-import { BuyerContact, IdentityPort } from '../ports/identity.port';
+import {
+  BuyerContact,
+  IdentityPort,
+  StaffMember,
+} from '../ports/identity.port';
 
 const SYNTHETIC_EMAIL_DOMAIN = '@buyers.recommend.ng';
 
@@ -20,6 +24,34 @@ export class LocalIdentityAdapter implements IdentityPort {
     @InjectRepository(User)
     private readonly usersRepository: Repository<User>,
   ) {}
+
+  async staffMember(id: string): Promise<StaffMember | null> {
+    const user = await this.usersRepository.findOne({
+      where: { id, role: In([...STAFF_ROLES]) },
+    });
+    if (!user || !user.canHoldSession()) return null;
+    return { id: user.id, role: user.role, name: staffName(user) };
+  }
+
+  async staffNames(ids: string[]): Promise<Map<string, string>> {
+    const unique = [...new Set(ids.filter(Boolean))];
+    if (unique.length === 0) return new Map();
+    const staff = await this.usersRepository.find({
+      where: { id: In(unique), role: In([...STAFF_ROLES]) },
+      select: ['id', 'firstName', 'lastName'],
+    });
+    return new Map(staff.map((user) => [user.id, staffName(user)]));
+  }
+
+  async listStaff(): Promise<StaffMember[]> {
+    const staff = await this.usersRepository.find({
+      where: { role: In([...STAFF_ROLES]) },
+      order: { firstName: 'ASC' },
+    });
+    return staff
+      .filter((user) => user.canHoldSession())
+      .map((user) => ({ id: user.id, role: user.role, name: staffName(user) }));
+  }
 
   async upsertBuyer(contact: BuyerContact): Promise<{ buyerId: string }> {
     const existing = await this.usersRepository.findOne({
@@ -83,4 +115,11 @@ function splitName(fullName: string): { firstName: string; lastName: string } {
   if (parts.length === 0) return { firstName: 'Buyer', lastName: '-' };
   if (parts.length === 1) return { firstName: parts[0], lastName: '-' };
   return { firstName: parts[0], lastName: parts.slice(1).join(' ') };
+}
+
+/** "Amaka O." — first name and an initial, enough to tell colleagues apart. */
+function staffName(user: Pick<User, 'firstName' | 'lastName'>): string {
+  const first = user.firstName?.trim() || 'Staff';
+  const initial = user.lastName?.trim().charAt(0);
+  return initial ? `${first} ${initial.toUpperCase()}.` : first;
 }

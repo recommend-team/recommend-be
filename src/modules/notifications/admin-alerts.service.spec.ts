@@ -329,6 +329,42 @@ describe('AdminAlertsService', () => {
     expect(emitted).toHaveLength(1);
   });
 
+  describe('customer service', () => {
+    /** The roles the recipients were looked up by, for the alert just sent. */
+    const rolesAsked = (): Role[] => {
+      const [options] = users.find.mock.calls.at(-1) as [
+        { where: { role: { value: Role[] } } },
+      ];
+      return options.where.role.value;
+    };
+
+    it('hear about a buyer waiting for a person', async () => {
+      await service.onNeedsAttention(
+        new ConversationNeedsAttentionEvent('c1', 'Stuck', 'Ada'),
+      );
+      expect(rolesAsked()).toEqual(
+        expect.arrayContaining([Role.ADMIN, Role.SUPER_ADMIN, Role.SUPPORT]),
+      );
+    });
+
+    it('do not hear about payouts', async () => {
+      await service.onWithdrawalFailed(
+        new WithdrawalFailedEvent(
+          'v1',
+          'w1',
+          'WDR-AAA',
+          5000,
+          'Bank said no',
+          false,
+        ),
+      );
+      expect(rolesAsked()).not.toContain(Role.SUPPORT);
+      expect(rolesAsked()).toEqual(
+        expect.arrayContaining([Role.ADMIN, Role.SUPER_ADMIN]),
+      );
+    });
+  });
+
   it('never throws when the admin list cannot be read', async () => {
     users.find.mockRejectedValue(new Error('db down'));
 

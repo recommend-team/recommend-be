@@ -20,7 +20,11 @@ import {
   StatusActor,
 } from '../orders/entities/order-status-event.entity';
 import { SellerStatus } from '../../common/enums/seller-status.enum';
-import { Role } from '../../common/enums/roles.enum';
+import {
+  MANAGED_STAFF_ROLES,
+  Role,
+  STAFF_ROLES,
+} from '../../common/enums/roles.enum';
 import {
   OrderStatus,
   SOLD_ORDER_STATUSES,
@@ -315,8 +319,11 @@ const SYNTHETIC_RIDER_EMAIL_DOMAIN = '@riders.recommend.ng';
 const syntheticRiderEmail = (phoneE164: string) =>
   `${phoneE164.replace('+', '')}${SYNTHETIC_RIDER_EMAIL_DOMAIN}`;
 
-/** Roles that should never appear in buyer/vendor listings for regular admins */
-const ADMIN_ROLES = [Role.ADMIN, Role.SUPER_ADMIN];
+/**
+ * Staff accounts — never suspended or reactivated through the general user endpoints,
+ * only by a super admin. Customer service included: an admin cannot lock out an agent.
+ */
+const ADMIN_ROLES: readonly Role[] = STAFF_ROLES;
 
 @Injectable()
 export class AdminService {
@@ -1451,29 +1458,35 @@ export class AdminService {
       lastName: dto.lastName,
       email: dto.email,
       password: dto.password, // BeforeInsert hook hashes it
-      role: Role.ADMIN,
-      status: SellerStatus.APPROVED, // Admins are active immediately
+      role: dto.role ?? Role.ADMIN,
+      status: SellerStatus.APPROVED, // Staff are active immediately
       isEmailVerified: true,
     });
 
     const saved = await this.usersRepo.save(admin);
 
     return {
-      message: `Admin account created for ${saved.fullName}`,
+      message: `${staffTitle(saved.role)} account created for ${saved.fullName}`,
       data: this.stripSensitive(saved),
     };
   }
 
+  /** Admins and customer service, or one of the two. */
   async getAdmins(query: {
     page?: number;
     limit?: number;
+    role?: Role;
   }): Promise<PaginatedResult<Partial<User>>> {
     const page = Math.max(1, query.page ?? 1);
     const limit = Math.min(100, Math.max(1, query.limit ?? 20));
     const skip = (page - 1) * limit;
+    const roles =
+      query.role && MANAGED_STAFF_ROLES.includes(query.role)
+        ? [query.role]
+        : [...MANAGED_STAFF_ROLES];
 
     const [items, total] = await this.usersRepo.findAndCount({
-      where: { role: In([Role.ADMIN]) },
+      where: { role: In(roles) },
       select: [
         'id',
         'firstName',
@@ -1495,22 +1508,78 @@ export class AdminService {
   async suspendAdmin(
     id: string,
   ): Promise<{ message: string; data: Partial<User> }> {
-    const admin = await this.usersRepo.findOne({
-      where: { id, role: Role.ADMIN },
-    });
-    if (!admin) throw new NotFoundException('Admin not found');
+    const admin = await this.findManagedStaff(id);
 
     if (admin.status === SellerStatus.SUSPENDED) {
-      throw new BadRequestException('Admin is already suspended');
+      throw new BadRequestException(
+        `${staffTitle(admin.role)} is already suspended`,
+      );
     }
 
     admin.status = SellerStatus.SUSPENDED;
     const saved = await this.usersRepo.save(admin);
 
     return {
-      message: `Admin ${saved.fullName} has been suspended`,
+      message: `${staffTitle(saved.role)} ${saved.fullName} has been suspended`,
       data: this.stripSensitive(saved),
     };
+  }
+
+  /** Lets a suspended admin or agent sign in again. */
+  async activateAdmin(
+    id: string,
+  ): Promise<{ message: string; data: Partial<User> }> {
+    const admin = await this.findManagedStaff(id);
+
+    if (admin.status === SellerStatus.APPROVED) {
+      throw new BadRequestException(
+        `${staffTitle(admin.role)} is already active`,
+      );
+    }
+
+    admin.status = SellerStatus.APPROVED;
+    const saved = await this.usersRepo.save(admin);
+
+    return {
+      message: `${staffTitle(saved.role)} ${saved.fullName} can sign in again`,
+      data: this.stripSensitive(saved),
+    };
+  }
+
+  /**
+   * Admin ↔ customer service. Takes effect on their next request — every request reads
+   * the role from the database, not from their token.
+   */
+  async changeAdminRole(
+    id: string,
+    role: Role,
+  ): Promise<{ message: string; data: Partial<User> }> {
+    if (!MANAGED_STAFF_ROLES.includes(role)) {
+      throw new BadRequestException('Role must be ADMIN or SUPPORT');
+    }
+    const admin = await this.findManagedStaff(id);
+    if (admin.role === role) {
+      throw new BadRequestException(
+        `${admin.fullName} is already ${staffTitle(role).toLowerCase()}`,
+      );
+    }
+
+    admin.role = role;
+    const saved = await this.usersRepo.save(admin);
+
+    return {
+      message: `${saved.fullName} is now ${staffTitle(role).toLowerCase()}`,
+      data: this.stripSensitive(saved),
+    };
+  }
+
+  /** An admin or agent — never the super admin, a vendor or a buyer. */
+  private async findManagedStaff(id: string): Promise<User> {
+    const admin = await this.usersRepo.findOne({
+      where: { id, role: In([...MANAGED_STAFF_ROLES]) },
+    });
+    if (!admin) throw new NotFoundException('Admin not found');
+    return admin;
   }
 
   async getPlatformStats(): Promise<{
@@ -1630,4 +1699,9 @@ export class AdminService {
       console.error('Failed to send rejection email:', error);
     }
   }
+}
+
+/** "Admin", "Customer service" — how a staff role reads in a message. */
+function staffTitle(role: Role): string {
+  return role === Role.SUPPORT ? 'Customer service' : 'Admin';
 }
