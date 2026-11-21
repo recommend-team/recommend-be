@@ -10,6 +10,8 @@ import { AdminWalletController } from '../../wallet/admin-wallet.controller';
 import { AdminLocationsController } from '../../locations/admin-locations.controller';
 import { SuperAdminController } from '../../admin/super-admin.controller';
 import { SupportTeamController } from '../../../chat/transport/admin/support-team.controller';
+import { AdminCategoriesController } from '../../categories/admin-categories.controller';
+import { AdminVendorRatesController } from '../../categories/admin-vendor-rates.controller';
 import { Roles } from '../decorators/roles.decorator';
 
 /** A stand-in for any @Roles(Role.SELLER) route. */
@@ -105,5 +107,56 @@ describe('Customer service (SUPPORT) access', () => {
 
   it('is never a vendor or rider', () => {
     expect(allowed(Role.SUPPORT, SellerOnly, 'handle')).toBe(false);
+  });
+});
+
+describe('Categories', () => {
+  it.each([
+    'list',
+    'create',
+    'update',
+    'rateHistory',
+    'uncategorised',
+    'assignVendors',
+  ])('any admin can %s', (method) => {
+    expect(allowed(Role.ADMIN, AdminCategoriesController, method)).toBe(true);
+    expect(allowed(Role.SUPER_ADMIN, AdminCategoriesController, method)).toBe(
+      true,
+    );
+  });
+
+  it("only the Super Admin changes Recommend's percentage", () => {
+    expect(
+      allowed(Role.SUPER_ADMIN, AdminCategoriesController, 'changeRate'),
+    ).toBe(true);
+    expect(allowed(Role.ADMIN, AdminCategoriesController, 'changeRate')).toBe(
+      false,
+    );
+  });
+
+  it('is closed to customer service and vendors', () => {
+    for (const method of ['list', 'create', 'update', 'changeRate']) {
+      expect(allowed(Role.SUPPORT, AdminCategoriesController, method)).toBe(
+        false,
+      );
+      expect(allowed(Role.SELLER, AdminCategoriesController, method)).toBe(
+        false,
+      );
+    }
+  });
+});
+
+describe("A vendor's own rate", () => {
+  it('any admin can see it; only the Super Admin sets it', () => {
+    expect(allowed(Role.ADMIN, AdminVendorRatesController, 'rate')).toBe(true);
+    expect(allowed(Role.ADMIN, AdminVendorRatesController, 'setRate')).toBe(
+      false,
+    );
+    expect(
+      allowed(Role.SUPER_ADMIN, AdminVendorRatesController, 'setRate'),
+    ).toBe(true);
+    expect(allowed(Role.SUPPORT, AdminVendorRatesController, 'rate')).toBe(
+      false,
+    );
   });
 });

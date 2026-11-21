@@ -28,6 +28,7 @@ import { toOrderLines } from './order-lines';
 import { PlacesService } from '../places/places.service';
 import type { DeliveryPlace } from '../places/places.service';
 import { openingStatus } from '../../common/utils/opening-hours.util';
+import { CategoriesService } from '../categories/categories.service';
 
 const FALLBACK_PLATFORM_FEE_RATE = 0.2;
 
@@ -103,6 +104,7 @@ export class CheckoutService {
     private readonly configService: ConfigService,
     private readonly dataSource: DataSource,
     @Optional() private readonly places?: PlacesService,
+    @Optional() private readonly categories?: CategoriesService,
   ) {}
 
   /**
@@ -238,7 +240,10 @@ export class CheckoutService {
     const totalAmount = round2(goodsTotal + deliveryFee);
     const reference = `REC-${randomBytes(6).toString('hex').toUpperCase()}`;
 
+    const feePercents = await this.feePercentsFor(grouped, menu);
+
     const checkout = await this.persist(dto, grouped, {
+      feePercents,
       reference,
       goodsTotal,
       deliveryFee,
@@ -804,10 +809,37 @@ export class CheckoutService {
     );
   }
 
+  /**
+   * What Recommend keeps of each vendor's subtotal, in percent: their own rate or their
+   * category's, as it stands right now. Written onto each order, so a rate change never touches
+   * an order already placed.
+   */
+  private async feePercentsFor(
+    grouped: Map<string, VendorGroup>,
+    menu: Menu,
+  ): Promise<Map<string, number>> {
+    const standard = round2(this.platformFeeRate() * 100);
+    const rates = this.categories ? await this.categories.rates() : null;
+    const percents = new Map<string, number>();
+    for (const vendorId of grouped.keys()) {
+      const vendor = [...menu.products.values()].find(
+        (product) => product.vendorId === vendorId,
+      )?.vendor;
+      percents.set(
+        vendorId,
+        // A rate of their own, else their category's, else the standard one.
+        rates && vendor ? rates.percentFor(vendor) : standard,
+      );
+    }
+    return percents;
+  }
+
   private async persist(
     dto: CreateCheckoutDto,
     grouped: Map<string, VendorGroup>,
     totals: {
+      /** Recommend's percentage per vendor id. */
+      feePercents: Map<string, number>;
       reference: string;
       goodsTotal: number;
       deliveryFee: number;
@@ -846,12 +878,14 @@ export class CheckoutService {
       });
       const savedCheckout = await manager.save(checkout);
 
-      const feeRate = this.platformFeeRate();
-
       for (const group of grouped.values()) {
-        // Each vendor is owed their items less the platform's cut. Delivery never enters
-        // this. Both figures are written onto the row here and never recomputed.
-        const platformFee = round2(group.subtotal * feeRate);
+        // Each vendor is owed their items less the platform's cut — their category's
+        // rate. Delivery never enters this. All three figures are written onto the row
+        // here and never recomputed.
+        const feePercent =
+          totals.feePercents.get(group.vendorId) ??
+          round2(this.platformFeeRate() * 100);
+        const platformFee = round2((group.subtotal * feePercent) / 100);
         const vendorAmount = round2(group.subtotal - platformFee);
 
         const order = manager.create(Order, {
@@ -862,6 +896,7 @@ export class CheckoutService {
           buyerEmail: dto.buyerEmail ?? null,
           totalAmount: group.subtotal,
           platformFee,
+          feePercent,
           vendorAmount,
           fulfillmentType: dto.fulfillmentType,
           status: OrderStatus.PENDING_PAYMENT,

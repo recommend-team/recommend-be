@@ -1,4 +1,5 @@
 import { Module } from '@nestjs/common';
+import { CategoriesModule } from '../categories/categories.module';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { JwtModule } from '@nestjs/jwt';
 import { PassportModule } from '@nestjs/passport';
@@ -34,6 +35,8 @@ import { GoogleAuthModule } from './google-auth.module';
       name: 'pending-user-cleanup',
     }),
     GoogleAuthModule,
+    // A new vendor goes straight into the category they chose.
+    CategoriesModule,
   ],
   controllers: [AuthController],
   providers: [

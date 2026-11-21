@@ -1,4 +1,5 @@
 import { Module } from '@nestjs/common';
+import { CategoriesModule } from '../categories/categories.module';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { User } from '../auth/entities/auth.entity';
 import { Product } from '../products/entities/product.entity';
@@ -41,6 +42,8 @@ import { AdminKycController } from './admin-kyc.controller';
       VendorAdminEdit,
     ]),
     OrdersModule,
+    // Admins put vendors in categories; a move to a pricier one is announced.
+    CategoriesModule,
     // The vendor page shows the balance, summed the one way the wallet sums it.
     WalletModule,
     // Running a vendor's account for them goes through the vendor's own code.

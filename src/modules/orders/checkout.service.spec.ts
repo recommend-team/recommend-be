@@ -27,6 +27,7 @@ interface SavedOrder {
   vendorId: string;
   totalAmount: number;
   platformFee: number;
+  feePercent?: number;
   vendorAmount: number;
 }
 interface CartChangeBody {
@@ -288,6 +289,148 @@ describe('CheckoutService', () => {
     });
   });
 
+  describe("each vendor pays their category's rate", () => {
+    /** As an admin set them: Restaurant 25%, Gadgets 3%; everyone else the standard rate. */
+    const rates: Record<string, number> = { restaurant: 25, gadgets: 3 };
+
+    beforeEach(() => {
+      (service as unknown as { categories: unknown }).categories = {
+        rates: jest.fn().mockResolvedValue({
+          standardPercent: DEFAULT_FEE_PERCENT,
+          percentFor: (vendor: {
+            businessCategory?: string | null;
+            customFeePercent?: number | null;
+          }) =>
+            vendor.customFeePercent ??
+            rates[(vendor.businessCategory ?? '').trim().toLowerCase()] ??
+            DEFAULT_FEE_PERCENT,
+        }),
+      };
+      products.find.mockResolvedValue([
+        product({
+          id: 'jollof',
+          price: 3000,
+          vendorId: 'mamas',
+          vendor: {
+            id: 'mamas',
+            status: SellerStatus.APPROVED,
+            isOpen: true,
+            businessCategory: 'Restaurant',
+          },
+        }),
+        product({
+          id: 'laptop',
+          name: 'HP Pavilion 15',
+          price: 650000,
+          vendorId: 'techhub',
+          vendor: {
+            id: 'techhub',
+            status: SellerStatus.APPROVED,
+            isOpen: true,
+            businessCategory: 'Gadgets',
+          },
+        }),
+        product({
+          id: 'candle',
+          name: 'Scented candle',
+          price: 5000,
+          vendorId: 'odds',
+          vendor: {
+            id: 'odds',
+            status: SellerStatus.APPROVED,
+            isOpen: true,
+            businessCategory: 'Candles and things',
+          },
+        }),
+      ]);
+    });
+
+    const order = (vendorId: string) =>
+      saved.orders.find((row) => row.vendorId === vendorId);
+
+    it('takes 3% of a ₦650k laptop, and 25% of a plate of food, in one basket', async () => {
+      await service.createCheckout({
+        ...baseDto,
+        items: [
+          { productId: 'jollof', quantity: 2 },
+          { productId: 'laptop', quantity: 1 },
+        ],
+      } as never);
+
+      expect(order('mamas')).toMatchObject({
+        totalAmount: 6000,
+        feePercent: 25,
+        platformFee: 1500,
+        vendorAmount: 4500,
+      });
+      expect(order('techhub')).toMatchObject({
+        totalAmount: 650000,
+        feePercent: 3,
+        platformFee: 19500,
+        vendorAmount: 630500,
+      });
+    });
+
+    it('charges a vendor with a rate of their own that rate, not the category one', async () => {
+      products.find.mockResolvedValue([
+        product({
+          id: 'jollof',
+          price: 3000,
+          vendorId: 'mamas',
+          vendor: {
+            id: 'mamas',
+            status: SellerStatus.APPROVED,
+            isOpen: true,
+            businessCategory: 'Restaurant',
+            customFeePercent: 12.5,
+          },
+        }),
+      ]);
+
+      await service.createCheckout({
+        ...baseDto,
+        items: [{ productId: 'jollof', quantity: 2 }],
+      } as never);
+
+      expect(order('mamas')).toMatchObject({
+        feePercent: 12.5,
+        platformFee: 750,
+        vendorAmount: 5250,
+      });
+    });
+
+    it('charges a vendor in no category the standard rate, and records it', async () => {
+      await service.createCheckout({
+        ...baseDto,
+        items: [{ productId: 'candle', quantity: 1 }],
+      } as never);
+
+      expect(order('odds')).toMatchObject({
+        feePercent: DEFAULT_FEE_PERCENT,
+        platformFee: 1000,
+        vendorAmount: 4000,
+      });
+    });
+
+    it('still adds up: vendors, Recommend and delivery make the total', async () => {
+      const result = await service.createCheckout({
+        ...baseDto,
+        items: [
+          { productId: 'jollof', quantity: 1 },
+          { productId: 'laptop', quantity: 1 },
+          { productId: 'candle', quantity: 3 },
+        ],
+      } as never);
+
+      const payouts = saved.orders.reduce(
+        (sum, row) => sum + row.vendorAmount,
+        0,
+      );
+      const fees = saved.orders.reduce((sum, row) => sum + row.platformFee, 0);
+      expect(payouts + fees + result.deliveryFee).toBe(result.totalAmount);
+    });
+  });
+
   describe('the commission rate is configuration', () => {
     beforeEach(() => {
       products.find.mockResolvedValue([
@@ -307,6 +450,7 @@ describe('CheckoutService', () => {
 
       expect(saved.orders[0]).toMatchObject({
         totalAmount: 6000,
+        feePercent: 15,
         platformFee: 900,
         vendorAmount: 5100,
       });

@@ -41,8 +41,9 @@ export class OrdersController {
       'Public endpoint — no authentication required. Takes the cart the client holds ' +
       'in localStorage, **recomputes every price from the database**, and splits the ' +
       'basket into one order per vendor behind a single Paystack charge.\n\n' +
-      'Items may come from several restaurants. Each vendor is credited 80% of their ' +
-      'own items; the delivery fee is charged once and retained by the platform.\n\n' +
+      'Items may come from several vendors. Each vendor is credited their own items ' +
+      "less their category's rate; the delivery fee is charged once and retained " +
+      'by the platform.\n\n' +
       'Nothing the client sends about price is trusted. `expectedUnitPrice` is used ' +
       'only to detect that an item changed since it was added to the cart.',
   })

@@ -4,6 +4,7 @@ import {
   UnauthorizedException,
   BadRequestException,
   ConflictException,
+  Optional,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { JwtService } from '@nestjs/jwt';
@@ -27,6 +28,7 @@ import { RegisterVendorDto } from './dto/register-vendor.dto';
 import { RegisterRiderDto } from './dto/register-rider.dto';
 import { ResetPasswordDto } from './dto/reset-password.dto';
 import { VerifyEmailDto } from './dto/verify-email.dto';
+import { CategoriesService } from '../categories/categories.service';
 import { User } from './entities/auth.entity';
 import { EmailService } from '../../common/services/email.service';
 import { WelcomeEmailService } from '../../common/services/welcome-email.service';
@@ -63,7 +65,22 @@ export class AuthService {
     private readonly configService: ConfigService,
     private readonly emailService: EmailService,
     private readonly welcomeEmail: WelcomeEmailService,
+    /** Puts a new vendor in the category they chose at sign-up. */
+    @Optional() private readonly categories?: CategoriesService,
   ) {}
+
+  /** The category a vendor chose, linked when it is one of Recommend's. */
+  private async categoryOf(
+    text: string | null,
+  ): Promise<{ businessCategory: string | null; categoryId?: string | null }> {
+    if (!this.categories) return { businessCategory: text };
+    try {
+      return await this.categories.resolve(text);
+    } catch {
+      // Never block an account over this; an admin can sort the category later.
+      return { businessCategory: text };
+    }
+  }
 
   // ─── Registration ──────────────────────────────────────────────────────────
 
@@ -315,7 +332,8 @@ export class AuthService {
       // findable as soon as they are approved — not after filling Store details twice.
       businessName: pendingUser.businessName,
       businessAddress: pendingUser.businessAddress,
-      businessCategory: pendingUser.businessCategory,
+      // The category they chose, linked — or what they typed, for an admin to sort.
+      ...(await this.categoryOf(pendingUser.businessCategory)),
       businessDescription: pendingUser.businessDescription,
       slug:
         pendingUser.role === Role.SELLER && pendingUser.businessName

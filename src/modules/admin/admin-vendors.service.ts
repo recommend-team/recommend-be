@@ -4,6 +4,7 @@ import {
   Injectable,
   Logger,
   NotFoundException,
+  Optional,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Not, Repository } from 'typeorm';
@@ -12,6 +13,7 @@ import { PendingUser } from '../auth/entities/pending-user.entity';
 import { Product } from '../products/entities/product.entity';
 import { AuthService } from '../auth/auth.service';
 import { SellersService } from '../sellers/sellers.service';
+import { CategoriesService } from '../categories/categories.service';
 import { ProductsService } from '../products/products.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { PushService } from '../notifications/push.service';
@@ -109,6 +111,7 @@ export class AdminVendorsService {
     private readonly notifications: NotificationsService,
     private readonly push: PushService,
     private readonly email: EmailService,
+    @Optional() private readonly categories?: CategoriesService,
   ) {}
 
   // ─── The account ───────────────────────────────────────────────────────────
@@ -141,7 +144,10 @@ export class AdminVendorsService {
         emailVerifiedAt: new Date(),
         businessName: dto.businessName,
         businessAddress: dto.businessAddress,
-        businessCategory: dto.businessCategory,
+        // Linked to the category when it is one of Recommend's.
+        ...(this.categories
+          ? await this.categories.resolve(dto.businessCategory)
+          : { businessCategory: dto.businessCategory }),
         businessDescription: dto.businessDescription ?? null,
         slug: await uniqueSlug(dto.businessName, (slug) =>
           this.users.exists({ where: { slug } }),
@@ -198,7 +204,13 @@ export class AdminVendorsService {
       await this.users.update(vendor.id, owner);
     }
     if (Object.keys(store).length > 0) {
+      // Moving them to a category that costs more is a rate rise: they are told.
+      const ratesBefore =
+        store.businessCategory !== undefined && this.categories
+          ? await this.categories.percentsOf([vendor.id])
+          : null;
       await this.sellers.updateProfile(vendor.id, store as UpdateProfileDto);
+      if (ratesBefore) await this.categories?.announceRaises(ratesBefore);
     }
 
     const ownerFields = Object.keys(owner);

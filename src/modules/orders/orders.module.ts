@@ -19,6 +19,7 @@ import { WalletModule } from '../wallet/wallet.module';
 import { CommonModule } from '../../common/common.module';
 import { BuyerOrderEmailsListener } from './buyer-order-emails.listener';
 import { StuckDeliveryService } from './stuck-delivery.service';
+import { CategoriesModule } from '../categories/categories.module';
 
 @Module({
   imports: [
@@ -36,6 +37,8 @@ import { StuckDeliveryService } from './stuck-delivery.service';
     PlacesModule,
     // EmailService, for the buyer's receipt and delivery-code emails.
     CommonModule,
+    // What Recommend keeps of each vendor's sale, by their category.
+    CategoriesModule,
   ],
   controllers: [OrdersController, PaymentsController],
   providers: [
