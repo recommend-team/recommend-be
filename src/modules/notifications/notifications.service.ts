@@ -19,6 +19,13 @@ import {
   WithdrawalFailedEvent,
   WithdrawalSettledEvent,
 } from '../../common/events/wallet.events';
+import {
+  COMMISSION_RATE_RAISED_EVENT,
+  CommissionRateRaisedEvent,
+} from '../../common/events/categories.events';
+
+/** 25 → "25%", 7.5 → "7.5%". */
+const percent = (value: number) => `${Number(value.toFixed(2))}%`;
 
 /**
  * An hour. A new-order alert reaching a phone that was off for longer than that is noise:
@@ -79,8 +86,9 @@ export class NotificationsService {
         orderId: order.orderId,
         checkoutId: event.checkoutId,
         reference: event.reference,
+        // The buyer's name only: buyers and vendors reach each other through Recommend,
+        // so a vendor never gets a buyer's phone or email.
         buyerName: event.buyerName,
-        buyerPhone: event.buyerPhone,
         fulfillmentType: event.fulfillmentType,
         deliveryAddress: event.deliveryAddress,
         subtotal: order.subtotal,
@@ -199,6 +207,70 @@ export class NotificationsService {
     });
   }
 
+  /**
+   * What Recommend keeps of their sales went up. Told everywhere at once — in the app,
+   * on their phone and by email — because it is their money, and they should hear it
+   * from us before they see it on an order.
+   */
+  @OnEvent(COMMISSION_RATE_RAISED_EVENT, { async: true })
+  async onCommissionRateRaised(
+    event: CommissionRateRaisedEvent,
+  ): Promise<void> {
+    await this.safely('rate rise', event.vendorId, async () => {
+      const title = `Recommend's fee is now ${percent(event.newPercent)}`;
+      const body =
+        `From your next order, Recommend keeps ${percent(event.newPercent)} of each sale ` +
+        `(it was ${percent(event.previousPercent)}). Orders already placed are not affected.`;
+
+      const notification = await this.create({
+        userId: event.vendorId,
+        type: NotificationType.COMMISSION_RATE_RAISED,
+        title,
+        body,
+        data: {
+          previousPercent: event.previousPercent,
+          newPercent: event.newPercent,
+        },
+      });
+
+      await this.pushService
+        .sendToUser(event.vendorId, {
+          title,
+          body,
+          type: NotificationType.COMMISSION_RATE_RAISED,
+          url: '/notifications',
+          tag: 'commission-rate',
+          data: { notificationId: notification.id },
+        })
+        .catch((error: unknown) => {
+          this.logger.warn(`Push failed for user ${event.vendorId}`, error);
+          return 0;
+        });
+
+      const vendor = await this.users.findOne({
+        where: { id: event.vendorId },
+        select: ['id', 'email', 'firstName'],
+      });
+      if (!vendor?.email) return;
+      await this.emailService
+        .sendEmail({
+          to: vendor.email,
+          subject: title,
+          text:
+            `Hi ${vendor.firstName || 'there'},\n\n${body}\n\n` +
+            'Questions about this? Reply to this email, or message Recommend support.\n',
+        })
+        .catch((error: unknown) => {
+          // Brevo not configured, or down. The feed entry already exists.
+          this.logger.warn(
+            `Rate email to vendor ${event.vendorId} failed: ${
+              error instanceof Error ? error.message : 'unknown error'
+            }`,
+          );
+        });
+    });
+  }
+
   /** A withdrawal's outcome, pushed. Both outcomes share the tag — the latest wins. */
   private async push(
     userId: string,
@@ -267,7 +339,7 @@ export class NotificationsService {
         text:
           `${body}\n\n` +
           `Order reference: ${event.reference}\n` +
-          `Buyer: ${event.buyerName} (${event.buyerPhone})\n` +
+          `Buyer: ${event.buyerName}\n` +
           `Fulfillment: ${event.fulfillmentType}\n` +
           (event.deliveryAddress ? `Address: ${event.deliveryAddress}\n` : '') +
           `\nItems:\n${lines}\n\n` +

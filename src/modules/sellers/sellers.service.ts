@@ -20,6 +20,10 @@ import {
   UpdateNonRegisteredKycDto,
 } from './dto/update-kyc.dto';
 import { LocationsService } from '../locations/locations.service';
+import {
+  CategoriesService,
+  type VendorRate,
+} from '../categories/categories.service';
 import { uniqueSlug } from '../../common/utils/slug.util';
 import { toOrderLines } from '../orders/order-lines';
 import { openingFields } from '../../common/utils/opening-hours.util';
@@ -74,6 +78,11 @@ export interface VendorProfileResponse {
   // Meta
   profileCompleteness: number;
   storefrontUrl: string | null;
+  /**
+   * What Recommend keeps of each of their sales, and why — their own rate, their
+   * category's, or the standard one. Null only if it can't be worked out right now.
+   */
+  commission: VendorRate | null;
   isEmailVerified: boolean;
   createdAt: Date;
   updatedAt: Date;
@@ -88,6 +97,7 @@ export class SellersService {
     private readonly ordersRepository: Repository<Order>,
     private readonly locationsService: LocationsService,
     @Optional() private readonly config?: ConfigService,
+    @Optional() private readonly categories?: CategoriesService,
   ) {}
 
   // ─── Profile ───────────────────────────────────────────────────────────────
@@ -98,7 +108,7 @@ export class SellersService {
     const vendor = await this.findVendor(userId);
     return {
       message: 'Profile retrieved successfully',
-      data: this.buildProfileResponse(vendor),
+      data: await this.buildProfileResponse(vendor),
     };
   }
 
@@ -122,8 +132,17 @@ export class SellersService {
       vendor.businessAddress = dto.businessAddress;
     if (dto.businessDescription !== undefined)
       vendor.businessDescription = dto.businessDescription;
-    if (dto.businessCategory !== undefined)
-      vendor.businessCategory = dto.businessCategory;
+    if (dto.businessCategory !== undefined) {
+      // A category from the list links them to it — and its rate; anything else is
+      // kept as they wrote it, for an admin to sort.
+      if (this.categories) {
+        const placed = await this.categories.resolve(dto.businessCategory);
+        vendor.businessCategory = placed.businessCategory;
+        vendor.categoryId = placed.categoryId;
+      } else {
+        vendor.businessCategory = dto.businessCategory;
+      }
+    }
     // Sending areaIds replaces coverage wholesale. Unknown or deactivated ids are
     // rejected by the service rather than silently dropped.
     if (dto.areaIds !== undefined) {
@@ -145,7 +164,7 @@ export class SellersService {
 
     return {
       message: 'Profile updated successfully',
-      data: this.buildProfileResponse(saved),
+      data: await this.buildProfileResponse(saved),
     };
   }
 
@@ -225,7 +244,7 @@ export class SellersService {
     return {
       message:
         'KYC documents submitted successfully. Your account will be reviewed by our team.',
-      data: this.buildProfileResponse(saved),
+      data: await this.buildProfileResponse(saved),
     };
   }
 
@@ -240,8 +259,12 @@ export class SellersService {
   ): Promise<{
     message: string;
     data: {
-      /** The order, with the checkout narrowed to what a vendor may see. */
-      items: (Omit<Order, 'checkout'> & {
+      /**
+       * The order, with the checkout narrowed to what a vendor may see — and without
+       * the buyer's phone or email: buyers and vendors reach each other only through
+       * Recommend.
+       */
+      items: (Omit<Order, 'checkout' | 'buyerPhone' | 'buyerEmail'> & {
         checkout: {
           id: string;
           reference: string;
@@ -283,8 +306,10 @@ export class SellersService {
      */
     const items = rows.map((order) => {
       const rider = order.checkout?.rider;
+      // eslint-disable-next-line @typescript-eslint/no-unused-vars -- left out on purpose
+      const { buyerPhone, buyerEmail, ...visible } = order;
       return {
-        ...order,
+        ...visible,
         // The order as built: each dish with its portions, packs, extras and choices.
         lines: toOrderLines(order.items ?? []),
         checkout: order.checkout
@@ -393,7 +418,19 @@ export class SellersService {
     return vendor;
   }
 
-  private buildProfileResponse(vendor: User): VendorProfileResponse {
+  /** What they pay — never the reason a profile fails to load. */
+  private async commissionOf(vendor: User): Promise<VendorRate | null> {
+    if (!this.categories) return null;
+    try {
+      return (await this.categories.rates()).rateOf(vendor);
+    } catch {
+      return null;
+    }
+  }
+
+  private async buildProfileResponse(
+    vendor: User,
+  ): Promise<VendorProfileResponse> {
     // The whole link, ready to paste into a bio or a WhatsApp status — the website's
     // address (`WEBSITE_URL`) plus the vendor's shop.
     const websiteUrl = this.config?.get<string>('brand.websiteUrl') ?? '';
@@ -414,6 +451,7 @@ export class SellersService {
       profilePicture: vendor.profilePicture,
       slug: vendor.slug,
       storefrontUrl,
+      commission: await this.commissionOf(vendor),
       businessName: vendor.businessName,
       businessAddress: vendor.businessAddress,
       businessDescription: vendor.businessDescription,

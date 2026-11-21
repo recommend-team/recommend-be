@@ -104,3 +104,34 @@ describe('the buyer sees who is bringing it', () => {
     },
   );
 });
+
+describe("the vendor never sees the buyer's contact details", () => {
+  it("lists the buyer's name, but not their phone or email", async () => {
+    const service = new SellersService(
+      {} as never,
+      {
+        findAndCount: jest.fn().mockResolvedValue([
+          [
+            {
+              id: 'o1',
+              status: OrderStatus.PAID,
+              buyerName: 'Ada Obi',
+              buyerPhone: '+2348012345678',
+              buyerEmail: 'ada@example.com',
+              items: [],
+              checkout: null,
+            },
+          ],
+          1,
+        ]),
+      } as never,
+      {} as never,
+    );
+
+    const [order] = (await service.getOrders('v1', {})).data.items;
+
+    expect(order.buyerName).toBe('Ada Obi');
+    expect(order).not.toHaveProperty('buyerPhone');
+    expect(order).not.toHaveProperty('buyerEmail');
+  });
+});

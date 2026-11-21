@@ -1,4 +1,5 @@
 import { Module } from '@nestjs/common';
+import { CategoriesModule } from '../categories/categories.module';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { User } from '../auth/entities/auth.entity';
 import { Order } from '../orders/entities/order.entity';
@@ -12,6 +13,8 @@ import { LocationsModule } from '../locations/locations.module';
     TypeOrmModule.forFeature([User, Order]),
     LocationsModule,
     OrdersModule,
+    // Which category a vendor is in, and what Recommend keeps of their sales.
+    CategoriesModule,
   ],
   controllers: [SellersController],
   providers: [SellersService],

@@ -102,6 +102,21 @@ describe('NotificationsService', () => {
       expect(push.sendToUser).toHaveBeenCalledTimes(2);
     });
 
+    it("never gives the vendor the buyer's phone — in the app or by email", async () => {
+      await service.onCheckoutPaid(
+        paidEvent([vendorOrder({ vendorId: 'v1' })]),
+      );
+
+      const [[saved]] = notifications.save.mock.calls as [
+        [{ data: Record<string, unknown> }],
+      ];
+      expect(saved.data.buyerName).toBe('Ada Obi');
+      expect(saved.data).not.toHaveProperty('buyerPhone');
+      const [[sent]] = email.sendEmail.mock.calls as [[{ text: string }]];
+      expect(sent.text).toContain('Buyer: Ada Obi\n');
+      expect(sent.text).not.toContain('+2348012345678');
+    });
+
     it('pushes an order alert that opens the order, urgently and briefly', async () => {
       await service.onCheckoutPaid(
         paidEvent([vendorOrder({ orderId: 'o9', vendorId: 'v1' })]),
