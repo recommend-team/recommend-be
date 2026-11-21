@@ -62,8 +62,33 @@ export class User extends BaseEntity {
   @Column({ type: 'text', nullable: true })
   businessDescription!: string | null;
 
+  /**
+   * What they sell, as shown to buyers. When the vendor is in one of the categories
+   * admins keep, this is that category's name and `categoryId` points at it.
+   */
   @Column({ type: 'varchar', nullable: true })
   businessCategory!: string | null;
+
+  /** The category they are in; null until they (or an admin) pick one from the list. */
+  @Column({ type: 'uuid', nullable: true })
+  @Index('IDX_users_category')
+  categoryId!: string | null;
+
+  /**
+   * What Recommend keeps of this vendor's sales, in percent, when the Super Admin has
+   * agreed their own rate. Null: their category's rate applies.
+   */
+  @Column({
+    type: 'decimal',
+    precision: 5,
+    scale: 2,
+    nullable: true,
+    transformer: {
+      to: (value: number | null) => value,
+      from: (value: string | null) => (value === null ? null : Number(value)),
+    },
+  })
+  customFeePercent!: number | null;
 
   @ManyToMany(() => Area)
   @JoinTable({

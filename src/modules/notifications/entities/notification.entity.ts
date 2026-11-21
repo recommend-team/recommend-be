@@ -17,6 +17,8 @@ export enum NotificationType {
   WITHDRAWAL_FAILED = 'WITHDRAWAL_FAILED',
   /** Recommend changed the vendor's store, products or documents for them. */
   STORE_UPDATED_BY_ADMIN = 'STORE_UPDATED_BY_ADMIN',
+  /** What Recommend keeps of their sales went up, from their next order. */
+  COMMISSION_RATE_RAISED = 'COMMISSION_RATE_RAISED',
   // An admin's feed — the alerts in `admin-alerts.service.ts`, kept for the panel's bell.
   // Prefixed: a vendor's WITHDRAWAL_FAILED and an admin's are different notifications.
   ADMIN_CONVERSATION_HANDED_OVER = 'ADMIN_CONVERSATION_HANDED_OVER',

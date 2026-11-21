@@ -20,8 +20,8 @@ import { FulfillmentType } from '../../../common/enums/fulfillment-type.enum';
  *
  * This stays the vendor's unit of work: everything a seller sees, and every earnings
  * figure, is computed from these rows. A basket spanning two restaurants produces two
- * of them under one `Checkout`, each owing its own vendor exactly 80% of its own
- * items, untouched by what the other vendor sold.
+ * of them under one `Checkout`, each owing its own vendor its own items less its
+ * category's rate, untouched by what the other vendor sold.
  */
 @Entity('orders')
 export class Order {
@@ -71,11 +71,27 @@ export class Order {
   @Column({ type: 'decimal', precision: 10, scale: 2 })
   totalAmount!: number;
 
-  /** 20% of this vendor's subtotal. */
+  /** Recommend's cut: `feePercent` of this vendor's subtotal. */
   @Column({ type: 'decimal', precision: 10, scale: 2 })
   platformFee!: number;
 
-  /** 80% of this vendor's subtotal — what they are owed. */
+  /**
+   * What Recommend kept, in percent, when the order was placed — the vendor's category
+   * rate at that moment. Changing a rate later never touches orders already placed.
+   */
+  @Column({
+    type: 'decimal',
+    precision: 5,
+    scale: 2,
+    nullable: true,
+    transformer: {
+      to: (value: number | null) => value,
+      from: (value: string | null) => (value === null ? null : Number(value)),
+    },
+  })
+  feePercent!: number | null;
+
+  /** The rest of this vendor's subtotal — what they are owed. */
   @Column({ type: 'decimal', precision: 10, scale: 2 })
   vendorAmount!: number;
 
