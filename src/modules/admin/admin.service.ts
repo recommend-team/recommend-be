@@ -97,7 +97,12 @@ export interface TransactionSummary {
     vendorName: string | null;
     status: OrderStatus;
     subtotal: number;
+    /** What this vendor is owed: their items less Recommend's cut. */
     vendorAmount: number;
+    /** Recommend's cut of this vendor's items. Delivery never enters it. */
+    platformFee: number;
+    /** The rate that cut was charged at, in percent, as recorded on the order. */
+    feePercent: number | null;
     items: { name: string; quantity: number; lineTotal: number }[];
   }[];
 }
@@ -169,6 +174,8 @@ function toTransactionSummary(
       status: order.status,
       subtotal: Number(order.totalAmount),
       vendorAmount: Number(order.vendorAmount),
+      platformFee: Number(order.platformFee),
+      feePercent: order.feePercent ?? null,
       items: toOrderLines(order.items ?? []).map((line) => ({
         name: line.name,
         quantity: line.quantity,

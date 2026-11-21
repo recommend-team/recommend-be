@@ -103,6 +103,49 @@ describe('AdminService — transactions', () => {
     ]);
   });
 
+  it('shows what each vendor is owed and what Recommend keeps, with the rate', async () => {
+    rows = [
+      checkout({
+        orders: [
+          {
+            id: 'o1',
+            vendorId: 'v1',
+            vendor: { businessName: 'Jollof Pot' },
+            status: OrderStatus.PAID,
+            totalAmount: '6000',
+            vendorAmount: '4500',
+            platformFee: '1500',
+            feePercent: 25,
+            items: [],
+          },
+          {
+            id: 'o2',
+            vendorId: 'v2',
+            vendor: { businessName: 'Old order' },
+            status: OrderStatus.PAID,
+            totalAmount: '1000',
+            vendorAmount: '800',
+            platformFee: '200',
+            feePercent: null,
+            items: [],
+          },
+        ],
+      } as unknown as Partial<Checkout>),
+    ];
+
+    const { items } = await service.getTransactions({});
+
+    expect(items[0].vendors).toEqual([
+      expect.objectContaining({
+        vendorName: 'Jollof Pot',
+        vendorAmount: 4500,
+        platformFee: 1500,
+        feePercent: 25,
+      }),
+      expect.objectContaining({ platformFee: 200, feePercent: null }),
+    ]);
+  });
+
   it('calls an order stuck once it has been with its rider past the limit', async () => {
     rows = [
       checkout({ id: 'late', status: OrderStatus.DISPATCHED }),
