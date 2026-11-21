@@ -31,6 +31,10 @@ import { ChannelRegistry } from './transport/channel.registry';
 import { PwaChannel } from './transport/pwa/pwa.channel';
 import { PwaGateway } from './transport/pwa/pwa.gateway';
 import { LocalCatalogAdapter } from './adapters/local-catalog.adapter';
+import { LocalVocabularyAdapter } from './adapters/local-vocabulary.adapter';
+import { VOCABULARY_PORT } from './ports/vocabulary.port';
+import { CategoryVocabularyService } from './engine/discovery/category-vocabulary.service';
+import { Category } from '../modules/categories/entities/category.entity';
 import { LocalLocationAdapter } from './adapters/local-location.adapter';
 import { CATALOG_PORT } from './ports/catalog.port';
 import { LOCATION_PORT } from './ports/location.port';
@@ -83,6 +87,7 @@ import { WelcomeEmailService } from '../common/services/welcome-email.service';
       UnmetSearch,
       WaitlistSignup,
       ConversationHandling,
+      Category,
     ]),
     JwtModule.register({}),
     OrdersModule,
@@ -113,9 +118,11 @@ import { WelcomeEmailService } from '../common/services/welcome-email.service';
     PwaGateway,
     AdminChatGateway,
     DiscoveryService,
+    CategoryVocabularyService,
     UnmetSearchService,
     WaitlistService,
     { provide: CATALOG_PORT, useClass: LocalCatalogAdapter },
+    { provide: VOCABULARY_PORT, useClass: LocalVocabularyAdapter },
     { provide: LOCATION_PORT, useClass: LocalLocationAdapter },
     { provide: ORDERING_PORT, useClass: LocalOrderingAdapter },
     { provide: IDENTITY_PORT, useClass: LocalIdentityAdapter },

@@ -4,280 +4,93 @@
  * Buyers ask for a *kind* of thing — "food", "laptop", "air conditioner" — and vendors
  * name the specific thing they sell: "Jollof Rice & Beef", "HP Pavilion 15", "LG 1.5HP
  * Split Unit".
+ *
+ * The categories and their words belong to admins: `CategoryVocabularyService` reads
+ * them from the database and hands them to `useCategoryWords`. Until it has, the
+ * categories Recommend started with stand in.
  */
+import {
+  CATEGORIES,
+  DEFAULT_CATEGORY_WORDS,
+} from '../../../common/constants/default-categories';
 
-/** Canonical `businessCategory` values, as they appear in the database. */
-export const CATEGORIES = {
-  restaurant: 'Restaurant',
-  gadgets: 'Gadgets',
-  phoneAccessories: 'Phone Accessories',
-  homeAppliances: 'Home Appliances',
-  fashion: 'Fashion',
-  beauty: 'Beauty',
-} as const;
+export { CATEGORIES };
 
-const SYNONYMS: Record<string, string[]> = {
-  [CATEGORIES.restaurant]: [
-    'food',
-    'foods',
-    'chop',
-    'eat',
-    'eating',
-    'eatery',
-    'restaurant',
-    'restaurants',
-    'canteen',
-    'buka',
-    'bukka',
-    'mama put',
-    'meal',
-    'meals',
-    'lunch',
-    'dinner',
-    'breakfast',
-    'cooked food',
-    'hot meal',
-    'something to eat',
-    'kitchen',
-    'takeaway',
-    'hungry',
-    'starving',
-    'famished',
-    'barbecue',
-    'bbq',
-    'grill',
-    'grills',
-    // Dishes: someone asking for one wants food, whatever the menu calls it.
-    'rice',
-    'jollof',
-    'fried rice',
-    'ofada',
-    'native rice',
-    'amala',
-    'eba',
-    'fufu',
-    'semo',
-    'semovita',
-    'pounded yam',
-    'swallow',
-    'soup',
-    'egusi',
-    'efo',
-    'ogbono',
-    'okra',
-    'banga',
-    'afang',
-    'edikaikong',
-    'pepper soup',
-    'beans',
-    'ewa',
-    'agoyin',
-    'plantain',
-    'dodo',
-    'boli',
-    'bole',
-    'moi moi',
-    'moin moin',
-    'akara',
-    'yam',
-    'porridge',
-    'suya',
-    'asun',
-    'isi ewu',
-    'nkwobi',
-    'gizdodo',
-    'shawarma',
-    'burger',
-    'burgers',
-    'pizza',
-    'sandwich',
-    'chicken',
-    'turkey',
-    'goat meat',
-    'fish',
-    'catfish',
-    'spaghetti',
-    'noodles',
-    'indomie',
-    'small chops',
-    'puff puff',
-    'meat pie',
-    'pastries',
-    'snacks',
-    'zobo',
-    'chapman',
-    'smoothie',
-    // Food, not a cream for the skin.
-    'ice cream',
-  ],
-  [CATEGORIES.gadgets]: [
-    'gadget',
-    'gadgets',
-    'laptop',
-    'laptops',
-    'computer',
-    'computers',
-    'pc',
-    'notebook',
-    'phone',
-    'phones',
-    'smartphone',
-    'smartphones',
-    'android',
-    'androids',
-    'iphone',
-    'iphones',
-    'tablet',
-    'tablets',
-    'ipad',
-    'ipads',
-    'electronics',
-    'tech',
-    'device',
-    'devices',
-  ],
-  [CATEGORIES.phoneAccessories]: [
-    'accessory',
-    'accessories',
-    'charger',
-    'chargers',
-    'cable',
-    'cables',
-    'earphone',
-    'earphones',
-    'earpiece',
-    'headphone',
-    'headphones',
-    'airpods',
-    'powerbank',
-    'power bank',
-    'phone case',
-    'phone pouch',
-    'screen guard',
-    'screen protector',
-    'memory card',
-  ],
-  [CATEGORIES.homeAppliances]: [
-    'appliance',
-    'appliances',
-    'fridge',
-    'fridges',
-    'refrigerator',
-    'freezer',
-    'ac',
-    'air conditioner',
-    'air conditioning',
-    'blender',
-    'microwave',
-    'oven',
-    'cooker',
-    'gas cooker',
-    'rice cooker',
-    'fan',
-    'standing fan',
-    'tv',
-    'television',
-    'washing machine',
-    'water dispenser',
-    'pressing iron',
-    'kettle',
-  ],
-  [CATEGORIES.fashion]: [
-    'fashion',
-    'clothes',
-    'clothing',
-    'wear',
-    'outfit',
-    'outfits',
-    'dress',
-    'dresses',
-    'gown',
-    'gowns',
-    'shirt',
-    'shirts',
-    't shirt',
-    'tshirt',
-    'top',
-    'tops',
-    'trouser',
-    'trousers',
-    'jeans',
-    'skirt',
-    'skirts',
-    'ankara',
-    'aso ebi',
-    'agbada',
-    'kaftan',
-    'senator',
-    'shoe',
-    'shoes',
-    'sneakers',
-    'sandals',
-    'slippers',
-    'heels',
-    'bag',
-    'bags',
-    'handbag',
-    'cap',
-    'hat',
-    'jewellery',
-    'jewelry',
-  ],
-  // Hair is the big one in Nigeria: wigs, attachments and braids, sold by vendors who
-  // file themselves as "Hair", "Hair & Beauty" or "Salon" — all read as Beauty.
-  [CATEGORIES.beauty]: [
-    'beauty',
-    'cosmetic',
-    'cosmetics',
-    'salon',
-    'hair',
-    'wig',
-    'wigs',
-    'attachment',
-    'attachments',
-    'braid',
-    'braids',
-    // Not 'extension' or 'bundle' alone: in Nigeria those are a power extension box
-    // and a data bundle.
-    'hair extensions',
-    'weave',
-    'weaves',
-    'frontal',
-    'closure',
-    'makeup',
-    'make up',
-    'lipstick',
-    'lip gloss',
-    'foundation',
-    'skincare',
-    'skin care',
-    'cream',
-    'body cream',
-    'lotion',
-    'body lotion',
-    'nail',
-    'nails',
-    'lash',
-    'lashes',
-    'perfume',
-    'perfumes',
-    'body spray',
-    'fragrance',
-  ],
-};
-
-/** Built once — the lookup runs on every search that finds nothing. */
-const SINGLE_WORD = new Map<string, string>();
-const PHRASES: { phrase: string; category: string }[] = [];
-
-for (const [category, words] of Object.entries(SYNONYMS)) {
-  for (const word of words) {
-    if (word.includes(' ')) PHRASES.push({ phrase: word, category });
-    else SINGLE_WORD.set(word, category);
-  }
+/** A category buyers can be pointed at, and the words they use for it. */
+export interface CategoryWords {
+  name: string;
+  keywords: string[];
 }
-// Longest first, so "rice cooker" is read before anything shorter inside it.
-PHRASES.sort((a, b) => b.phrase.length - a.phrase.length);
+
+/** The categories Recommend started with — what the assistant knows before the database. */
+export function defaultCategoryWords(): CategoryWords[] {
+  return Object.entries(DEFAULT_CATEGORY_WORDS).map(([name, keywords]) => ({
+    name,
+    keywords,
+  }));
+}
+
+/** Lowercase, letters and numbers only, single spaces — how buyers' words are read. */
+function normalise(text: string): string {
+  return text
+    .toLowerCase()
+    .replace(/[^a-z0-9\s]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+/** Built once per list — the lookup runs on every search that finds nothing. */
+let NAMES: string[] = [];
+let KEYWORDS = new Map<string, string[]>();
+let SINGLE_WORD = new Map<string, string>();
+let PHRASES: { phrase: string; category: string }[] = [];
+
+/**
+ * Point the assistant at a list of categories — the active ones admins keep in the
+ * database. Called at startup and whenever an admin changes one. An empty list is
+ * ignored: better yesterday's categories than none at all.
+ *
+ * Each category's own name counts as one of its words, so a category an admin has just
+ * created, with no words yet, is still found when a buyer says its name.
+ */
+export function useCategoryWords(categories: CategoryWords[]): void {
+  if (categories.length === 0) return;
+
+  // Each word points at one category. Names claim theirs first, so a "Hair" category
+  // gets "hair" even though Beauty lists it; then words, first category first.
+  const owner = new Map<string, string>();
+  const keywords = new Map<string, string[]>();
+  for (const { name } of categories) {
+    const own = normalise(name);
+    if (own && !owner.has(own)) owner.set(own, name);
+  }
+  for (const { name, keywords: words } of categories) {
+    const cleaned = words.map(normalise).filter(Boolean);
+    keywords.set(name, cleaned);
+    for (const word of cleaned) if (!owner.has(word)) owner.set(word, name);
+  }
+
+  const singleWord = new Map<string, string>();
+  const phrases: { phrase: string; category: string }[] = [];
+  for (const [word, category] of owner) {
+    if (word.includes(' ')) phrases.push({ phrase: word, category });
+    else singleWord.set(word, category);
+  }
+  // Longest first, so "rice cooker" is read before anything shorter inside it.
+  phrases.sort((a, b) => b.phrase.length - a.phrase.length);
+
+  NAMES = categories.map((category) => category.name);
+  KEYWORDS = keywords;
+  SINGLE_WORD = singleWord;
+  PHRASES = phrases;
+}
+
+/** The categories the assistant currently offers, by name. */
+export function categoryNames(): string[] {
+  return NAMES;
+}
+
+useCategoryWords(defaultCategoryWords());
 
 /** "wears" → "wear", "dresses" → "dress", "caps" → "cap"; other words as they are. */
 function singular(word: string): string {
@@ -295,7 +108,7 @@ function singular(word: string): string {
  */
 export function standardCategoriesOf(vendorCategory: string | null): string[] {
   if (!vendorCategory?.trim()) return [];
-  const exact = Object.values(CATEGORIES).find(
+  const exact = NAMES.find(
     (category) =>
       category.toLowerCase() === vendorCategory.trim().toLowerCase(),
   );
@@ -304,9 +117,8 @@ export function standardCategoriesOf(vendorCategory: string | null): string[] {
 
 /** "food, gadgets, phone accessories, home appliances, fashion or beauty" — for asking. */
 export function kindsList(): string {
-  const kinds = Object.values(CATEGORIES).map((category) =>
-    category === CATEGORIES.restaurant ? 'food' : category.toLowerCase(),
-  );
+  const kinds = NAMES.map(spokenKind);
+  if (kinds.length <= 1) return kinds[0] ?? 'anything';
   return `${kinds.slice(0, -1).join(', ')} or ${kinds[kinds.length - 1]}`;
 }
 
@@ -439,8 +251,9 @@ export function broadKindOf(text: string | undefined): string | null {
     .trim()} `;
   if (!rest.trim()) return null;
 
+  const broad = broadWords();
   const kinds = new Set<string>();
-  for (const [category, words] of Object.entries(BROAD)) {
+  for (const [category, words] of broad) {
     for (const phrase of words.filter((word) => word.includes(' '))) {
       if (rest.includes(` ${phrase} `)) {
         kinds.add(category);
@@ -449,7 +262,7 @@ export function broadKindOf(text: string | undefined): string | null {
     }
   }
   for (const token of rest.trim().split(/\s+/).filter(Boolean)) {
-    const kind = Object.entries(BROAD).find(([, words]) =>
+    const kind = broad.find(([, words]) =>
       words.some((word) => word === token || word === singular(token)),
     )?.[0];
     if (kind) kinds.add(kind);
@@ -463,7 +276,27 @@ export function spokenKind(category: string): string {
   return category === CATEGORIES.restaurant ? 'food' : category.toLowerCase();
 }
 
+/**
+ * The words that name each offered category as a whole — "food", "clothes". A category
+ * an admin created has its own name: "pets", "pet".
+ */
+function broadWords(): [string, string[]][] {
+  return NAMES.map((name) => {
+    const own = normalise(name);
+    return [name, BROAD[name] ?? [own, singular(own)]];
+  });
+}
+
 /** "rice, swallow, grills or snacks" — a few of a kind, to ask which they fancy. */
 export function examplesOf(category: string): string {
-  return EXAMPLES[category] ?? 'anything in particular';
+  const written = EXAMPLES[category];
+  if (written) return written;
+  // One an admin created: the first few of its own words.
+  const own = normalise(category);
+  const words = (KEYWORDS.get(category) ?? [])
+    .filter((word) => word !== own)
+    .slice(0, 3);
+  if (words.length === 0) return 'anything in particular';
+  if (words.length === 1) return words[0];
+  return `${words.slice(0, -1).join(', ')} or ${words[words.length - 1]}`;
 }

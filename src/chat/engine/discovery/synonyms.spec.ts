@@ -2,8 +2,12 @@ import {
   CATEGORIES,
   broadKindOf,
   categoriesFor,
+  categoryNames,
+  defaultCategoryWords,
+  examplesOf,
   kindsList,
   standardCategoriesOf,
+  useCategoryWords,
 } from './synonyms';
 
 describe('categoriesFor', () => {
@@ -165,5 +169,69 @@ describe('Beauty', () => {
     expect(kindsList()).toBe(
       'food, gadgets, phone accessories, home appliances, fashion or beauty',
     );
+  });
+});
+
+describe('categories admins keep', () => {
+  // Every other test reads the starting categories; put them back after each one here.
+  afterEach(() => useCategoryWords(defaultCategoryWords()));
+
+  const withPets = () => [
+    ...defaultCategoryWords(),
+    { name: 'Pets', keywords: ['dog food', 'cat litter', 'leash'] },
+  ];
+
+  it('finds a new category by its words and by its own name', () => {
+    useCategoryWords(withPets());
+
+    expect(categoriesFor('I need dog food in Yaba')).toEqual(['Pets']);
+    expect(categoriesFor('any leashes?')).toEqual(['Pets']);
+    expect(categoriesFor('pets')).toEqual(['Pets']);
+    expect(standardCategoriesOf('pets')).toEqual(['Pets']);
+  });
+
+  it('treats its name alone as browsing, and offers its words as examples', () => {
+    useCategoryWords(withPets());
+
+    expect(broadKindOf('I need pet stuff')).toBeNull();
+    expect(broadKindOf('any pets?')).toBe('Pets');
+    expect(examplesOf('Pets')).toBe('dog food, cat litter or leash');
+    expect(kindsList()).toMatch(/fashion, beauty or pets$/);
+  });
+
+  it('works with a category that has no words yet', () => {
+    useCategoryWords([
+      ...defaultCategoryWords(),
+      { name: 'Books', keywords: [] },
+    ]);
+
+    expect(categoriesFor('do you have books')).toEqual(['Books']);
+    expect(examplesOf('Books')).toBe('anything in particular');
+  });
+
+  it('forgets an archived category', () => {
+    useCategoryWords(
+      defaultCategoryWords().filter((c) => c.name !== CATEGORIES.fashion),
+    );
+
+    expect(categoryNames()).not.toContain('Fashion');
+    expect(categoriesFor('I need a dress')).toEqual([]);
+    expect(kindsList()).not.toMatch(/fashion/);
+  });
+
+  it('gives a category its own name even when another lists it as a word', () => {
+    // An admin creates "Hair" while Beauty still lists "hair".
+    useCategoryWords([
+      ...defaultCategoryWords(),
+      { name: 'Hair', keywords: [] },
+    ]);
+
+    expect(categoriesFor('I need hair')).toEqual(['Hair']);
+    expect(categoriesFor('I need a wig')).toEqual([CATEGORIES.beauty]);
+  });
+
+  it('keeps what it knew when handed nothing', () => {
+    useCategoryWords([]);
+    expect(categoryNames()).toContain('Restaurant');
   });
 });
